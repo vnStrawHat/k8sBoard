@@ -437,6 +437,16 @@ impl ConfirmDialog {
                 });
                 return;
             }
+            // The same for a taint edit, which reloads the node and keeps what the node did not change:
+            // the server's words about a stale `resourceVersion` are no step to read.
+            if is_conflict && intent.action == ResourceAction::EditTaints {
+                let _ = cx.update_window(window, |_, window, cx| {
+                    let _ = this.update(cx, |dialog, cx| {
+                        dialog.reload_after_conflict(window, cx);
+                    });
+                });
+                return;
+            }
             let _ = this.update(cx, |dialog, cx| {
                 dialog.is_conflict = is_conflict;
                 dialog.dry_run = Some(dry_run_state_of(result));
@@ -827,10 +837,26 @@ impl ConfirmDialog {
         }
     }
 
-    /// Retry runs the dry-run again. The taint editor after a 409 is the exception: its change
-    /// carries the `resourceVersion` it was read at, which cannot pass a second time, so Retry
-    /// reads the node again and reopens the editor with the user's rows kept and a notice of what
-    /// changed on the node. Any other failure keeps the user's rows and checks again.
+    /// A 409 on a taint edit: closes the dialog and reopens the taint editor on the node as it is
+    /// now, `false` when the dialog is already closed.
+    pub(crate) fn reload_after_conflict(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if !self.is_open {
+            return false;
+        }
+        self.is_conflict = true;
+        self.retry(window, cx);
+        true
+    }
+
+    /// Retry runs the dry-run again. The taint editor after a 409 is the exception (it comes here
+    /// from `reload_after_conflict`, never from the button): its change carries the
+    /// `resourceVersion` it was read at, which cannot pass a second time, so the node is read again
+    /// and the editor reopens with the rows the node did not change taken from it, the user's own
+    /// edits kept, and a notice of what changed on the node.
     fn retry(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let reopen = match &self.kind {
             DialogKind::Write(intent)

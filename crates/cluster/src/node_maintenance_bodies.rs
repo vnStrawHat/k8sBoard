@@ -82,6 +82,40 @@ pub(crate) fn taints_patch(taints: &[NodeTaint], resource_version: &str) -> Valu
     json!({"metadata": {"resourceVersion": resource_version}, "spec": {"taints": taints}})
 }
 
+/// What a taint edit changes, one line per taint (a taint is its key and effect): `conflict 4 → 3`
+/// for a new value, `− workload=data:NoSchedule` for a removed taint, `+ maintenance:NoSchedule` for
+/// an added one. Changed taints come first, in the new order, then removed, then added.
+pub(crate) fn taint_changes(previous: &[NodeTaint], taints: &[NodeTaint]) -> Vec<String> {
+    let find = |list: &'_ [NodeTaint], taint: &NodeTaint| {
+        list.iter()
+            .find(|other| other.key == taint.key && other.effect == taint.effect)
+            .cloned()
+    };
+    let value_text = |taint: &NodeTaint| match taint.value.as_deref() {
+        Some(value) if !value.is_empty() => value.to_owned(),
+        _ => "(no value)".to_owned(),
+    };
+    let mut changed = Vec::new();
+    let mut added = Vec::new();
+    for taint in taints {
+        match find(previous, taint) {
+            Some(old) if old.value != taint.value => changed.push(format!(
+                "{} {} → {}",
+                taint.key,
+                value_text(&old),
+                value_text(taint)
+            )),
+            Some(_) => {}
+            None => added.push(format!("+ {taint}")),
+        }
+    }
+    let removed = previous
+        .iter()
+        .filter(|taint| find(taints, taint).is_none())
+        .map(|taint| format!("− {taint}"));
+    changed.into_iter().chain(removed).chain(added).collect()
+}
+
 /// A per-key merge patch: keys are independent, so no `resourceVersion`; `null` removes a key.
 pub(crate) fn labels_patch(changes: &[LabelChange]) -> Value {
     let labels: Map<String, Value> = changes

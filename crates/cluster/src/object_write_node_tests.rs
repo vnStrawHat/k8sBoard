@@ -42,15 +42,20 @@ fn taint(key: &str, value: Option<&str>, effect: &str) -> NodeTaint {
     }
 }
 
-fn set_taints(taints: Vec<NodeTaint>) -> WriteRequest {
+fn set_taints_from(previous: Vec<NodeTaint>, taints: Vec<NodeTaint>) -> WriteRequest {
     WriteRequest::new(
         node(),
         WriteOperation::SetNodeTaints {
             taints,
             resource_version: "42".to_owned(),
+            previous,
         },
     )
     .expect("a node fits a taint edit")
+}
+
+fn set_taints(taints: Vec<NodeTaint>) -> WriteRequest {
+    set_taints_from(Vec::new(), taints)
 }
 
 fn set_labels(changes: Vec<LabelChange>) -> WriteRequest {
@@ -449,6 +454,7 @@ fn invalid_node_edits_are_not_requests() {
             WriteOperation::SetNodeTaints {
                 taints,
                 resource_version: version.to_owned(),
+                previous: Vec::new(),
             },
         )
     };
@@ -511,20 +517,6 @@ fn changed_fields_describe_the_edits() {
         value_of(&evict(GracePeriod::PodDefault)),
         ("pods/eviction".to_owned(), "grace pod default".to_owned())
     );
-    assert_eq!(
-        value_of(&set_taints(vec![
-            taint("dedicated", Some("ingress"), "NoSchedule"),
-            taint("spot", None, "PreferNoSchedule"),
-        ])),
-        (
-            "spec.taints".to_owned(),
-            "dedicated=ingress:NoSchedule, spot:PreferNoSchedule".to_owned()
-        )
-    );
-    assert_eq!(
-        value_of(&set_taints(Vec::new())),
-        ("spec.taints".to_owned(), "none".to_owned())
-    );
     let changes = vec![
         LabelChange {
             key: "team".to_owned(),
@@ -577,4 +569,67 @@ fn debug_shows_names_only() {
     );
     let text = format!("{:?}", evict(GracePeriod::Seconds(77)));
     assert!(!text.contains("u-1") && !text.contains("77"), "{text}");
+}
+
+fn taint_lines(previous: Vec<NodeTaint>, taints: Vec<NodeTaint>) -> Vec<(String, Option<String>)> {
+    set_taints_from(previous, taints)
+        .changed_fields()
+        .into_iter()
+        .map(|field| (field.path.into_owned(), field.value))
+        .collect()
+}
+
+#[test]
+fn a_taint_edit_lists_each_taint_that_changed() {
+    let previous = vec![
+        taint("conflict", Some("4"), "NoSchedule"),
+        taint("workload", Some("data"), "NoSchedule"),
+        taint("kept", None, "NoExecute"),
+    ];
+    let taints = vec![
+        taint("conflict", Some("3"), "NoSchedule"),
+        taint("kept", None, "NoExecute"),
+        taint("maintenance", Some("true"), "NoSchedule"),
+    ];
+    assert_eq!(
+        taint_lines(previous, taints),
+        [
+            ("conflict 4 → 3".to_owned(), None),
+            ("− workload=data:NoSchedule".to_owned(), None),
+            ("+ maintenance=true:NoSchedule".to_owned(), None),
+        ]
+    );
+}
+
+#[test]
+fn a_taint_without_a_value_reads_as_no_value() {
+    let lines = taint_lines(
+        vec![taint("spot", None, "PreferNoSchedule")],
+        vec![taint("spot", Some("x"), "PreferNoSchedule")],
+    );
+    assert_eq!(lines, [("spot (no value) → x".to_owned(), None)]);
+}
+
+#[test]
+fn the_same_key_with_another_effect_is_another_taint() {
+    let lines = taint_lines(
+        vec![taint("gpu", None, "NoSchedule")],
+        vec![taint("gpu", None, "NoExecute")],
+    );
+    assert_eq!(
+        lines,
+        [
+            ("− gpu:NoSchedule".to_owned(), None),
+            ("+ gpu:NoExecute".to_owned(), None),
+        ]
+    );
+}
+
+#[test]
+fn an_edit_that_changes_no_taint_says_so() {
+    let same = vec![taint("gpu", None, "NoSchedule")];
+    assert_eq!(
+        taint_lines(same.clone(), same),
+        [("spec.taints".to_owned(), Some("unchanged".to_owned()))]
+    );
 }

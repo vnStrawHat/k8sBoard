@@ -140,11 +140,14 @@ fn taint_intent_keeps_system_rows_and_time_added() {
     let WriteOperation::SetNodeTaints {
         taints,
         resource_version,
+        previous,
     } = intent.request.operation()
     else {
         panic!("expected SetNodeTaints");
     };
     assert_eq!(resource_version, "42");
+    // The summary and the audit line are made against the taints the editor read.
+    assert_eq!(*previous, node_edit().taints);
     assert_eq!(taints.len(), 3);
     assert_eq!(taints[1], unreachable_taint());
     assert_eq!(taints[2], taint("gpu", Some("true"), "NoSchedule"));
@@ -662,7 +665,8 @@ fn conflict_notice_lists_what_changed_on_the_server() {
     assert_eq!(
         conflict_notice(Some(&base), &now),
         "The node changed (by someone else): tier=a:NoSchedule became tier=b:NoSchedule, \
-         added gpu=true:NoSchedule, removed maintenance:NoExecute. Your rows are kept; review before applying."
+         added gpu=true:NoSchedule, removed maintenance:NoExecute. \
+         Rows you did not touch follow the node; your edits are kept. Review before applying."
     );
     // Without the editor's first read, the current taints are the least it can say.
     assert_eq!(
@@ -691,12 +695,97 @@ fn a_reopened_editor_keeps_the_users_rows_and_the_nodes_managed_taints() {
         ],
         &[],
     );
-    let keys: Vec<String> = rows_after_conflict(&now, &kept)
+    let keys: Vec<String> = rows_after_conflict(&now, None, &kept)
         .into_iter()
         .map(|row| row.key)
         .collect();
     assert_eq!(
         keys,
         ["node.kubernetes.io/unschedulable", "dedicated", "gpu"]
+    );
+}
+
+/// The taints the editor read, the user's rows over them, and the node as it is after the conflict.
+fn conflict_of(
+    base: &[NodeTaint],
+    mine: &[TaintRow],
+    now: Vec<NodeTaint>,
+) -> Vec<(String, String, String)> {
+    rows_after_conflict(&edit_with(now, &[]), Some(base), mine)
+        .into_iter()
+        .map(|row| (row.key, row.value, row.effect))
+        .collect()
+}
+
+fn text_row(key: &str, value: &str, effect: &str) -> (String, String, String) {
+    (key.to_owned(), value.to_owned(), effect.to_owned())
+}
+
+#[test]
+fn an_untouched_row_follows_the_nodes_new_value() {
+    // The user only added `gpu`; someone else changed `conflict` from 4 to 3 meanwhile.
+    let base = [taint("conflict", Some("4"), "NoSchedule")];
+    let mine = [
+        row("conflict", "4", "NoSchedule"),
+        row("gpu", "true", "NoSchedule"),
+    ];
+    let now = vec![taint("conflict", Some("3"), "NoSchedule")];
+    assert_eq!(
+        conflict_of(&base, &mine, now),
+        [
+            text_row("conflict", "3", "NoSchedule"),
+            text_row("gpu", "true", "NoSchedule"),
+        ]
+    );
+}
+
+#[test]
+fn an_edited_row_is_kept_as_typed_over_the_nodes_value() {
+    let base = [taint("conflict", Some("4"), "NoSchedule")];
+    let mine = [row("conflict", "9", "NoSchedule")];
+    let now = vec![taint("conflict", Some("3"), "NoSchedule")];
+    assert_eq!(
+        conflict_of(&base, &mine, now),
+        [text_row("conflict", "9", "NoSchedule")]
+    );
+}
+
+#[test]
+fn a_row_the_user_removed_stays_removed_and_a_new_taint_of_the_node_joins() {
+    let base = [
+        taint("workload", Some("data"), "NoSchedule"),
+        taint("tier", Some("a"), "NoSchedule"),
+    ];
+    // The user removed `workload`; the node dropped `tier` and gained `maintenance`.
+    let mine = [row("tier", "a", "NoSchedule")];
+    let now = vec![
+        taint("workload", Some("data"), "NoSchedule"),
+        taint("maintenance", Some("true"), "NoSchedule"),
+    ];
+    assert_eq!(
+        conflict_of(&base, &mine, now),
+        [text_row("maintenance", "true", "NoSchedule")]
+    );
+}
+
+#[test]
+fn a_row_the_user_added_beats_a_taint_the_node_gained_under_the_same_key_and_effect() {
+    let base = [];
+    let mine = [row("gpu", "mine", "NoSchedule")];
+    let now = vec![taint("gpu", Some("theirs"), "NoSchedule")];
+    assert_eq!(
+        conflict_of(&base, &mine, now),
+        [text_row("gpu", "mine", "NoSchedule")]
+    );
+}
+
+#[test]
+fn a_changed_effect_is_an_edit_of_a_new_row_and_the_old_one_is_removed() {
+    let base = [taint("gpu", None, "NoSchedule")];
+    let mine = [row("gpu", "", "NoExecute")];
+    let now = vec![taint("gpu", Some("x"), "NoSchedule")];
+    assert_eq!(
+        conflict_of(&base, &mine, now),
+        [text_row("gpu", "", "NoExecute")]
     );
 }

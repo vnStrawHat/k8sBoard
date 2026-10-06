@@ -149,14 +149,57 @@ pub(crate) fn taint_rows_of_request(operation: &WriteOperation) -> Option<Vec<Ta
     )
 }
 
-/// The rows of the editor reopened after a conflict: the node's own managed taints as it has them
-/// now (locked rows cannot be edited, and an old copy would be refused), then the user's rows.
-pub(crate) fn rows_after_conflict(current: &NodeEdit, kept: &[TaintRow]) -> Vec<TaintRow> {
-    taint_rows(current)
-        .into_iter()
-        .filter(TaintRow::is_read_only)
-        .chain(kept.iter().filter(|row| !row.is_read_only()).cloned())
-        .collect()
+/// The rows of the editor reopened after a conflict. The node's own managed taints are as it has
+/// them now (locked rows cannot be edited, and an old copy would be refused). With the taints the
+/// editor first read (`base`), the rows the user did not touch take the node's values, so the retry
+/// never puts back what someone else changed: only an edited or added row is kept as typed, a row
+/// the user removed stays removed, and a taint that is new on the node joins the rows. Without
+/// `base`, every row of the user is kept.
+pub(crate) fn rows_after_conflict(
+    current: &NodeEdit,
+    base: Option<&[NodeTaint]>,
+    kept: &[TaintRow],
+) -> Vec<TaintRow> {
+    let now = taint_rows(current);
+    let mut rows: Vec<TaintRow> = now
+        .iter()
+        .filter(|row| row.is_read_only())
+        .cloned()
+        .collect();
+    let kept = kept.iter().filter(|row| !row.is_read_only());
+    let Some(base) = base else {
+        rows.extend(kept.cloned());
+        return rows;
+    };
+    let is_same =
+        |left: &TaintRow, right: &TaintRow| left.key == right.key && left.effect == right.effect;
+    let base_rows: Vec<TaintRow> = base
+        .iter()
+        .map(|taint| TaintRow {
+            key: taint.key.clone(),
+            value: taint.value.clone().unwrap_or_default(),
+            effect: taint.effect.clone(),
+            time_added: taint.time_added,
+        })
+        .collect();
+    let kept: Vec<&TaintRow> = kept.collect();
+    for row in &kept {
+        let original = base_rows.iter().find(|original| is_same(original, row));
+        let is_untouched = original.is_some_and(|original| original.value == row.value.trim());
+        if !is_untouched {
+            rows.push((*row).clone());
+        } else if let Some(server) = now.iter().find(|server| is_same(server, row)) {
+            // Untouched rows follow the node; one the node dropped is dropped here too.
+            rows.push(server.clone());
+        }
+    }
+    let is_unseen = |server: &&TaintRow| {
+        !server.is_read_only()
+            && !base_rows.iter().any(|original| is_same(original, server))
+            && !kept.iter().any(|row| is_same(row, server))
+    };
+    rows.extend(now.iter().filter(is_unseen).cloned());
+    rows
 }
 
 fn taint_text(key: &str, value: &str, effect: &str) -> String {
@@ -210,7 +253,7 @@ pub(crate) fn conflict_notice(base: Option<&[NodeTaint]>, current: &NodeEdit) ->
         return "The node changed; your rows are kept. Review before applying.".to_owned();
     }
     format!(
-        "The node changed (by someone else): {}. Your rows are kept; review before applying.",
+        "The node changed (by someone else): {}. Rows you did not touch follow the node; your edits are kept. Review before applying.",
         changes.join(", ")
     )
 }
@@ -319,6 +362,7 @@ pub(crate) fn taint_row_problem(rows: &[TaintRow]) -> Option<RowProblem> {
                     WriteOperation::SetNodeTaints {
                         taints: vec![taint],
                         resource_version: "1".to_owned(),
+                        previous: Vec::new(),
                     },
                 )
                 .is_some()
@@ -414,6 +458,7 @@ pub(crate) fn taint_intent(
         WriteOperation::SetNodeTaints {
             taints,
             resource_version: edit.resource_version.clone(),
+            previous: edit.taints.clone(),
         },
     )
     .ok_or_else(|| SharedString::from(INVALID_LABEL))?;

@@ -752,3 +752,54 @@ fn audit_line_for_create() {
     let json = serde_json::to_string(&entry).expect("a line");
     assert!(!json.contains("S3cr3t-0042"), "{json}");
 }
+
+#[test]
+fn a_taint_edit_records_each_taint_that_changed() {
+    use crate::node_edits::{NodeScope, TaintRow, taint_intent};
+    use cluster::{NodeEdit, NodeTaint};
+
+    let taint = |key: &str, value: &str| NodeTaint {
+        key: key.to_owned(),
+        value: Some(value.to_owned()),
+        effect: "NoSchedule".to_owned(),
+        time_added: None,
+    };
+    let edit = NodeEdit {
+        taints: vec![taint("conflict", "4"), taint("workload", "data")],
+        labels: std::collections::BTreeMap::new(),
+        resource_version: "7".to_owned(),
+    };
+    let row = |key: &str, value: &str| TaintRow {
+        key: key.to_owned(),
+        value: value.to_owned(),
+        effect: "NoSchedule".to_owned(),
+        time_added: None,
+    };
+    let cluster = crate::cluster_registry::ClusterRef {
+        kubeconfig: PathBuf::from("test.yaml"),
+        context: "stg-b".to_owned(),
+    };
+    let scope = NodeScope {
+        cluster: &cluster,
+        cluster_name: "stg-b",
+    };
+    let rows = [row("conflict", "3"), row("maintenance", "true")];
+    let intent = taint_intent(&scope, "wk-04", &edit, &rows).expect("a valid edit");
+    let access = AccessState::Unknown;
+    let guard = test_guard(&access, WriteLock::Unlocked, "stg-b", Environment::STAGING);
+    let entry = audit_entry(&intent, &guard, AuditOutcome::Applied, None, None);
+    let paths: Vec<&str> = entry
+        .fields
+        .iter()
+        .map(|field| field.path.as_str())
+        .collect();
+    assert_eq!(
+        paths,
+        [
+            "conflict 4 → 3",
+            "− workload=data:NoSchedule",
+            "+ maintenance=true:NoSchedule",
+        ]
+    );
+    assert!(entry.fields.iter().all(|field| field.value.is_none()));
+}

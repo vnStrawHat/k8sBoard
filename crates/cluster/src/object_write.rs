@@ -32,7 +32,7 @@ use crate::edit_preview::{EditPreview, build_preview};
 use crate::node::NodeTaint;
 use crate::node_maintenance_bodies::{
     GracePeriod, LabelChange, are_valid_label_changes, are_valid_taints, eviction_body,
-    is_valid_uid, labels_patch, taints_patch,
+    is_valid_uid, labels_patch, taint_changes, taints_patch,
 };
 use crate::object_create::{ObjectDraft, is_valid_name, missing_paths};
 use crate::object_edit::{ObjectEdit, is_helm_release};
@@ -133,6 +133,9 @@ pub enum WriteOperation {
     SetNodeTaints {
         taints: Vec<NodeTaint>,
         resource_version: String,
+        /// The taints the edit was made against: never sent, they let the summary and the audit line
+        /// name each taint that changed.
+        previous: Vec<NodeTaint>,
     },
     /// Per-key merge patch of `metadata.labels` (0034).
     SetNodeLabels { changes: Vec<LabelChange> },
@@ -475,18 +478,22 @@ impl WriteRequest {
                     GracePeriod::Seconds(seconds) => format!("grace {seconds}s"),
                 },
             )],
-            WriteOperation::SetNodeTaints { taints, .. } => vec![field(
-                "spec.taints",
-                if taints.is_empty() {
-                    "none".to_owned()
+            WriteOperation::SetNodeTaints {
+                taints, previous, ..
+            } => {
+                let changes = taint_changes(previous, taints);
+                if changes.is_empty() {
+                    vec![field("spec.taints", "unchanged".to_owned())]
                 } else {
-                    taints
-                        .iter()
-                        .map(ToString::to_string)
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                },
-            )],
+                    changes
+                        .into_iter()
+                        .map(|text| ChangedField {
+                            path: Cow::Owned(text),
+                            value: None,
+                        })
+                        .collect()
+                }
+            }
             WriteOperation::SetNodeLabels { changes } => vec![field(
                 "metadata.labels",
                 changes
@@ -567,6 +574,7 @@ fn checked_operation(operation: WriteOperation) -> Option<WriteOperation> {
         WriteOperation::SetNodeTaints {
             ref taints,
             ref resource_version,
+            ..
         } if resource_version.is_empty() || !are_valid_taints(taints) => None,
         WriteOperation::SetNodeLabels { ref changes } if !are_valid_label_changes(changes) => None,
         // A draft is checked again here: its body must still agree with its target (0042 decision 5).
@@ -1080,6 +1088,7 @@ impl ClusterConnection {
             WriteOperation::SetNodeTaints {
                 taints,
                 resource_version,
+                ..
             } => {
                 let body = taints_patch(taints, resource_version);
                 let sent = run_raw(api.patch(name, &params, &Patch::Merge(&body))).await;

@@ -3,6 +3,7 @@
 //! with its own fake API server: a test sees which cluster a request reached, and nothing leaves
 //! the machine.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use cluster::fake_api::{FakeApi, RecordedRequest};
@@ -31,14 +32,30 @@ fn conflict() -> (u16, String) {
     (409, body.to_string())
 }
 
-fn node_json(name: &str) -> String {
+/// The node as the server has it. After a 409 someone else has changed it: `dedicated` is `egress`
+/// and `maintenance` is new, at a newer version.
+fn node_json(name: &str, is_changed: bool) -> String {
+    let (version, taints) = if is_changed {
+        (
+            "8",
+            json!([
+                {"key": "dedicated", "value": "egress", "effect": "NoSchedule"},
+                {"key": "maintenance", "value": "true", "effect": "NoSchedule"},
+            ]),
+        )
+    } else {
+        (
+            "7",
+            json!([{"key": "dedicated", "value": "ingress", "effect": "NoSchedule"}]),
+        )
+    };
     json!({
         "apiVersion": "v1", "kind": "Node",
         "metadata": {
-            "name": name, "resourceVersion": "7",
+            "name": name, "resourceVersion": version,
             "labels": {"kubernetes.io/hostname": name, "team": "infra"},
         },
-        "spec": {"taints": [{"key": "dedicated", "value": "ingress", "effect": "NoSchedule"}]},
+        "spec": {"taints": taints},
     })
     .to_string()
 }
@@ -68,6 +85,7 @@ fn summary(name: &str, scheduling: NodeScheduling) -> NodeSummary {
 fn server(
     patch: Arc<Mutex<(u16, String)>>,
 ) -> impl Fn(&RecordedRequest) -> (u16, String) + Send + Sync + 'static {
+    let is_changed = AtomicBool::new(false);
     move |request| {
         if request.method == "GET"
             && let Some(name) = request.path.strip_prefix("/api/v1/nodes/")
@@ -79,10 +97,15 @@ fn server(
                     r#"{"kind":"Status","status":"Failure","code":404}"#.to_owned(),
                 );
             }
-            return (200, node_json(name));
+            return (200, node_json(name, is_changed.load(Ordering::SeqCst)));
         }
         if request.method == "PATCH" {
-            return patch.lock().expect("the answer").clone();
+            let answer = patch.lock().expect("the answer").clone();
+            // A conflict means someone else changed the node first.
+            if answer.0 == 409 {
+                is_changed.store(true, Ordering::SeqCst);
+            }
+            return answer;
         }
         (
             404,
@@ -328,31 +351,47 @@ fn adding_no_execute_makes_the_dialog_destructive(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-fn taint_conflict_retry_reopens_fresh_with_notice(cx: &mut TestAppContext) {
+fn a_taint_conflict_goes_straight_back_to_the_editor_and_untouched_rows_follow_the_node(
+    cx: &mut TestAppContext,
+) {
     let t = node_test("node-edit-conflict", cx);
     t.open_editor(NodeEditKind::Taints, &t.t.stg, "node-b", cx);
     let editor = t.wait_for_editor(cx);
     t.add_row(&editor, ("gpu", "true", "NoSchedule"), cx);
     *t.patch.lock().expect("the answer") = conflict();
+    let first = editor.entity_id();
     t.review(&editor, cx);
-    t.t.wait_for_dry_run(cx);
-    let dialog = t.t.dialog(cx);
-    assert!(matches!(
-        dialog.read_with(cx, |dialog, _| dialog.dry_run_state()),
-        Some(DryRunState::Failed(_))
-    ));
-    // Retry would send the same stale version, so it reads the node again instead.
-    t.t.fixture.with_window(cx, |window, cx| {
-        dialog.update(cx, |dialog, cx| dialog.press_retry(window, cx));
+    // The 409 of the dry-run shows no step with the server's words: the confirm closes and the
+    // editor reopens on the node as it is now.
+    t.t.wait_for("the editor to reopen", cx, |cx| {
+        t.editor(cx).is_some_and(|editor| {
+            editor.entity_id() != first && editor.read_with(cx, |editor, _| editor.is_loaded())
+        })
     });
-    let reopened = t.wait_for_editor(cx);
     assert_eq!(reads_of(&t.t.stg_api, "/api/v1/nodes/node-b"), 2);
-    reopened.read_with(cx, |editor, _| {
-        let notice = editor.notice().expect("a notice");
-        assert!(notice.starts_with("The node changed"), "{notice}");
-        assert!(notice.contains("Your rows are kept") || notice.contains("your rows are kept"));
-        // The node's own row and the user's added one.
-        assert_eq!(editor.row_count(), 2);
+    let reopened = t.editor(cx).expect("an editor");
+    reopened.read_with(cx, |editor, cx| {
+        assert_eq!(
+            editor.notice().as_deref(),
+            Some(
+                "The node changed (by someone else): dedicated=ingress:NoSchedule became \
+                 dedicated=egress:NoSchedule, added maintenance=true:NoSchedule. Rows you did \
+                 not touch follow the node; your edits are kept. Review before applying."
+            )
+        );
+        // The row nobody touched took the node's value, the node's new taint joined, and the
+        // user's added row is kept.
+        assert_eq!(editor.row_count(), 3);
+        let intent = editor
+            .current_intent(cx)
+            .expect("the user's row is a change");
+        let lines: Vec<String> = intent
+            .request
+            .changed_fields()
+            .into_iter()
+            .map(|field| field.path.into_owned())
+            .collect();
+        assert_eq!(lines, ["+ gpu=true:NoSchedule"]);
     });
 }
 

@@ -1234,6 +1234,22 @@ fn finish_commit(
         .ok()
         .and_then(|outcome| outcome.created_name.clone());
     let result = result.map(|_| ());
+    // A taint edit that conflicts goes straight back to its editor, with the node reloaded.
+    let is_taint_conflict = intent.action == ResourceAction::EditTaints
+        && matches!(
+            &result,
+            Err(CheckedWriteError::Write(WriteError::Conflict { .. }))
+        );
+    if is_taint_conflict {
+        let reopened = cx.update_window(window, |_, window, cx| {
+            dialog
+                .update(cx, |dialog, cx| dialog.reload_after_conflict(window, cx))
+                .unwrap_or(false)
+        });
+        if reopened.is_ok_and(|reopened| reopened) {
+            return;
+        }
+    }
     if let Err(error) = &result
         // A stale `resourceVersion` cannot pass a second time, so an edit never offers Retry: its
         // editor rebases instead. A create never does either: after an unknown outcome a repeat

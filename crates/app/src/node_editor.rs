@@ -295,7 +295,8 @@ impl NodeEditor {
                 if let Some(kept) = &kept {
                     self.notice = Some(conflict_notice(kept.base.as_deref(), &edit).into());
                 }
-                let rows = kept.map(|kept| rows_after_conflict(&edit, &kept.rows));
+                let rows =
+                    kept.map(|kept| rows_after_conflict(&edit, kept.base.as_deref(), &kept.rows));
                 ready(self.kind, edit, rows, window, cx)
             }
             Ok(Err(error)) => {
