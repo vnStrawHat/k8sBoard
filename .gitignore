@@ -4,3 +4,4 @@
 /monitor-uat-readonly.yml
 *.kubeconfig
 /.claude/settings.local.json
+id_rsa
