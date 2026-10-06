@@ -5,6 +5,7 @@
 //!
 //! A child of `app_shell`, like `write_flow`: it reads the viewed slots and starts the dialog.
 
+use std::cell::Cell;
 use std::rc::Rc;
 use std::time::Duration;
 
@@ -405,6 +406,9 @@ pub(crate) fn commit_progress(
     }
 }
 
+/// What the items after a Stop of the user read.
+const STOPPED_BY_USER: &str = "stopped by user";
+
 /// What the items after a failed step of an ordered plan read.
 const EARLIER_STEP_FAILED: &str = "an earlier step failed";
 
@@ -539,6 +543,10 @@ impl AppShell {
             let mut results = vec![ItemProgress::Waiting; batch.plan.items.len()];
             let mut stopped: Option<SharedString> = None;
             for (index, item) in batch.plan.items.iter().enumerate() {
+                // The Stop button takes effect between two items: the one in flight finishes.
+                if stopped.is_none() && commit.stop.get() {
+                    stopped = Some(STOPPED_BY_USER.into());
+                }
                 let progress = match &stopped {
                     // Gone at the dry-run: nothing to send, whatever happened to the rest.
                     _ if commit.gone.get(index).copied().unwrap_or(false) => ItemProgress::Gone,
@@ -988,6 +996,8 @@ pub(crate) struct BatchCommit {
     pub(crate) note: Option<String>,
     /// Per item of the plan: gone at the dry-run, so the commit sends nothing for it.
     pub(crate) gone: Vec<bool>,
+    /// Set by the Stop button of the dialog: the items not yet sent read `Not sent`.
+    pub(crate) stop: Rc<Cell<bool>>,
 }
 
 #[cfg(test)]

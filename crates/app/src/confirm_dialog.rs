@@ -5,6 +5,7 @@
 //! It never sends anything itself: its buttons call back into the shell (`commit_write`,
 //! `finish_unlock`), which re-checks the gate and the lock of the cluster the dialog names.
 
+use std::cell::Cell;
 use std::rc::Rc;
 use std::time::Duration;
 
@@ -184,6 +185,8 @@ pub(crate) struct ConfirmDialog {
     note: Entity<InputState>,
     is_note_shown: bool,
     is_committing: bool,
+    /// The Stop button of a running batch was pressed; the commit loop reads it between items.
+    stop_requested: Rc<Cell<bool>>,
     /// The last failed check or commit was a 409: Retry of a taint edit then reads the node again.
     is_conflict: bool,
     /// False once the dialog is closed, by any button, Escape, or the overlay.
@@ -234,6 +237,7 @@ impl ConfirmDialog {
             note,
             is_note_shown: false,
             is_committing: false,
+            stop_requested: Rc::new(Cell::new(false)),
             is_conflict: false,
             is_open: true,
             needs_focus: true,
@@ -283,10 +287,14 @@ impl ConfirmDialog {
         let view = dialog.clone();
         window.open_dialog(cx, move |dialog, _, cx| {
             let closed = view.clone();
+            let cancelled = view.clone();
             dialog
                 .title(view.read(cx).title(cx))
                 .w(px(DIALOG_WIDTH))
                 .child(view.clone())
+                // Escape, the overlay, and the close button must not hide a batch that keeps
+                // sending: only the Stop button ends it.
+                .on_cancel(move |_, _, cx| !cancelled.read(cx).is_batch_committing())
                 // Runs after Escape and the overlay as well, so a late commit result knows.
                 .on_close(move |_, _, cx| closed.update(cx, |dialog, _| dialog.is_open = false))
         });
@@ -428,6 +436,19 @@ impl ConfirmDialog {
 
     pub(crate) fn is_open(&self) -> bool {
         self.is_open
+    }
+
+    fn is_batch_committing(&self) -> bool {
+        self.is_committing && matches!(self.kind, DialogKind::Batch(_))
+    }
+
+    /// The Stop button of a running batch: the item in flight finishes, and the rest is not sent.
+    fn stop_batch(&mut self, cx: &mut Context<Self>) {
+        if !self.is_batch_committing() {
+            return;
+        }
+        self.stop_requested.set(true);
+        cx.notify();
     }
 
     /// How many items of a delete batch turned out to be gone already.
@@ -628,6 +649,7 @@ impl ConfirmDialog {
                         .iter()
                         .map(|state| *state == ItemProgress::Gone)
                         .collect(),
+                    stop: Rc::clone(&self.stop_requested),
                 };
                 let batch = Rc::clone(batch);
                 let dialog = cx.weak_entity();
@@ -1090,11 +1112,25 @@ impl ConfirmDialog {
         } else {
             primary.primary()
         };
-        let back = Button::new("write-back")
-            .label("Back")
-            .small()
-            .outline()
-            .on_click(cx.listener(|dialog, _, window, cx| dialog.close(window, cx)));
+        // While a batch sends, Back would only hide it: the one way out is to stop the rest.
+        let back = if self.is_batch_committing() {
+            let is_stopping = self.stop_requested.get();
+            Button::new("write-stop")
+                .label(match is_stopping {
+                    true => "Stopping…",
+                    false => "Stop after current item",
+                })
+                .small()
+                .outline()
+                .disabled(is_stopping)
+                .on_click(cx.listener(|dialog, _, _, cx| dialog.stop_batch(cx)))
+        } else {
+            Button::new("write-back")
+                .label("Back")
+                .small()
+                .outline()
+                .on_click(cx.listener(|dialog, _, window, cx| dialog.close(window, cx)))
+        };
         let retry = self.can_retry().then(|| {
             Button::new("write-retry")
                 .label("Retry")
@@ -1253,6 +1289,14 @@ impl ConfirmDialog {
 
     pub(crate) fn press_retry(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.retry(window, cx);
+    }
+
+    pub(crate) fn press_stop(&mut self, cx: &mut Context<Self>) {
+        self.stop_batch(cx);
+    }
+
+    pub(crate) fn is_stop_offered(&self) -> bool {
+        self.is_batch_committing() && !self.stop_requested.get()
     }
 
     pub(crate) fn choose_propagation_for_test(&mut self, index: usize, cx: &mut Context<Self>) {

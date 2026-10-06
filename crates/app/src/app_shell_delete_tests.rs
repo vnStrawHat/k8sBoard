@@ -1101,14 +1101,16 @@ fn a_bulk_commit_continues_after_one_failure(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-fn a_bulk_commit_survives_the_dialog_closing(cx: &mut TestAppContext) {
+fn escape_does_not_close_a_dialog_whose_batch_is_sending(cx: &mut TestAppContext) {
     let t = delete_test("delete-bulk-close", cx);
     let dir = t.t.enable_audit_folder("delete-bulk-close", cx);
     t.tick_staging_pods(&["api-0", "api-1", "api-2"], 3, cx);
     let _ = t.cursor_on_first_ticked(cx);
     t.open_dialog(cx);
+    let dialog = t.t.dialog(cx);
     t.t.confirm(cx);
     t.t.fixture.press("escape", cx);
+    dialog.read_with(cx, |dialog, _| assert!(dialog.is_open()));
     t.t.wait_for("every commit", cx, |_| audit_lines(&dir).len() == 3);
     assert_eq!(writes(&t.t.stg_api).len(), 6);
     // The last line is on disk before the loop learns it and ends, so wait for the release.
@@ -1361,6 +1363,39 @@ fn a_lock_that_comes_on_mid_batch_stops_the_rest(cx: &mut TestAppContext) {
     });
     // The second and third commits were blocked before they were sent, and are not recorded.
     assert_eq!(writes(&t.t.stg_api).len(), 4);
+    assert_eq!(audit_lines(&dir).len(), 1);
+}
+
+#[gpui_kit::test]
+fn stopping_a_running_batch_sends_nothing_more(cx: &mut TestAppContext) {
+    let t = delete_test("delete-bulk-stop", cx);
+    let dir = t.t.enable_audit_folder("delete-bulk-stop", cx);
+    t.tick_staging_pods(&["api-0", "api-1", "api-2"], 3, cx);
+    let _ = t.cursor_on_first_ticked(cx);
+    t.open_dialog(cx);
+    let dialog = t.t.dialog(cx);
+    let (release, gate) = mpsc::channel();
+    *lock(&t.server.gate) = Some(gate);
+    t.t.confirm(cx);
+    // Three dry-runs and the first commit have reached the server, which holds the commit.
+    t.t.wait_for("the first commit", cx, |_| writes(&t.t.stg_api).len() == 4);
+    // Escape does not hide a batch that keeps sending; Stop is offered instead of Back.
+    t.t.fixture.press("escape", cx);
+    dialog.read_with(cx, |dialog, _| {
+        assert!(dialog.is_open() && dialog.is_stop_offered());
+    });
+    dialog.update(cx, |dialog, cx| dialog.press_stop(cx));
+    release.send(()).expect("the server waits for the release");
+    t.t.wait_for("the first audit line", cx, |_| audit_lines(&dir).len() == 1);
+    t.t.wait_for("the batch to end", cx, |cx| {
+        t.shell()
+            .read_with(cx, |shell, _| !shell.running_batches.contains(&t.t.stg))
+    });
+    let stopped = ItemProgress::NotSent("stopped by user".into());
+    let states = dialog.read_with(cx, |dialog, _| dialog.item_states());
+    assert_eq!(states, vec![ItemProgress::Done, stopped.clone(), stopped]);
+    assert_eq!(states[1].text(), "Not sent: stopped by user");
+    assert_eq!(writes(&t.t.stg_api).len(), 4, "no second commit was sent");
     assert_eq!(audit_lines(&dir).len(), 1);
 }
 
