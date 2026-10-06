@@ -300,8 +300,20 @@ impl Clusters {
                 },
                 cx,
             );
+            cx.set_global(AuditFolderCleanup(dir.clone()));
         });
         dir
+    }
+}
+
+/// Removes the audit folder when the test app drops its globals, so runs leave nothing in `$TMP`.
+struct AuditFolderCleanup(PathBuf);
+
+impl gpui_kit::Global for AuditFolderCleanup {}
+
+impl Drop for AuditFolderCleanup {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
     }
 }
 
