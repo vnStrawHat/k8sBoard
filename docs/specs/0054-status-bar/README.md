@@ -6,11 +6,11 @@ Status: **implemented 2026-10-05**, requested by the user. Read-only: no new Kub
 
 - Status bar items are separated by a vertical rule.
 - Hovering `Watching N resource types` lists the watched kinds.
-- The right corner shows `↓ in  ↑ out | CPU x%  MEM y` in place of the k8sBoard version (the version stays in Settings › About). Hovering CPU/MEM shows a detailed table, as OneTerm does.
+- The right corner shows `↓ in  ↑ out | App CPU x% · App MEM y` ("App" says the figures are the k8sBoard process, not the cluster) in place of the k8sBoard version (the version stays in Settings › About). Hovering CPU/MEM shows a detailed table, as OneTerm does.
 
 ## What OneTerm does (reference `crates/workspace/src/widgets/{resource,net_speed,status_text}.rs`)
 
-- **Resource** item: `CPU 12.3%  MEM 45.2 MB` of its **own process**, `sysinfo`, every 2 s. The `sysinfo` refresh runs on the background executor; the UI tick only reads a mutex slot. CPU is divided by the core count (Task Manager style). The tooltip is a two-column table (Memory, CPU sections) in a nested entity that re-renders on every sample, because the kit builds a tooltip closure once.
+- **Resource** item: `App CPU 12.3% · App MEM 45.2 MB` of its **own process**, `sysinfo`, every 2 s. The `sysinfo` refresh runs on the background executor; the UI tick only reads a mutex slot. CPU is divided by the core count (Task Manager style). The tooltip is a two-column table (Memory, CPU sections) in a nested entity that re-renders on every sample, because the kit builds a tooltip closure once.
 - **Network** item: `↓ rx  ↑ tx` in bits/s, delta of the byte counters of its **own SSH session**, every 1 s; first sample 0, a counter that drops reads 0.
 
 k8sBoard mirrors the layout, the pure delta helpers, the background sampling and the live tooltip entity. It differs in: 1 s interval for both items, bytes/s (`KB/s`) like the Topology Traffic mode, and its own traffic being the Kubernetes API client.
@@ -28,7 +28,7 @@ k8sBoard mirrors the layout, the pure delta helpers, the background sampling and
 
 ## Tooltips
 
-- **Watching**: `Watched resources`, one row per kind sorted by name, `×N` when a kind has several watches (one per namespace). Source: `LiveCluster::watched_kinds()`, built from the same fields as `watch_count()`; `IssueFeeds::watch_count` is now the sum of `IssueFeeds::watched`. The rows sum to the count in `Watching N`.
+- **Watching**: `Watched resources`, one row per kind sorted by name, `×N` when a kind has several watches (one per namespace). Source: `LiveCluster::watched_kinds()`, built from the same fields as `watch_count()`; `IssueFeeds::watch_count` is now the sum of `IssueFeeds::watched`. The rows sum to the count in `Watching N`. UX batch 5c: past 20 kinds the rest fold into one `and more +N` row, and a note says the number follows the screens you have opened. The resource item reads `App CPU x% · App MEM y`.
 - **Network**: `Kubernetes API traffic` (Received/Sent rate) and `Since the cluster connected` (totals, `—` without a cluster).
 - **CPU / MEM**: `Memory` (Private working set, Working set or RSS, Commit (private bytes) or Virtual size, Peak working set; a figure the OS does not give is left out) and `CPU` (usage of N logical cores, threads (only where the OS lists them; the row is hidden otherwise), uptime). Names and order follow OneTerm. Not mirrored: its `CPU time (user + kernel)` row (`sysinfo` 0.31 has no accumulated CPU time) and its Windows thread count (a whole-system process snapshot every sample).
 

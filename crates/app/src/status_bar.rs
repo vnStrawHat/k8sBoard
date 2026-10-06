@@ -155,12 +155,30 @@ fn watch_slot(text: String, dot: Option<Hsla>, watched: Option<Vec<WatchedKind>>
     }
 }
 
-/// The tooltip table of the watching slot: one row per kind, with `×N` for several watches.
+/// The most kinds the watching tooltip lists; a tall list would run off a short window.
+const WATCHED_ROWS_SHOWN: usize = 20;
+
+/// The tooltip table of the watching slot: one row per kind, with `×N` for several watches, and
+/// a `+N` row for the kinds past `WATCHED_ROWS_SHOWN`. The note says why the number changes.
 fn watched_sections(kinds: &[WatchedKind]) -> Vec<Section> {
-    vec![Section {
-        title: "Watched resources",
-        rows: kinds.iter().map(watched_row).collect(),
-    }]
+    let mut rows: Vec<_> = kinds
+        .iter()
+        .take(WATCHED_ROWS_SHOWN)
+        .map(watched_row)
+        .collect();
+    if kinds.len() > WATCHED_ROWS_SHOWN {
+        rows.push(("and more", format!("+{}", kinds.len() - WATCHED_ROWS_SHOWN)));
+    }
+    vec![
+        Section {
+            title: "Watched resources",
+            rows,
+        },
+        Section {
+            title: "Follows the screens you have opened",
+            rows: Vec::new(),
+        },
+    ]
 }
 
 #[cfg(test)]
@@ -202,12 +220,27 @@ mod tests {
                 count: 3,
             },
         ];
+        let sections = watched_sections(&kinds);
         assert_eq!(
-            watched_sections(&kinds),
-            vec![Section {
+            sections[0],
+            Section {
                 title: "Watched resources",
                 rows: vec![("Nodes", String::new()), ("Pods", "×3".to_owned())],
-            }]
+            }
         );
+    }
+
+    #[test]
+    fn a_long_watching_tooltip_folds_the_rest_into_one_row() {
+        let kinds = vec![
+            WatchedKind {
+                name: "Pods",
+                count: 1
+            };
+            WATCHED_ROWS_SHOWN + 4
+        ];
+        let rows = &watched_sections(&kinds)[0].rows;
+        assert_eq!(rows.len(), WATCHED_ROWS_SHOWN + 1);
+        assert_eq!(rows.last(), Some(&("and more", "+4".to_owned())));
     }
 }

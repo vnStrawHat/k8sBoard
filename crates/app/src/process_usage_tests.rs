@@ -122,7 +122,7 @@ fn uptime_scales_to_its_size() {
 
 #[test]
 fn the_items_read_as_the_wireframe_and_oneterm_do() {
-    assert_eq!(resource_text(&process()), "CPU 1.2%  MEM 49.0 MB");
+    assert_eq!(resource_text(&process()), "App CPU 1.2% · App MEM 49.0 MB");
     let rate = NetworkRate {
         received: 1_234_000.0,
         sent: 300.0,

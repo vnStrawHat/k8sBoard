@@ -191,10 +191,10 @@ impl ProcessSampler {
     }
 }
 
-/// `CPU 3.1%  MEM 142.0 MB`.
+/// `App CPU 3.1% · App MEM 142.0 MB`: the k8sBoard process, never the cluster, so each figure says so.
 pub(crate) fn resource_text(process: &ProcessReading) -> String {
     format!(
-        "CPU {:.1}%  MEM {}",
+        "App CPU {:.1}% · App MEM {}",
         process.cpu_percent,
         format_memory(displayed_memory(
             process.private_working_set,
