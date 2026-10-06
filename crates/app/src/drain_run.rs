@@ -12,8 +12,8 @@ use gpui_kit::SharedString;
 
 use crate::app_shell::write_flow::{CheckedWriteError, Confirmed, write_error_text};
 use crate::drain_plan::{
-    BudgetPolicy, DrainOptions, PodKey, PodVerdict, SkipReason, pod_count, run_verdict,
-    timeout_text,
+    BudgetPolicy, BudgetRefusal, DrainOptions, PodKey, PodVerdict, SkipReason, pod_count,
+    run_verdict, timeout_text,
 };
 use crate::status_tone::StatusTone;
 
@@ -630,6 +630,37 @@ impl NodeState {
     }
 }
 
+/// A PodDisruptionBudget that refused an eviction of a stuck drain.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct BlockingBudget {
+    pub(crate) namespace: String,
+    pub(crate) name: String,
+}
+
+/// The header of the tab in three parts, so the tab can draw the budget names as links:
+/// `lead` · blocked by `blockers` `tail`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct StatusLine {
+    pub(crate) lead: String,
+    pub(crate) blockers: Vec<BlockingBudget>,
+    /// Starts with its own separator, or is empty.
+    pub(crate) tail: String,
+}
+
+impl StatusLine {
+    #[cfg(test)]
+    fn text(&self) -> String {
+        let blockers = match self.blockers.as_slice() {
+            [] => String::new(),
+            budgets => {
+                let names: Vec<&str> = budgets.iter().map(|budget| budget.name.as_str()).collect();
+                format!(" · blocked by {}", names.join(", "))
+            }
+        };
+        format!("{}{blockers}{}", self.lead, self.tail)
+    }
+}
+
 /// One pod line of the tab.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct PodRow {
@@ -702,7 +733,8 @@ impl DrainRun {
             .pods
             .iter()
             .map(|pod| {
-                let (text, tone) = pod_text(&pod.progress, now, self.options.budgets);
+                let (text, tone) =
+                    pod_text(&pod.progress, now, self.options.budgets, self.end.is_some());
                 let rank = match tone {
                     StatusTone::Bad => 0,
                     StatusTone::Warn => 1,
@@ -733,8 +765,36 @@ impl DrainRun {
         Some(notice)
     }
 
-    /// The header line of the tab: what the run is doing, or how it ended.
+    /// `status_line` as one string.
+    #[cfg(test)]
     pub(crate) fn status_text(&self, now: Duration) -> String {
+        self.status_line(now).text()
+    }
+
+    /// The budgets that refused the open pods of the node the run is stuck on, in the order the
+    /// pods list them. The budget lives in its pod's namespace.
+    fn blocking_budgets(&self, node: &NodeRun) -> Vec<BlockingBudget> {
+        let mut budgets: Vec<BlockingBudget> = Vec::new();
+        for pod in &node.pods {
+            let PodProgress::Refused { message, .. } = &pod.progress else {
+                continue;
+            };
+            let Some(refusal) = BudgetRefusal::parse(message) else {
+                continue;
+            };
+            let budget = BlockingBudget {
+                namespace: pod.key.namespace.clone(),
+                name: refusal.name.to_owned(),
+            };
+            if !budgets.contains(&budget) {
+                budgets.push(budget);
+            }
+        }
+        budgets
+    }
+
+    /// The header line of the tab: what the run is doing, or how it ended.
+    pub(crate) fn status_line(&self, now: Duration) -> StatusLine {
         let cordoned = || {
             if self.cordoned.is_empty() {
                 String::new()
@@ -742,7 +802,7 @@ impl DrainRun {
                 format!(" · cordoned: {}", self.cordoned.join(", "))
             }
         };
-        match &self.end {
+        let lead = match &self.end {
             None if !self.to_cordon.is_empty() => {
                 format!("Cordoning {}…", self.to_cordon.join(", "))
             }
@@ -772,16 +832,25 @@ impl DrainRun {
             Some(RunEnd::Stopped(text)) => format!("Stopped: {text}{}", cordoned()),
             Some(RunEnd::Finished) => {
                 let stuck = self.nodes.iter().find_map(|node| match &node.end {
-                    Some(NodeEnd::Stuck(reason)) => Some((&node.name, reason)),
+                    Some(NodeEnd::Stuck(reason)) => Some((node, reason)),
                     _ => None,
                 });
                 match stuck {
                     Some((node, reason)) => {
-                        format!("Stuck on {node}: {reason}{}", cordoned())
+                        return StatusLine {
+                            lead: format!("Stuck on {}: {reason}", node.name),
+                            blockers: self.blocking_budgets(node),
+                            tail: cordoned(),
+                        };
                     }
                     None => "Drained".to_owned(),
                 }
             }
+        };
+        StatusLine {
+            lead,
+            blockers: Vec::new(),
+            tail: String::new(),
         }
     }
 
@@ -822,10 +891,32 @@ impl NodeRun {
     }
 }
 
-/// The state text of a pod and its tone.
-fn pod_text(progress: &PodProgress, now: Duration, budgets: BudgetPolicy) -> (String, StatusTone) {
+/// The state text of a pod and its tone. Once the run `is_ended` nothing retries or waits any more,
+/// so an open pod reads as where it was left, not as work in progress.
+fn pod_text(
+    progress: &PodProgress,
+    now: Duration,
+    budgets: BudgetPolicy,
+    is_ended: bool,
+) -> (String, StatusTone) {
+    let (verb, past) = match budgets {
+        BudgetPolicy::Respect => ("Evicting…", "Eviction sent, still on node"),
+        BudgetPolicy::Skip => ("Deleting…", "Delete sent, still on node"),
+    };
     match progress {
+        PodProgress::Pending if is_ended => ("Not evicted".to_owned(), StatusTone::Done),
         PodProgress::Pending => ("Waiting".to_owned(), StatusTone::Done),
+        PodProgress::Refused { message, .. } if is_ended => (
+            match (budgets, BudgetRefusal::parse(message)) {
+                (BudgetPolicy::Respect, Some(refusal)) => {
+                    format!("Blocked by PDB {}", refusal.name)
+                }
+                (BudgetPolicy::Respect, None) => format!("Blocked by PDB: {message}"),
+                (BudgetPolicy::Skip, _) => format!("Refused: {message}"),
+            },
+            StatusTone::Warn,
+        ),
+        PodProgress::Evicted if is_ended => (past.to_owned(), StatusTone::Warn),
         PodProgress::Refused {
             attempt,
             retry_at,
@@ -842,14 +933,7 @@ fn pod_text(progress: &PodProgress, now: Duration, budgets: BudgetPolicy) -> (St
                 StatusTone::Warn,
             )
         }
-        PodProgress::Evicted => (
-            match budgets {
-                BudgetPolicy::Respect => "Evicting…",
-                BudgetPolicy::Skip => "Deleting…",
-            }
-            .to_owned(),
-            StatusTone::Info,
-        ),
+        PodProgress::Evicted => (verb.to_owned(), StatusTone::Info),
         PodProgress::Awaited => ("Terminating".to_owned(), StatusTone::Info),
         PodProgress::Gone => ("Gone".to_owned(), StatusTone::Ok),
         PodProgress::Failed(error) => (format!("Failed: {error}"), StatusTone::Bad),

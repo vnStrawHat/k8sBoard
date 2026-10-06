@@ -759,3 +759,104 @@ fn skip_pdbs_run_words_follow_the_policy() {
     assert_eq!(respect.pod_rows(now)[0].text.as_ref(), "Evicting…");
     assert_eq!(respect.node_states()[0].1.text(), "Evicting 0/1");
 }
+
+fn refused_by_budget(budget: &str) -> Result<WriteOutcome, CheckedWriteError> {
+    Err(CheckedWriteError::Write(WriteError::TooManyRequests {
+        message: format!("The disruption budget {budget} needs 2 healthy pods and has 2 currently"),
+        retry_after: None,
+    }))
+}
+
+#[test]
+fn open_pods_of_an_ended_run_stop_reading_as_work_in_progress() {
+    // A pod the run never reached, a refused pod, and an evicted pod that never left.
+    let (mut run, now) = run_over(&["api-1", "api-2", "api-3"]);
+    run.on_write(
+        &NextStep::Evict(key("api-1")),
+        refused_by_budget("api-pdb"),
+        now,
+    );
+    run.on_write(&NextStep::Evict(key("api-2")), ok(), now);
+    let text = |run: &DrainRun, name: &str| {
+        run.pod_rows(now)
+            .into_iter()
+            .find(|row| row.pod.as_ref().ends_with(name))
+            .map(|row| row.text.to_string())
+            .expect("a row")
+    };
+    assert_eq!(text(&run, "api-2"), "Evicting…");
+    assert_eq!(text(&run, "api-3"), "Waiting");
+    assert!(text(&run, "api-1").starts_with("Refused by PDB: "));
+
+    run.cancel();
+    assert_eq!(text(&run, "api-1"), "Blocked by PDB api-pdb");
+    assert_eq!(text(&run, "api-2"), "Eviction sent, still on node");
+    assert_eq!(text(&run, "api-3"), "Not evicted");
+}
+
+#[test]
+fn an_ended_run_without_a_budget_name_keeps_the_refusal_words() {
+    let (mut run, now) = run_over(&["api-1"]);
+    run.on_write(&NextStep::Evict(key("api-1")), refused(None), now);
+    run.cancel();
+    assert_eq!(
+        run.pod_rows(now)[0].text.as_ref(),
+        "Blocked by PDB: needs 2 healthy pods"
+    );
+}
+
+#[test]
+fn the_stuck_header_names_the_blocking_budgets() {
+    let (mut run, now) = run_over(&["api-1", "api-2", "api-3"]);
+    run.on_write(
+        &NextStep::Evict(key("api-1")),
+        refused_by_budget("api-pdb"),
+        now,
+    );
+    run.on_write(
+        &NextStep::Evict(key("api-2")),
+        refused_by_budget("api-pdb"),
+        now,
+    );
+    run.on_write(
+        &NextStep::Evict(key("api-3")),
+        refused_by_budget("web-pdb"),
+        now,
+    );
+    let NextStep::NodeDone(outcome) = run.next_step(secs(300)) else {
+        panic!("the node timed out");
+    };
+    run.on_node_done(outcome);
+    let line = run.status_line(secs(300));
+    assert_eq!(
+        line.blockers,
+        [
+            BlockingBudget {
+                namespace: "payments".to_owned(),
+                name: "api-pdb".to_owned()
+            },
+            BlockingBudget {
+                namespace: "payments".to_owned(),
+                name: "web-pdb".to_owned()
+            },
+        ]
+    );
+    assert_eq!(
+        run.status_text(secs(300)),
+        "Stuck on wk-04: Timed out after 5m: 3 pods left · blocked by api-pdb, web-pdb"
+    );
+}
+
+#[test]
+fn a_stuck_header_without_a_known_budget_has_no_blocker_part() {
+    let (mut run, now) = run_over(&["api-1"]);
+    run.on_write(&NextStep::Evict(key("api-1")), refused(None), now);
+    let NextStep::NodeDone(outcome) = run.next_step(secs(300)) else {
+        panic!("the node timed out");
+    };
+    run.on_node_done(outcome);
+    assert_eq!(
+        run.status_text(secs(300)),
+        "Stuck on wk-04: Timed out after 5m: 1 pod left"
+    );
+}

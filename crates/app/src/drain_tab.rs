@@ -15,8 +15,11 @@ use gpui_kit::{
 use crate::app_shell::AppShell;
 use crate::audit_log::AuditIdentity;
 use crate::cluster_registry::ClusterRef;
-use crate::drain_run::{DrainRun, NodeState};
+use crate::drain_run::{BlockingBudget, DrainRun, NodeState, RunEnd, StatusLine};
+use crate::drawer::link_style;
+use crate::resource_kind::ResourceKind;
 use crate::status_tone::{StatusTone, tone_color};
+use crate::table_selection::{ClusterObject, ResourceKey};
 
 pub(crate) struct DrainTab {
     shell: WeakEntity<AppShell>,
@@ -124,7 +127,6 @@ impl DrainTab {
 
     /// The dot of the tab: running reads as a warning, a clean drain green, a stuck one red.
     pub(crate) fn tone(&self) -> StatusTone {
-        use crate::drain_run::RunEnd;
         match self.run.end() {
             None => StatusTone::Warn,
             Some(RunEnd::Finished) => {
@@ -188,6 +190,66 @@ impl DrainTab {
         h_flex().gap_2().flex_wrap().children(chips)
     }
 
+    /// The nodes Drain again… reopens the dialog on, when the run ended short of drained: stuck,
+    /// failed, or stopped by the app. A cancel is the user's own choice, so it offers nothing.
+    fn nodes_to_drain_again(&self) -> Vec<String> {
+        let is_short =
+            self.tone() == StatusTone::Bad || matches!(self.run.end(), Some(RunEnd::Stopped(_)));
+        if !is_short {
+            return Vec::new();
+        }
+        self.run
+            .node_states()
+            .into_iter()
+            .filter(|(_, state)| *state != NodeState::Drained)
+            .map(|(node, _)| node)
+            .collect()
+    }
+
+    /// The header: the line, with the budgets that block the drain as links to them.
+    fn render_status(&self, line: StatusLine, cx: &Context<Self>) -> impl IntoElement {
+        if line.blockers.is_empty() {
+            return div().text_sm().child(format!("{}{}", line.lead, line.tail));
+        }
+        let last = line.blockers.len() - 1;
+        let links = line
+            .blockers
+            .into_iter()
+            .enumerate()
+            .map(|(index, budget)| {
+                let BlockingBudget { namespace, name } = budget;
+                let key = ResourceKey::Kind {
+                    kind: ResourceKind::PodDisruptionBudgets,
+                    namespace: Some(namespace.clone()),
+                    name: name.clone(),
+                };
+                let object = ClusterObject::new(self.cluster.clone(), key);
+                let shell = self.shell.clone();
+                let shown: SharedString = name.into();
+                let separator = if index == last { "" } else { "," };
+                h_flex()
+                    .child(
+                        link_style(div().id(("drain-blocker", index)), &shown, cx)
+                            .on_click(move |_, _, cx| {
+                                let object = object.clone();
+                                let _ =
+                                    shell.update(cx, |shell, cx| shell.reveal_object(object, cx));
+                            })
+                            .child(shown.clone()),
+                    )
+                    .child(separator)
+            });
+        div().text_sm().child(
+            h_flex()
+                .gap_1()
+                .flex_wrap()
+                .child(line.lead)
+                .child("· blocked by")
+                .children(links)
+                .children((!line.tail.is_empty()).then(|| line.tail.trim_start().to_owned())),
+        )
+    }
+
     fn render_buttons(&self, cx: &mut Context<Self>) -> impl IntoElement {
         if self.is_running() {
             return h_flex().gap_2().child(
@@ -221,8 +283,21 @@ impl DrainTab {
                     });
                 })
         });
+        let again_nodes = self.nodes_to_drain_again();
+        let again = (!again_nodes.is_empty()).then(|| {
+            let (shell, cluster) = (self.shell.clone(), self.cluster.clone());
+            Button::new("drain-tab-again")
+                .label("Drain again…")
+                .small()
+                .outline()
+                .on_click(move |_, window, cx| {
+                    let _ = shell.update(cx, |shell, cx| {
+                        shell.start_drain(&cluster, &again_nodes, window, cx);
+                    });
+                })
+        });
         let (shell, handle) = (self.shell.clone(), cx.entity());
-        h_flex().gap_2().children(uncordon).child(
+        h_flex().gap_2().children(again).children(uncordon).child(
             Button::new("drain-tab-close")
                 .label("Close")
                 .small()
@@ -284,7 +359,7 @@ impl Render for DrainTab {
                         v_flex()
                             .gap_1()
                             .min_w_0()
-                            .child(div().text_sm().child(self.run.status_text(now)))
+                            .child(self.render_status(self.run.status_line(now), cx))
                             .child(self.render_nodes(cx)),
                     )
                     .child(self.render_buttons(cx)),

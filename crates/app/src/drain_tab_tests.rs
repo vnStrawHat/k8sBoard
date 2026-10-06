@@ -90,3 +90,31 @@ fn the_run_clock_starts_at_zero_and_only_moves_forward() {
     assert!(first < Duration::from_secs(5));
     assert!(tab.now() >= first);
 }
+
+#[test]
+fn drain_again_offers_the_nodes_a_stuck_or_stopped_run_left_undrained() {
+    let mut running = tab_over(&["a", "b"]);
+    assert!(running.nodes_to_drain_again().is_empty());
+
+    // Node a drains, node b gets stuck: only b is offered again.
+    running.run_mut().on_read(Ok(Vec::new()), Duration::ZERO);
+    running.run_mut().on_node_done(NodeOutcome::Drained);
+    running.run_mut().on_read(Ok(Vec::new()), Duration::ZERO);
+    running.run_mut().on_node_done(NodeOutcome::Stuck {
+        reason: "Timed out".into(),
+    });
+    assert_eq!(running.nodes_to_drain_again(), ["b"]);
+
+    let mut stopped = tab_over(&["wk-04"]);
+    stopped.run_mut().stop("the app quit");
+    assert_eq!(stopped.nodes_to_drain_again(), ["wk-04"]);
+
+    let mut cancelled = tab_over(&["wk-04"]);
+    cancelled.run_mut().cancel();
+    assert!(cancelled.nodes_to_drain_again().is_empty());
+
+    let mut drained = tab_over(&["wk-04"]);
+    drained.run_mut().on_read(Ok(Vec::new()), Duration::ZERO);
+    drained.run_mut().on_node_done(NodeOutcome::Drained);
+    assert!(drained.nodes_to_drain_again().is_empty());
+}
