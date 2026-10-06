@@ -31,3 +31,8 @@ The app's own debug log (`RUST_LOG=kube_client::client::builder=debug`) of `--sc
 ## UX follow-up (walk H9)
 
 A Secret row whose text ends with `\n` or `\r\n` (usually a paste) shows `ends with a line break` and a `Trim` button (`ValueRow::ends_with_line_break`, `trim_line_break`). Trim removes the trailing `\r`/`\n`; the warning never blocks Apply. ConfigMap text is not flagged: a trailing newline is normal there.
+
+## UX round 3 (M8, M9)
+
+- **The confirm shows the ConfigMap text before and after** (decision of 2026-10-06, replacing rule 6 of `secret-safety.md` for ConfigMaps only): `data[LOG_LEVEL] value changed: info → debug`, `data[NEW] added: x`, `data[OLD] removed: gone`, each value on one line and cut at 80 characters. `ValuesEdit::confirm_lines` builds them from the base text (`old_texts`, kept for ConfigMap text keys only); the dialog draws them in place of `changed_fields()`. A Secret still shows the path and marker only, and `changed_fields()`, the audit line, notices, and logs never carry a value for either kind.
+- **Edit YAML ends like Edit values** for a ConfigMap or Secret: the notice reads `Saved ConfigMap web-config` and carries the same `Restart N consumers` button (`env_source_kind`). Restart consumers names its source: `Restart 1 deployment that reads web-config`, with the Helm line for a Helm-managed workload and the OnDelete line, and a paused Deployment is skipped. The workload is read from the rows the session lists (the Deployments and DaemonSets feeds, the shown screen's kind); a consumer no list holds (a StatefulSet while its screen is not shown) is restarted unchecked and the dialog says its state is not loaded.

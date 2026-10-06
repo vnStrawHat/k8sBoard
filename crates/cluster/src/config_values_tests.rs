@@ -493,3 +493,71 @@ fn label_terms_and_pairs_agree_on_helm() {
     assert!(is_helm_managed([("app.kubernetes.io/managed-by", "Helm")]));
     assert!(!is_helm_managed([("other", "Helm")]));
 }
+
+#[test]
+fn a_config_map_confirm_shows_the_text_before_and_after() {
+    let base = config_map_base(
+        "fake",
+        config_map(json!({"data": {"LOG_LEVEL": "info", "OLD": "gone"}})),
+        &config_map_ref(),
+    )
+    .expect("editable");
+    let edit = base
+        .edit(vec![
+            set("LOG_LEVEL", "debug"),
+            add("NEW", "x"),
+            remove("OLD"),
+        ])
+        .expect("valid");
+    assert_eq!(
+        edit.confirm_lines(),
+        [
+            "data[LOG_LEVEL] value changed: info → debug",
+            "data[NEW] added: x",
+            "data[OLD] removed: gone"
+        ]
+    );
+    // The audit paths stay free of values.
+    let paths: Vec<_> = edit.change_paths().collect();
+    assert_eq!(
+        paths,
+        [
+            "data[LOG_LEVEL] value changed",
+            "data[NEW] added",
+            "data[OLD] removed"
+        ]
+    );
+}
+
+#[test]
+fn a_long_multi_line_value_is_cut_to_one_line() {
+    let base = config_map_base(
+        "fake",
+        config_map(json!({"data": {"K": "a\nb"}})),
+        &config_map_ref(),
+    )
+    .expect("editable");
+    let long = "z".repeat(200);
+    let lines = base
+        .edit(vec![set("K", &long)])
+        .expect("valid")
+        .confirm_lines();
+    assert_eq!(lines.len(), 1);
+    assert!(
+        lines[0].starts_with("data[K] value changed: a⏎b → zzz"),
+        "{}",
+        lines[0]
+    );
+    assert!(lines[0].ends_with('…'), "{}", lines[0]);
+}
+
+#[test]
+fn a_secret_confirm_never_shows_a_value() {
+    let base = secret_base_fixture();
+    let edit = base
+        .edit(vec![set("DB_PASSWORD", "new-secret-text")])
+        .expect("valid");
+    let lines = edit.confirm_lines();
+    assert_eq!(lines, ["data[DB_PASSWORD] value changed"]);
+    assert!(!lines[0].contains("new-secret-text"));
+}

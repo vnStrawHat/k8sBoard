@@ -149,16 +149,22 @@ pub(crate) fn values_success_notice(kind_name: &str, name: &str, count: usize) -
     format!("Updated {count} {unit} of {kind_name} {name}")
 }
 
-/// The workloads that read the edited ConfigMap or Secret through env, once an Edit values commit
-/// went through: the pods list the drawer's Used by reads decides. Empty for any other write, a
-/// failed commit, or while that list is not loaded.
+/// The notice of an Edit YAML commit: `Saved ConfigMap web-config`, with the same Restart button
+/// as Edit values when the object is a ConfigMap or Secret that workloads read through env.
+pub(crate) fn yaml_success_notice(kind_name: &str, name: &str) -> String {
+    format!("Saved {kind_name} {name}")
+}
+
+/// The workloads that read the edited ConfigMap or Secret through env, once an Edit values or an
+/// Edit YAML commit of it went through: the pods list the drawer's Used by reads decides. Empty for
+/// any other write, a failed commit, or while that list is not loaded.
 pub(super) fn env_consumers_after(
     shell: &WeakEntity<AppShell>,
     intent: &WriteIntent,
     is_success: bool,
     cx: &mut App,
 ) -> Vec<(ObjectKind, ResourceKey)> {
-    let ResourceAction::EditValues(kind) = intent.action else {
+    let Some(kind) = env_source_kind(intent.action) else {
         return Vec::new();
     };
     if !is_success {
@@ -178,6 +184,19 @@ pub(super) fn env_consumers_after(
         .unwrap_or_default()
 }
 
+/// The kind an edit of a ConfigMap or Secret is on, whichever editor made it: Edit values and Edit
+/// YAML both leave the workloads that read the object through env on its old value.
+fn env_source_kind(action: ResourceAction) -> Option<ObjectKind> {
+    match action {
+        ResourceAction::EditValues(kind) | ResourceAction::EditYaml(kind)
+            if matches!(kind, ObjectKind::ConfigMap | ObjectKind::Secret) =>
+        {
+            Some(kind)
+        }
+        _ => None,
+    }
+}
+
 /// `Restart 3 consumers` (a count of one reads `Restart 1 consumer`).
 fn restart_consumers_label(count: usize) -> String {
     let unit = if count == 1 { "consumer" } else { "consumers" };
@@ -193,11 +212,13 @@ pub(super) fn notify_with_restart(
     text: String,
     shell: &WeakEntity<AppShell>,
     cluster: &ClusterRef,
+    source: &str,
     consumers: Vec<(ObjectKind, ResourceKey)>,
 ) {
-    let (shell, cluster) = (shell.clone(), cluster.clone());
+    let (shell, cluster, source) = (shell.clone(), cluster.clone(), source.to_owned());
     let notification = Notification::success(text).action(move |_, _, cx| {
         let (shell, cluster, consumers) = (shell.clone(), cluster.clone(), consumers.clone());
+        let source = source.clone();
         Button::new("restart-consumers")
             .label(restart_consumers_label(consumers.len()))
             .small()
@@ -205,8 +226,9 @@ pub(super) fn notify_with_restart(
             .on_click(cx.listener(move |notification, _, window, cx| {
                 notification.dismiss(window, cx);
                 let (cluster, consumers) = (cluster.clone(), consumers.clone());
+                let source = source.clone();
                 let _ = shell.update(cx, |shell, cx| {
-                    shell.restart_consumers(&cluster, &consumers, window, cx);
+                    shell.restart_consumers(&cluster, &consumers, &source, window, cx);
                 });
             }))
     });
@@ -254,7 +276,34 @@ impl AppShell {
 
 #[cfg(test)]
 mod tests {
-    use super::restart_consumers_label;
+    use cluster::ObjectKind;
+
+    use super::{env_source_kind, restart_consumers_label};
+    use crate::resource_actions::ResourceAction;
+
+    #[test]
+    fn an_edit_yaml_commit_says_what_was_saved() {
+        assert_eq!(
+            super::yaml_success_notice("ConfigMap", "web-config"),
+            "Saved ConfigMap web-config"
+        );
+    }
+
+    #[test]
+    fn both_editors_of_a_config_map_or_secret_offer_the_restart() {
+        for kind in [ObjectKind::ConfigMap, ObjectKind::Secret] {
+            assert_eq!(
+                env_source_kind(ResourceAction::EditValues(kind)),
+                Some(kind)
+            );
+            assert_eq!(env_source_kind(ResourceAction::EditYaml(kind)), Some(kind));
+        }
+        assert_eq!(
+            env_source_kind(ResourceAction::EditYaml(ObjectKind::Deployment)),
+            None
+        );
+        assert_eq!(env_source_kind(ResourceAction::RollBack), None);
+    }
 
     #[test]
     fn the_restart_button_counts_consumers() {

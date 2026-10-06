@@ -1757,11 +1757,14 @@ fn restart_consumers_opens_one_batch_dialog_per_workload_kind(cx: &mut TestAppCo
     ];
     t.fixture.with_window(cx, |window, cx| {
         t.fixture.shell.update(cx, |shell, cx| {
-            shell.restart_consumers(&t.stg, &consumers, window, cx);
+            shell.restart_consumers(&t.stg, &consumers, "web-config", window, cx);
         });
     });
     // The first kind opens last, so it is the one on top.
-    assert_eq!(t.dialog_label(cx), "Restart 2 deployments");
+    assert_eq!(
+        t.dialog_label(cx),
+        "Restart 2 deployments that read web-config"
+    );
     t.wait_for("both dry-runs", cx, |_| writes(&t.stg_api).len() == 3);
     let paths: Vec<String> = writes(&t.stg_api)
         .into_iter()

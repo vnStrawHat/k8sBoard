@@ -153,10 +153,22 @@ impl ValuesBase {
         if self.estimated_size(&paired) > MAX_OBJECT_BYTES {
             return Err(ValuesEditError::ObjectTooLarge);
         }
+        let old_texts = paired
+            .iter()
+            .filter_map(|paired| {
+                let key = paired.change.key();
+                let found = self.keys.iter().find(|candidate| candidate.name == key)?;
+                match &found.content {
+                    KeyContent::Text(text) => Some((key.to_owned(), text.clone())),
+                    KeyContent::Hidden | KeyContent::Binary | KeyContent::TooLarge => None,
+                }
+            })
+            .collect();
         Ok(ValuesEdit {
             target: self.target.clone(),
             resource_version: self.resource_version.clone(),
             changes: paired,
+            old_texts,
         })
     }
 
@@ -290,9 +302,51 @@ pub struct ValuesEdit {
     resource_version: String,
     /// Sorted by key.
     changes: Vec<DataFieldChange>,
+    /// The text each changed ConfigMap key had when the editor opened, for the confirm dialog
+    /// only. A Secret has none: its values are never loaded.
+    old_texts: BTreeMap<String, String>,
+}
+
+/// The longest value text a confirm line shows; a longer one is cut.
+const CONFIRM_VALUE_CHARS: usize = 80;
+
+/// `text` on one line, cut to `CONFIRM_VALUE_CHARS`.
+fn confirm_value(text: &str) -> String {
+    let one_line = text.replace(['\r', '\n'], "⏎");
+    if one_line.chars().count() <= CONFIRM_VALUE_CHARS {
+        return one_line;
+    }
+    let cut: String = one_line.chars().take(CONFIRM_VALUE_CHARS - 1).collect();
+    format!("{cut}…")
 }
 
 impl ValuesEdit {
+    /// The lines of the confirm dialog, one per change: the `changed_fields` path, and for a
+    /// ConfigMap the text before and after (`data[K] value changed: old → new`). A Secret shows
+    /// the path only, as does the audit line for either kind.
+    pub fn confirm_lines(&self) -> Vec<String> {
+        self.changes
+            .iter()
+            .zip(self.change_paths())
+            .map(|(paired, path)| {
+                if self.is_secret() {
+                    return path;
+                }
+                let old = self
+                    .old_texts
+                    .get(paired.change.key())
+                    .map(|text| confirm_value(text));
+                let new = paired.change.value().map(|value| confirm_value(&value.0));
+                match (old, new) {
+                    (Some(old), Some(new)) => format!("{path}: {old} → {new}"),
+                    (None, Some(new)) => format!("{path}: {new}"),
+                    (Some(old), None) => format!("{path}: {old}"),
+                    (None, None) => path,
+                }
+            })
+            .collect()
+    }
+
     pub fn target(&self) -> &ObjectRef {
         &self.target
     }

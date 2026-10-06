@@ -26,7 +26,9 @@ use gpui_kit::{
 use super::AppShell;
 use super::certificate_renewal::renewal_notice;
 use super::rollout_watch::{RolloutToast, rollout_toast_id};
-use super::values_edit_flow::{env_consumers_after, notify_with_restart, values_success_notice};
+use super::values_edit_flow::{
+    env_consumers_after, notify_with_restart, values_success_notice, yaml_success_notice,
+};
 use crate::audit_log::{
     AuditEntry, AuditField, AuditObject, AuditOutcome, AuditReceipt, append_audit, audit_entry,
     created_name_field, submit_audit, timestamp_now,
@@ -1223,6 +1225,10 @@ fn finish_commit(
             let count = intent.request.changed_fields().len();
             values_success_notice(target.kind_name(), target.name(), count)
         }
+        Ok(()) if matches!(intent.action, ResourceAction::EditYaml(_)) => {
+            let target = intent.request.target();
+            yaml_success_notice(target.kind_name(), target.name())
+        }
         Ok(()) if matches!(intent.action, ResourceAction::CreateObject(_)) => {
             create_success_notice(&intent.request)
         }
@@ -1259,7 +1265,16 @@ fn finish_commit(
                 if consumers.is_empty() {
                     notify_with(window, cx, notice, result.is_ok());
                 } else {
-                    notify_with_restart(window, cx, notice, shell, &intent.cluster, consumers);
+                    let source = intent.request.target().name();
+                    notify_with_restart(
+                        window,
+                        cx,
+                        notice,
+                        shell,
+                        &intent.cluster,
+                        source,
+                        consumers,
+                    );
                 }
                 if result.is_ok() {
                     watch_hpa_after_scale(shell, intent, window.window_handle(), cx);

@@ -3036,6 +3036,31 @@ impl LiveCluster {
             .filter(|explorer| explorer.kind == kind)
     }
 
+    /// The listed workload `key` names: the explorer or Topology row first, else the condition feed
+    /// of its kind (Deployments and DaemonSets are always watched). `None` for a StatefulSet while
+    /// its screen is not the one shown.
+    pub(crate) fn workload_object(&self, key: &ResourceKey) -> Option<&KindObject> {
+        if let Some(row) = self.row_of(key) {
+            return Some(&row.object);
+        }
+        let ResourceKey::Kind {
+            kind,
+            namespace: Some(namespace),
+            name,
+        } = key
+        else {
+            return None;
+        };
+        let feed = self.issue_feeds.condition(*kind)?.list.ready_items()?;
+        feed.iter().find(|object| match object {
+            KindObject::Deployment(deployment) => {
+                deployment.namespace == *namespace && deployment.name == *name
+            }
+            KindObject::DaemonSet(set) => set.namespace == *namespace && set.name == *name,
+            _ => false,
+        })
+    }
+
     /// The Deployment as this session lists it: the Deployments screen when it is shown, else the
     /// Deployments condition feed. `None` while neither has the Deployment.
     pub(crate) fn deployment_of(&self, namespace: &str, name: &str) -> Option<&DeploymentSummary> {

@@ -29,7 +29,7 @@
 3. **No logging or Debug** (AC 9). No `tracing::` call in `config_values.rs`, `values_edit.rs`, `values_edit_flow.rs`. `NewValue` and `ValueKey` have no `Debug`. `ValuesBase`, `ValuesEdit`, and `KeyChange` have a manual `Debug` (kinds, names, counts). `FieldChange` derives `Debug`, which prints only `field` and `KeyChange`'s manual `Debug`. `WriteOperation`'s `Debug` stays the variant name.
 4. **No crash text** (AC 9). No `unwrap`, `expect`, `panic!`, `assert!` with a value in these modules; error `Display`s are fixed text plus at most a key name.
 5. **Audit: names and markers** (AC 10). Fields are `data[KEY] added|value changed|removed`; `recordable_fields` still drops every value for `Secret` and `ConfigMap`. A typed value equal to the current one is still `value changed` (decision 16). The note is the user's own text.
-6. **Confirm dialog: names and markers** (AC 11). It renders `changed_fields()` only; no old or new value, for either kind. Warnings name keys, never values.
+6. **Confirm dialog: names and markers** (AC 11). It renders `changed_fields()` only; no old or new value for a Secret. A ConfigMap shows its text before and after (`confirm_lines`, UX round 3, see as-built.md); the audit never does. Warnings name keys, never values.
 7. **Notices** (AC 9). Success: count and object name. Failure: `write_error_text` of a redacted error (Secret targets: reason code and field paths only, 0030 decision 29).
 8. **Base64 for `data`** (AC 4). Encoding happens in the cluster crate just before the body is built; the app never sees base64.
 9. **Binary is never text** (AC 13). Binary values are never decoded, shown, or loaded into an input.

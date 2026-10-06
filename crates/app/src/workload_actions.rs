@@ -205,47 +205,122 @@ pub(crate) fn named_restart_intent(
     intent_of(scope, &workload, described)
 }
 
-/// The batch of Restart rollout over workloads of one `kind`, each `(namespace, name)`, which no
-/// loaded list holds: the consumers of an edited ConfigMap or Secret. `Err` is why nothing starts.
-pub(crate) fn named_restart_batch(
+/// A workload that reads the edited ConfigMap or Secret through env: its name, and its row when a
+/// list the session holds has it.
+pub(crate) struct Consumer<'a> {
+    pub(crate) namespace: &'a str,
+    pub(crate) name: &'a str,
+    pub(crate) object: Option<&'a KindObject>,
+}
+
+/// The batch of Restart rollout over the consumers of `source` (the edited ConfigMap or Secret)
+/// that are workloads of one `kind`. A consumer whose row is loaded is checked like any Restart (a
+/// paused rollout is skipped, OnDelete and Helm are warned about); one known only by name is
+/// restarted unchecked and the dialog says so. `Err` is why nothing starts.
+pub(crate) fn consumer_restart_batch(
     scope: &WorkloadScope<'_>,
     kind: ObjectKind,
-    workloads: &[(&str, &str)],
+    consumers: &[Consumer<'_>],
+    source: &str,
     now: jiff::Timestamp,
 ) -> Result<BatchIntent, SharedString> {
-    let items: Vec<BatchItem> = workloads
-        .iter()
-        .filter_map(|(namespace, name)| {
-            let intent = named_restart_intent(scope, kind, namespace, name, now)?;
-            Some(BatchItem {
-                object: format!("{namespace}/{name}").into(),
-                label: intent.label,
-                request: intent.request,
-            })
-        })
-        .collect();
-    if items.is_empty() {
-        return Err("the object name is not valid".into());
-    }
     let action = ResourceAction::RestartRollout(kind);
+    let mut items: Vec<BatchItem> = Vec::new();
+    let mut skipped: Vec<SkippedItem> = Vec::new();
+    let mut checked: Vec<&KindObject> = Vec::new();
+    let mut unchecked = 0_usize;
+    for consumer in consumers {
+        let (namespace, name) = (consumer.namespace, consumer.name);
+        let text: SharedString = format!("{namespace}/{name}").into();
+        let intent = match consumer.object {
+            Some(object) => {
+                if let Some(reason) = row_block(action, object, None) {
+                    skipped.push(SkippedItem {
+                        object: text,
+                        reason,
+                    });
+                    continue;
+                }
+                workload_intent(action, scope, object, now)
+            }
+            None => named_restart_intent(scope, kind, namespace, name, now),
+        };
+        let Some(intent) = intent else {
+            continue;
+        };
+        match consumer.object {
+            Some(object) => checked.push(object),
+            None => unchecked += 1,
+        }
+        items.push(BatchItem {
+            object: text,
+            label: intent.label,
+            request: intent.request,
+        });
+    }
+    if items.is_empty() {
+        let reason = skipped.first().map(|item| item.reason.clone());
+        return Err(reason.unwrap_or_else(|| "the object name is not valid".into()));
+    }
+    let count = items.len();
+    let mut warnings: Vec<SharedString> = Vec::new();
+    if unchecked == count {
+        warnings.push(NAMED_RESTART_WARNING.into());
+    } else if unchecked > 0 {
+        warnings.push(
+            format!(
+                "The state of {unchecked} of them is not loaded: a paused rollout or an {ON_DELETE} strategy is not checked"
+            )
+            .into(),
+        );
+    }
+    warnings.extend(on_delete_warning(checked.iter().copied()));
+    let helm = checked
+        .iter()
+        .filter(|object| is_helm_managed(object))
+        .count();
+    if helm == 1 && count == 1 {
+        warnings.push(HELM_MANAGED_WARNING.into());
+    } else if helm > 0 {
+        warnings.push(
+            format!("{helm} of them are managed by Helm: the next upgrade replaces this change")
+                .into(),
+        );
+    }
     let noun = kind.name().to_ascii_lowercase();
+    let (plural, verb) = if count == 1 {
+        ("", "reads")
+    } else {
+        ("s", "read")
+    };
     Ok(BatchIntent {
         cluster: scope.cluster.clone(),
         cluster_name: scope.cluster_name.to_owned().into(),
         action,
-        label: format!("Restart {} {noun}s", items.len()).into(),
+        label: format!("Restart {count} {noun}{plural} that {verb} {source}").into(),
         verb: "Restart".into(),
         button: "Restart".into(),
         risk: action_risk(action),
-        warnings: vec![NAMED_RESTART_WARNING.into()],
+        warnings,
         plan: BatchPlan {
             cluster: scope.cluster.clone(),
             items,
-            skipped: Vec::new(),
+            skipped,
             extras: BatchExtras::None,
             on_failure: BatchFailure::Continue,
         },
     })
+}
+
+/// Whether Helm renders the workload, by its `managed-by` label.
+fn is_helm_managed(object: &KindObject) -> bool {
+    let labels = match object {
+        KindObject::Deployment(deployment) => &deployment.labels,
+        KindObject::StatefulSet(set) => &set.labels,
+        KindObject::DaemonSet(set) => &set.labels,
+        _ => return false,
+    };
+    terms_are_helm_managed(labels)
 }
 
 /// A restart under `OnDelete` changes the template but no pod: the pods follow when deleted.
@@ -820,19 +895,20 @@ pub(crate) fn bulk_scale_intent(
 
 /// The OnDelete line once, however many rows have that update strategy.
 fn bulk_restart_warnings(rows: &[CheckedRow<'_>]) -> Vec<SharedString> {
-    let on_delete = rows
-        .iter()
-        .filter(|row| !restart_warnings(row.object).is_empty())
+    on_delete_warning(rows.iter().map(|row| row.object))
+        .into_iter()
+        .collect()
+}
+
+/// The OnDelete line for the `objects` that have that update strategy, or `None` when none do.
+fn on_delete_warning<'a>(objects: impl Iterator<Item = &'a KindObject>) -> Option<SharedString> {
+    let on_delete = objects
+        .filter(|object| !restart_warnings(object).is_empty())
         .count();
-    if on_delete == 0 {
-        return Vec::new();
-    }
-    vec![
-        format!(
-            "{on_delete} use update strategy {ON_DELETE}: their pods restart only when deleted"
-        )
-        .into(),
-    ]
+    (on_delete > 0).then(|| {
+        format!("{on_delete} use update strategy {ON_DELETE}: their pods restart only when deleted")
+            .into()
+    })
 }
 
 /// What a batch adds to the words of its action.

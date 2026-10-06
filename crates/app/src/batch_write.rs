@@ -39,7 +39,8 @@ use crate::table_selection::{ClusterObject, ResourceKey};
 use crate::table_view::{FilteredTable as _, TableView};
 use crate::value_popover::ValuePopover;
 use crate::workload_actions::{
-    BulkInputs, WorkloadScope, all_suspended, bulk_intent, bulk_scale_intent, named_restart_batch,
+    BulkInputs, Consumer, WorkloadScope, all_suspended, bulk_intent, bulk_scale_intent,
+    consumer_restart_batch,
 };
 #[cfg(feature = "screenshot")]
 use crate::write_guard::WriteLock;
@@ -765,12 +766,14 @@ impl AppShell {
     /// The Restart consumers button of an Edit values notice: one Restart rollout batch per
     /// workload kind that reads the object through env, since a batch carries one action and the
     /// gate of each kind is its own permission. Each opens its own confirm dialog, the first kind
-    /// on top. The workloads are named from the pods of the Used by section, so no list needs to
-    /// hold them.
+    /// on top. The workloads are named from the pods of the Used by section; the rows the session
+    /// lists (Deployments and DaemonSets always, the shown screen's kind) are read for their
+    /// paused, OnDelete, and Helm state, and the confirm names `source`, the edited object.
     pub(crate) fn restart_consumers(
         &mut self,
         cluster: &ClusterRef,
         consumers: &[(ObjectKind, ResourceKey)],
+        source: &str,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -791,13 +794,15 @@ impl AppShell {
             cluster_name: &name,
         };
         let now = jiff::Timestamp::now();
+        let live = self.live_of(cluster, cx);
         let mut intents = Vec::new();
+        let mut refusals = Vec::new();
         for kind in [
             ObjectKind::Deployment,
             ObjectKind::StatefulSet,
             ObjectKind::DaemonSet,
         ] {
-            let named: Vec<(&str, &str)> = consumers
+            let named: Vec<Consumer<'_>> = consumers
                 .iter()
                 .filter(|(consumer, _)| *consumer == kind)
                 .filter_map(|(_, key)| match key {
@@ -805,17 +810,24 @@ impl AppShell {
                         namespace: Some(namespace),
                         name,
                         ..
-                    } => Some((namespace.as_str(), name.as_str())),
+                    } => Some(Consumer {
+                        namespace,
+                        name,
+                        object: live.and_then(|live| live.workload_object(key)),
+                    }),
                     _ => None,
                 })
                 .collect();
             if named.is_empty() {
                 continue;
             }
-            match named_restart_batch(&scope, kind, &named, now) {
+            match consumer_restart_batch(&scope, kind, &named, source, now) {
                 Ok(intent) => intents.push(intent),
-                Err(reason) => notify(window, cx, unavailable_text(label, &reason)),
+                Err(reason) => refusals.push(reason),
             }
+        }
+        for reason in refusals {
+            notify(window, cx, unavailable_text(label, &reason));
         }
         // The last dialog opened is the one on top, so the first kind opens last.
         for intent in intents.into_iter().rev() {

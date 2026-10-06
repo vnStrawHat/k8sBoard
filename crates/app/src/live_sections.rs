@@ -1308,10 +1308,14 @@ fn restart_all_row<'a>(
     let button = match (gate, reason) {
         (Some(gate), None) => {
             let cluster = gate.subject.cluster.clone();
+            let source = match &gate.subject.key {
+                ResourceKey::Kind { name, .. } => name.clone(),
+                ResourceKey::Pod { name, .. } | ResourceKey::Node { name } => name.clone(),
+            };
             button
                 .tooltip("Restart rollout of every workload that reads this value through env")
                 .on_click(cx.listener(move |shell, _, window, cx| {
-                    shell.restart_consumers(&cluster, &consumers, window, cx);
+                    shell.restart_consumers(&cluster, &consumers, &source, window, cx);
                 }))
         }
         (_, reason) => button

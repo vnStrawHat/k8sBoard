@@ -160,28 +160,136 @@ fn restart_names_the_object_and_changes_one_field() {
     assert!(intent.warnings.is_empty());
 }
 
-#[test]
-fn a_named_restart_batch_lists_the_workloads_and_says_their_state_is_unchecked() {
+fn consumer<'a>(namespace: &'a str, name: &'a str, object: Option<&'a KindObject>) -> Consumer<'a> {
+    Consumer {
+        namespace,
+        name,
+        object,
+    }
+}
+
+fn restart_batch(
+    kind: ObjectKind,
+    consumers: &[Consumer<'_>],
+) -> Result<crate::app_shell::batch_write::BatchIntent, SharedString> {
     let cluster = test_cluster();
     let scope = WorkloadScope {
         cluster: &cluster,
         cluster_name: "stg-b",
     };
-    let batch = named_restart_batch(
-        &scope,
+    consumer_restart_batch(&scope, kind, consumers, "web-config", now())
+}
+
+#[test]
+fn a_restart_of_named_consumers_lists_them_and_says_their_state_is_unchecked() {
+    let batch = restart_batch(
         ObjectKind::StatefulSet,
-        &[("team-a", "db"), ("team-b", "kafka")],
-        now(),
+        &[
+            consumer("team-a", "db", None),
+            consumer("team-b", "kafka", None),
+        ],
     )
     .expect("a batch");
-    assert_eq!(batch.label, "Restart 2 statefulsets");
+    assert_eq!(batch.label, "Restart 2 statefulsets that read web-config");
     assert_eq!(batch.action, restart_of(ObjectKind::StatefulSet));
     let objects: Vec<&str> = batch.plan.items.iter().map(|i| i.object.as_ref()).collect();
     assert_eq!(objects, ["team-a/db", "team-b/kafka"]);
     assert_eq!(batch.warnings.len(), 1);
     assert!(batch.warnings[0].contains("not loaded"));
-    let invalid = named_restart_batch(&scope, ObjectKind::Deployment, &[("team-a", "")], now());
+    let invalid = restart_batch(ObjectKind::Deployment, &[consumer("team-a", "", None)]);
     assert!(invalid.is_err());
+}
+
+#[test]
+fn the_title_of_one_consumer_is_singular() {
+    let object = KindObject::Deployment(deployment("web"));
+    let batch = restart_batch(
+        ObjectKind::Deployment,
+        &[consumer("team-a", "web", Some(&object))],
+    )
+    .expect("a batch");
+    assert_eq!(batch.label, "Restart 1 deployment that reads web-config");
+}
+
+#[test]
+fn a_loaded_consumer_is_checked_so_the_unchecked_line_goes() {
+    let object = KindObject::Deployment(deployment("web"));
+    let batch = restart_batch(
+        ObjectKind::Deployment,
+        &[consumer("team-a", "web", Some(&object))],
+    )
+    .expect("a batch");
+    assert!(batch.warnings.is_empty(), "{:?}", batch.warnings);
+}
+
+#[test]
+fn a_paused_consumer_is_skipped_and_a_batch_of_only_paused_ones_says_why() {
+    let mut paused = deployment("web");
+    paused.is_paused = true;
+    let paused = KindObject::Deployment(paused);
+    let running = KindObject::Deployment(deployment("api"));
+    let batch = restart_batch(
+        ObjectKind::Deployment,
+        &[
+            consumer("team-a", "web", Some(&paused)),
+            consumer("team-a", "api", Some(&running)),
+        ],
+    )
+    .expect("a batch");
+    assert_eq!(batch.plan.items.len(), 1);
+    assert_eq!(batch.plan.skipped.len(), 1);
+    assert_eq!(batch.plan.skipped[0].object, "team-a/web");
+    let only_paused = restart_batch(
+        ObjectKind::Deployment,
+        &[consumer("team-a", "web", Some(&paused))],
+    );
+    assert_eq!(
+        only_paused.err().as_deref(),
+        Some("Resume the rollout first")
+    );
+}
+
+#[test]
+fn a_helm_managed_consumer_gets_the_helm_warning() {
+    let mut helm = deployment("web");
+    helm.labels = vec!["app.kubernetes.io/managed-by=Helm".to_owned()];
+    let helm = KindObject::Deployment(helm);
+    let batch = restart_batch(
+        ObjectKind::Deployment,
+        &[consumer("team-a", "web", Some(&helm))],
+    )
+    .expect("a batch");
+    assert_eq!(batch.warnings, [HELM_MANAGED_WARNING]);
+    // Several: one summary line.
+    let plain = KindObject::Deployment(deployment("api"));
+    let batch = restart_batch(
+        ObjectKind::Deployment,
+        &[
+            consumer("team-a", "web", Some(&helm)),
+            consumer("team-a", "api", Some(&plain)),
+        ],
+    )
+    .expect("a batch");
+    assert_eq!(
+        batch.warnings,
+        ["1 of them are managed by Helm: the next upgrade replaces this change"]
+    );
+}
+
+#[test]
+fn an_on_delete_consumer_and_an_unloaded_one_each_get_their_line() {
+    let on_delete = KindObject::StatefulSet(stateful_set("db", "OnDelete"));
+    let batch = restart_batch(
+        ObjectKind::StatefulSet,
+        &[
+            consumer("team-a", "db", Some(&on_delete)),
+            consumer("team-a", "kafka", None),
+        ],
+    )
+    .expect("a batch");
+    assert_eq!(batch.warnings.len(), 2);
+    assert!(batch.warnings[0].starts_with("The state of 1 of them is not loaded"));
+    assert!(batch.warnings[1].contains("OnDelete"));
 }
 
 #[test]

@@ -9,7 +9,7 @@ use std::cell::Cell;
 use std::rc::Rc;
 use std::time::Duration;
 
-use cluster::WriteError;
+use cluster::{WriteError, WriteOperation};
 use gpui_kit::component::WindowExt as _;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::checkbox::Checkbox;
@@ -1019,16 +1019,21 @@ impl ConfirmDialog {
         let is_ordered = matches!(&self.kind, DialogKind::Batch(batch) if batch.plan.on_failure == BatchFailure::Stop);
         let lines = requests
             .into_iter()
-            .flat_map(|request| request.changed_fields())
-            .map(|field| {
-                let text = match field.value {
-                    Some(value) if field.path == EVICTION_PATH => eviction_line(&value),
-                    Some(value) => format!("{} → {value}", field.path),
-                    None if is_ordered => format!("{} → removed", field.path),
-                    None => field.path.into_owned(),
-                };
-                div().text_sm().font_family(mono.clone()).child(text)
-            });
+            .flat_map(|request| match request.operation() {
+                // The values edit lists the ConfigMap text before and after; the audit line never has it.
+                WriteOperation::SetDataValues(edit) => edit.confirm_lines(),
+                _ => request
+                    .changed_fields()
+                    .into_iter()
+                    .map(|field| match field.value {
+                        Some(value) if field.path == EVICTION_PATH => eviction_line(&value),
+                        Some(value) => format!("{} → {value}", field.path),
+                        None if is_ordered => format!("{} → removed", field.path),
+                        None => field.path.into_owned(),
+                    })
+                    .collect(),
+            })
+            .map(|text| div().text_sm().font_family(mono.clone()).child(text));
         let warnings = warnings.iter().map(|warning| {
             div()
                 .text_sm()
