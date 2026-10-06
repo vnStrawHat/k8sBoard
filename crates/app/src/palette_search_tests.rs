@@ -586,6 +586,8 @@ fn unshipped_row_actions_are_never_enabled() {
                 | RowAction::RestartRollout
                 | RowAction::PauseRollout
                 | RowAction::Scale
+                // Opens the drawer on the Revisions, which loads them.
+                | RowAction::RollBack
         );
         assert_eq!(entry.is_enabled(), is_available, "{action:?}");
     }

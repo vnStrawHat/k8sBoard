@@ -32,7 +32,7 @@ use crate::settings_window::{ImportKubeconfig, MoveClusterDown, MoveClusterUp};
 use crate::status_tone::{StatusLabel, node_status_label, pod_status_label};
 use crate::table_selection::{ClusterObject, ResourceKey};
 use crate::workload_actions::{
-    NOT_LOADED_REASON, RevisionTarget, RollBackChoice, roll_back_choice, row_block, state_label,
+    RevisionTarget, RollBackChoice, roll_back_choice, row_block, state_label,
 };
 use crate::write_guard::ClusterGuard;
 
@@ -348,12 +348,8 @@ fn row_action_entries<'a>(input: &'a PaletteInput<'_>) -> impl Iterator<Item = P
         let state = match key_availability_of(row, subject, pod, session.guard) {
             KeyAvailability::NotOffered => return None,
             KeyAvailability::Run(_) => {
-                let block = match object {
-                    Some(object) => row_block(action, object, session.replica_sets),
-                    // A cursor row the loaded list does not hold has no revisions loaded either.
-                    None if row == RowAction::RollBack => Some(NOT_LOADED_REASON.into()),
-                    None => None,
-                };
+                let block = object
+                    .and_then(|object| row_block(action, object, session.replica_sets));
                 match block {
                     Some(reason) => EntryState::Disabled { reason },
                     None => EntryState::Enabled,

@@ -672,10 +672,8 @@ fn roll_back_row_block_reasons() {
         .map(|reason| reason.to_string())
     };
     assert_eq!(block(deployment("api"), Some(&sets)), None);
-    assert_eq!(
-        block(deployment("api"), None).as_deref(),
-        Some("Open the deployment to load its revisions")
-    );
+    // Revisions that are not loaded yet do not block: the item opens the drawer, which loads them.
+    assert_eq!(block(deployment("api"), None), None);
     assert_eq!(
         block(deployment("api"), Some(&sets[..1])).as_deref(),
         Some("No earlier revision")

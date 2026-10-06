@@ -543,13 +543,19 @@ pub(crate) fn drawer_frame(
                 .min_h_0()
                 .child(body)
                 .into_any_element(),
-            DrawerBody::Sections { sections, scroll } => div()
+            // The sections are direct children of the scrolled box: `scroll_to_top_of_item` counts
+            // them, so one box around them would leave Roll back… and Show remaining resources
+            // with nothing to scroll to. The bottom padding is a spacer for the reason above.
+            DrawerBody::Sections { sections, scroll } => v_flex()
                 .id("drawer-body")
                 .flex_1()
                 .min_h_0()
+                .px_4()
+                .pt_4()
                 .overflow_y_scroll()
                 .track_scroll(&scroll)
-                .child(v_flex().p_4().children(sections))
+                .children(sections)
+                .child(div().h_4().flex_shrink_0())
                 .into_any_element(),
         })
 }

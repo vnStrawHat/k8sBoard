@@ -962,10 +962,17 @@ fn menu_roll_back_scrolls_to_revisions(cx: &mut TestAppContext) {
     // The paint took the request, so the drawer scrolls once.
     assert_eq!(pending, None);
     assert!(!t.has_dialog(cx));
+    // `scroll_to_top_of_item` counts the direct children of the scrolled box: the sections must
+    // be those, or the request has nothing to scroll to (UX round 3, M7).
+    let sections = t
+        .fixture
+        .shell
+        .read_with(cx, |shell, _| shell.drawer.scroll.children_count());
+    assert!(sections > 1, "the drawer sections are nested: {sections}");
 }
 
 #[gpui_kit::test]
-fn roll_back_is_off_until_the_revisions_load(cx: &mut TestAppContext) {
+fn roll_back_opens_the_revisions_before_they_are_loaded(cx: &mut TestAppContext) {
     let t = workload_clusters_answering("rollback-unloaded", roll_back_answers, cx);
     t.on_stg_deployment(cx);
     let snapshot = t
@@ -977,21 +984,20 @@ fn roll_back_is_off_until_the_revisions_load(cx: &mut TestAppContext) {
         .iter()
         .find(|entry| entry.label.as_ref() == "Roll back")
         .expect("the palette lists Roll back");
-    match &entry.state {
-        crate::palette_search::EntryState::Disabled { reason } => {
-            assert_eq!(reason.as_ref(), "Open the deployment to load its revisions");
-        }
-        crate::palette_search::EntryState::Enabled => panic!("expected a disabled entry"),
-    }
-    // The key says why, and opens nothing.
+    assert!(matches!(
+        entry.state,
+        crate::palette_search::EntryState::Enabled
+    ));
+    // The key opens the drawer on its Revisions, which starts loading them; no dialog yet.
     let action = RowAction::RollBack.key_action();
     t.fixture
         .with_window(cx, |window, cx| window.dispatch_action(action, cx));
-    let is_open = t
+    let (is_open, tab) = t
         .fixture
         .shell
-        .read_with(cx, |shell, _| shell.drawer.is_open);
-    assert!(!is_open);
+        .read_with(cx, |shell, _| (shell.drawer.is_open, shell.drawer.tab));
+    assert!(is_open);
+    assert_eq!(tab, crate::drawer::DrawerTab::Overview);
     assert!(!t.has_dialog(cx));
 }
 

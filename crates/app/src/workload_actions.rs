@@ -23,8 +23,6 @@ use crate::write_guard::ActionRisk;
 
 /// Why a paused Deployment cannot restart or roll back: kubectl refuses both.
 pub(crate) const PAUSED_REASON: &str = "Resume the rollout first";
-/// Why Roll back is off for a row whose drawer has not loaded its ReplicaSets.
-pub(crate) const NOT_LOADED_REASON: &str = "Open the deployment to load its revisions";
 /// The update strategy under which a restart changes no pod by itself.
 const ON_DELETE: &str = "OnDelete";
 
@@ -308,9 +306,10 @@ pub(crate) fn row_block(
         }
         (ResourceAction::RollBack, KindObject::Deployment(deployment)) => {
             match roll_back_choice(deployment, replica_sets) {
-                RollBackChoice::To(_) => None,
+                // Revisions that are not loaded yet are no reason to refuse: Roll back… opens the
+                // drawer on its Revisions, which loads them and shows `Loading revisions…`.
+                RollBackChoice::To(_) | RollBackChoice::NotLoaded => None,
                 RollBackChoice::Paused => Some(PAUSED_REASON.into()),
-                RollBackChoice::NotLoaded => Some(NOT_LOADED_REASON.into()),
                 RollBackChoice::NoEarlier => Some("No earlier revision".into()),
             }
         }
