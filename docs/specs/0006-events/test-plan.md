@@ -74,7 +74,7 @@ Step 4 adds no pure logic beyond `warnings_only_selects_warning_type`; it is cov
 
 ## ui-verifier checklist (step 2 for the screen, step 3 for all, step 4 for the button)
 
-- Events table: no Name column; Type, Reason, Object, Message, Count, Last seen; Message flexible; Count and Last seen right-aligned; Warning toned, Normal muted; Object namespace prefix muted; newest first.
+- Events table: no Name column; Type, Reason, Object, Message, Count, Last seen; Message flexible; Count and Last seen right-aligned; Warning toned, Normal muted; Object namespace prefix muted; Warnings first, then newest first; Reason 260 px base with weight 2.
 - Header: count, scope, ` · newest 2,000` only at the cap; step 4: the Warnings only button (outline; selected style when on).
 - Event drawer: badge `Ev`, title `{reason} · {object}`, subtitle `{type} · {namespace} · {source}`; Details section with a link-colored Object; Message in a muted code block that wraps; no Labels section.
 - Menus: Go to object, Copy message, View YAML (disabled), Copy name, Delete event… (disabled), separated in that order.

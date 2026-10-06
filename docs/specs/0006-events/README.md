@@ -4,7 +4,7 @@ Status: amended after advisor review. Crates: `crates/cluster` and `crates/app`.
 
 ## Goal
 
-- **Cluster › Events** becomes a live screen: core/v1 events, newest first, Warning toned, with a server-side **Warnings only** toggle. It reuses the 0005 explorer (`ResourceKind`, `KindRow`, kind table, kind drawer).
+- **Cluster › Events** becomes a live screen: core/v1 events, Warnings first then newest first, Warning toned, with a server-side **Warnings only** toggle. It reuses the 0005 explorer (`ResourceKind`, `KindRow`, kind table, kind drawer).
 - The event drawer shows details and the full message, and **Go to object** reveals the involved object when k8sBoard has a screen for its kind.
 - Pod, Node, and kind drawers show the object's **recent events**, from one debounced, field-selected watch that lives only while that drawer is open.
 - Memory stays bounded: an events store keeps at most `EVENT_LIMIT` (2,000) newest events, and messages are cut at 1 KiB.

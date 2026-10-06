@@ -810,7 +810,7 @@ mod tests {
         assert_eq!(message.width, px(160.));
         assert_eq!(message.min_width, px(160.));
         let reason = layout.columns.get(2).expect("a Reason column");
-        assert_eq!(reason.width, px(200.));
+        assert_eq!(reason.width, px(260.));
     }
 
     #[test]

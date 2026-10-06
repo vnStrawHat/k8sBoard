@@ -12,7 +12,7 @@ use crate::table_selection::ResourceKey;
 /// Sorts a snapshot newest first, then builds its rows. This runs on tokio, so the main
 /// thread only swaps a `Vec`.
 pub(crate) fn event_rows(update: WatchUpdate<EventSummary>) -> WatchUpdate<KindRow> {
-    match newest_first(update) {
+    match warnings_first(update) {
         WatchUpdate::Snapshot(events) => {
             WatchUpdate::Snapshot(events.iter().map(event_row).collect())
         }
@@ -20,24 +20,26 @@ pub(crate) fn event_rows(update: WatchUpdate<EventSummary>) -> WatchUpdate<KindR
     }
 }
 
-/// Sorts a snapshot newest first and passes a failure through.
-pub(crate) fn newest_first(update: WatchUpdate<EventSummary>) -> WatchUpdate<EventSummary> {
+/// Sorts a snapshot with Warnings first, each group newest first, and passes a failure through.
+pub(crate) fn warnings_first(update: WatchUpdate<EventSummary>) -> WatchUpdate<EventSummary> {
     match update {
         WatchUpdate::Snapshot(mut events) => {
-            sort_newest_first(&mut events);
+            sort_warnings_first(&mut events);
             WatchUpdate::Snapshot(events)
         }
         WatchUpdate::Failed(error) => WatchUpdate::Failed(error),
     }
 }
 
-/// Last seen descending with unknown times last, then (namespace, name) so equal times keep
-/// a stable order.
-fn sort_newest_first(events: &mut [EventSummary]) {
+/// Warnings before Normal events, then last seen descending with unknown times last, then
+/// (namespace, name) so equal times keep a stable order. The Normal ones are routine noise that
+/// would otherwise bury the Warnings.
+fn sort_warnings_first(events: &mut [EventSummary]) {
+    let is_normal = |event: &EventSummary| event.event_type != EventType::Warning;
     events.sort_by(|left, right| {
-        right
-            .last_seen
-            .cmp(&left.last_seen)
+        is_normal(left)
+            .cmp(&is_normal(right))
+            .then_with(|| right.last_seen.cmp(&left.last_seen))
             .then_with(|| compare_names(left, right))
     });
 }

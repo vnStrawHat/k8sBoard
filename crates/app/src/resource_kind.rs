@@ -219,7 +219,7 @@ static EVENTS: KindSpec = KindSpec {
     },
     columns: &[
         column("Type", 80., Align::Left),
-        column("Reason", 200., Align::Left).grows(1),
+        column("Reason", 260., Align::Left).grows(2),
         column("Object", 220., Align::Left).grows(2),
         column("Message", 160., Align::Left).grows(3),
         column("Count", 70., Align::Right),

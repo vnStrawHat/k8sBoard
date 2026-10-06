@@ -27,7 +27,7 @@ use crate::cluster_registry::open_cluster;
 use crate::cluster_runtime::{ClusterRuntime, WatchSubscription};
 use crate::crd_rows::crd_row;
 use crate::custom_kind::{CustomKind, CustomKindCache, custom_kinds};
-use crate::event_rows::newest_first;
+use crate::event_rows::warnings_first;
 use crate::issue_board::{ISSUE_TICK, IssueBoard, IssueChange, IssueInputs, RunReason};
 use crate::issue_feeds::{FeedState, IssueFeeds, core_coverage};
 use crate::kind_access::{KindAccess, KindAccessMap, lazy_checks};
@@ -3729,7 +3729,7 @@ impl ObjectEvents {
         connection: &ClusterConnection,
         cx: &mut Context<ClusterSession>,
     ) -> Self {
-        let updates = connection.watch_object_events(&subject).map(newest_first);
+        let updates = connection.watch_object_events(&subject).map(warnings_first);
         let applied = subject.clone();
         let closed = subject.clone();
         let subscription = runtime.subscribe(

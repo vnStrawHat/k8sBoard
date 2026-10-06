@@ -23,7 +23,7 @@
 | 10 | Events is an 11th `ResourceKind` and reuses the kind table, drawer, gating, selection, and screenshot plumbing | the caller asked for reuse; no second table delegate |
 | 11 | `KindSpec.name_column: NameColumn { Flexible, Hidden { flexible } }`. Events hide Name and flex Message | an event name (`pod.17a2b…`) means nothing to users; Message is the long column |
 | 12 | Events keep **pre-built** `KindRow.sections`. This revises the 0005 "Known ceilings" note | the cap bounds rows to 2,000; the full message is one `SharedString` shared by the Message section and `EventDetail` (Arc clone). Upgrade path: a lazy drawer from the summary, if profiling shows the row build costs more than ~5 ms per snapshot |
-| 13 | Events rows are sorted newest first on tokio (`event_rows`), not in the crate | the crate's snapshot order stays (namespace, name) for every kind |
+| 13 | Events rows are sorted on tokio, Warnings first and each group newest first (`event_rows`), not in the crate | the crate's snapshot order stays (namespace, name) for every kind |
 | 14 | `KindRow.event: Option<EventDetail>` carries the title, object key, source, and message | the menu, header, and subtitle need typed data; mirrors `related_pods` |
 | 15 | Columns follow W7 order with kubectl content: Type, Reason, Object, Message, Count, Last seen | W7 is the design source; ending with a right-aligned age column matches every kind |
 | 16 | Object cell shows the involved object's namespace as a muted prefix (`KindCell::Qualified`) | same look as the Name column; a node event lives in `default`, so the event's namespace would mislead |

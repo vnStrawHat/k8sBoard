@@ -61,9 +61,29 @@ fn events_sort_newest_first_with_unknown_last() {
         named("a", "tie-2", Some(at(20))),
         named("a", "tie-1", Some(at(20))),
     ];
-    sort_newest_first(&mut events);
+    sort_warnings_first(&mut events);
     let order: Vec<&str> = events.iter().map(|event| event.name.as_str()).collect();
     assert_eq!(order, ["y", "tie-1", "tie-2", "x", "unknown"]);
+}
+
+#[test]
+fn warnings_sort_before_newer_normal_events() {
+    let normal = |name, seconds| EventSummary {
+        event_type: EventType::Normal,
+        ..named("a", name, Some(at(seconds)))
+    };
+    let mut events = vec![
+        normal("normal-new", 50),
+        named("a", "warning-old", Some(at(10))),
+        normal("normal-old", 20),
+        named("a", "warning-new", Some(at(30))),
+    ];
+    sort_warnings_first(&mut events);
+    let order: Vec<&str> = events.iter().map(|event| event.name.as_str()).collect();
+    assert_eq!(
+        order,
+        ["warning-new", "warning-old", "normal-new", "normal-old"]
+    );
 }
 
 #[test]
