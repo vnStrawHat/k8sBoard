@@ -47,7 +47,7 @@ use crate::port_forward_menu::PortButtons;
 use crate::resource_actions::{ActionAvailability, ResourceAction, RowAction, action_availability};
 use crate::resource_kind::ResourceKind;
 use crate::row_context::RowContext;
-use crate::row_selection::{selection_bar, unticked_notice};
+use crate::row_selection::{selection_bar, selection_bar_clearance, unticked_notice};
 use crate::settings::AppSettings;
 use crate::settings_window::{ClusterAddition, add_cluster, manage_clusters};
 use crate::table_filter::FilterPreset;
@@ -166,7 +166,16 @@ impl AppShell {
             .children(self.render_overview_stats(cx))
             .children(self.render_overview_export_error())
             .children(self.render_interruption_banner(cx))
-            .child(div().flex_1().min_h_0().child(self.render_body(cx)))
+            // The floating selection bar must not cover the last rows: pad the body by its height.
+            .child(
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .pb(selection_bar_clearance(
+                        toolkit.map_or(0, |state| state.checked),
+                    ))
+                    .child(self.render_body(cx)),
+            )
             .children(self.render_selection_bar(toolkit, cx))
             .children(self.render_value_popover(toolkit))
             .children(self.render_drawer(cx))
@@ -337,11 +346,7 @@ impl AppShell {
     /// ticked. It sits left of an open drawer, like the bar.
     fn render_value_popover(&self, state: Option<&ToolkitState>) -> Option<AnyElement> {
         let popover = self.value_popover()?.clone();
-        let bar_height = if state.is_some_and(|state| state.checked > 0) {
-            px(64.)
-        } else {
-            px(0.)
-        };
+        let bar_height = selection_bar_clearance(state.map_or(0, |state| state.checked));
         let right = self.open_drawer_width();
         Some(
             div()

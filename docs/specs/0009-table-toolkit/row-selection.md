@@ -84,3 +84,7 @@ pub(crate) fn bulk_actions(screen: Screen) -> &'static [&'static str];
 ## Unticked by a filter (J8)
 
 When a filter change (text, chip, preset) unticks rows the filter now hides, a pill above the selection bar says "N ticked rows hidden by the filter were unticked" (also when nothing stays ticked, so the bar is gone). It has a ✕, clears itself after 8 s, and goes with a screen change. Rows that left the list (deleted, other scope) are not counted: `TableView::take_unticked_hidden` counts only rows the list still holds. There is no Undo; the pill is a plain notice.
+
+## Bar clearance (J10)
+
+While any row is ticked the table body gets bottom padding of `selection_bar_clearance` (64 px: the bar and its margin), so the last rows scroll into view above the floating bar. The value popover uses the same constant.

@@ -8,8 +8,8 @@ use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::{ActiveTheme as _, Disableable as _, Icon, Sizable as _, h_flex};
 use gpui_kit::{
-    AnyElement, App, Div, IntoElement, ParentElement as _, SharedString, Styled as _, Task,
-    WeakEntity,
+    AnyElement, App, Div, IntoElement, ParentElement as _, Pixels, SharedString, Styled as _, Task,
+    WeakEntity, px,
 };
 
 use crate::app_shell::{AppShell, Screen};
@@ -99,6 +99,13 @@ pub(crate) struct BulkButton {
     pub(crate) state: BulkState,
     /// Drawn as the danger button: Delete (spec 0033).
     pub(crate) is_danger: bool,
+}
+
+/// The space the floating selection bar takes at the bottom of the table (its height and the
+/// margin under it) while `checked` rows are ticked: the table body and the value popover keep
+/// clear of it.
+pub(crate) fn selection_bar_clearance(checked: usize) -> Pixels {
+    if checked > 0 { px(64.) } else { px(0.) }
 }
 
 /// How long the notice of unticked rows stays.

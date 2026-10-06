@@ -94,3 +94,9 @@ fn the_unticked_notice_counts_the_hidden_rows() {
         "1 ticked row hidden by the filter was unticked"
     );
 }
+
+#[test]
+fn the_table_body_clears_the_selection_bar_only_while_rows_are_ticked() {
+    assert_eq!(selection_bar_clearance(0), px(0.));
+    assert!(selection_bar_clearance(1) > px(0.));
+}
