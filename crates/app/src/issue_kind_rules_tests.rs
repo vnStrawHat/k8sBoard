@@ -695,9 +695,26 @@ fn cert_onsets_come_from_the_not_after_date() {
         certificate(NOW - 86_400, NOW + 5 * 86_400),
     )
     .expect("a finding");
-    // It came within reach of the warning when 14 days were left.
+    // It came within reach of the warning when 14 days were left, but this one was issued later.
+    assert_eq!(soon.onset, Some(ago(86_400)));
+    // A long-lived certificate keeps the day it came within reach.
+    let long_lived = finding(
+        ResourceKind::Secrets,
+        certificate(NOW - 300 * 86_400, NOW + 5 * 86_400),
+    )
+    .expect("a finding");
     let warning_days = EXPIRY_WARNING.as_secs();
-    assert_eq!(soon.onset, Some(at(NOW + 5 * 86_400 - warning_days)));
+    assert_eq!(long_lived.onset, Some(at(NOW + 5 * 86_400 - warning_days)));
+}
+
+#[test]
+fn cert_onset_is_never_before_the_secret_existed() {
+    let KindObject::Secret(mut secret) = certificate(NOW - 300 * 86_400, NOW - 2 * 86_400) else {
+        unreachable!("certificate builds a secret");
+    };
+    secret.created_at = Some(ago(3_600));
+    let found = finding(ResourceKind::Secrets, KindObject::Secret(secret)).expect("a finding");
+    assert_eq!(found.onset, Some(ago(3_600)));
 }
 
 fn owned_job(name: &str, status: JobStatus, created_ago: i64, owner: Option<&str>) -> KindObject {

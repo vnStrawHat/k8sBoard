@@ -358,6 +358,11 @@ fn certificate_finding(object: &KindObject, now: Timestamp) -> Option<Finding> {
         ),
         ExpiryState::Valid | ExpiryState::NotYetValid => return None,
     };
+    // A certificate cannot be a problem before it is valid or before the secret that holds it
+    // exists, so a short-lived or freshly uploaded one does not borrow an older onset.
+    let onset = onset
+        .max(leaf.not_before)
+        .max(secret.created_at.unwrap_or(onset));
     Some(Finding {
         rule,
         severity,

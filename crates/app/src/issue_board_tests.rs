@@ -87,6 +87,8 @@ fn not_ready_since(seconds_ago: i64) -> PodCondition {
 fn crashing_pod(name: &str, ready_ago: i64, restarts: u32) -> PodSummary {
     let mut pod = pod_of("shop", name, Some(("ReplicaSet", "api-7d9f8c")));
     pod.conditions = vec![not_ready_since(ready_ago)];
+    // With no BackOff event retained, a crash loop starts when the pod was created.
+    pod.created_at = Some(ago(ready_ago));
     pod.containers = vec![ContainerSummary {
         terminal: cluster::ContainerTerminal::None,
         restart_count: restarts,

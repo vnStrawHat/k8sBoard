@@ -115,6 +115,26 @@ fn ready_since(pod: &PodSummary) -> Option<Timestamp> {
         .and_then(|condition| condition.changed_at)
 }
 
+/// When the pod's oldest retained Warning event of `reason` was first seen, else the pod's
+/// creation. A crash loop or a failed pull has no condition of its own: the Ready condition
+/// flips on every restart, so the first event is the best start the pod reports.
+fn first_event_or_creation(
+    pod: &PodSummary,
+    inputs: &IssueInputs,
+    reason: &str,
+) -> Option<Timestamp> {
+    let events = inputs
+        .events
+        .and_then(|events| events.of(&IssueObject::pod(&pod.namespace, &pod.name)));
+    events
+        .into_iter()
+        .flatten()
+        .filter(|event| event.reason == reason)
+        .filter_map(|event| event.first_seen)
+        .min()
+        .or(pod.created_at)
+}
+
 fn is_job_pod(pod: &PodSummary) -> bool {
     pod.controller
         .as_ref()
@@ -137,13 +157,16 @@ fn diagnosed_finding(
         container: diagnosis.container.clone(),
     };
     match &diagnosis.cause {
-        DiagnosisCause::ImagePull(reason) => Some(finding(
-            IssueRule::PodImage,
-            IssueSeverity::Critical,
-            reason.to_string(),
-        )),
+        DiagnosisCause::ImagePull(reason) => Some(Finding {
+            onset: first_event_or_creation(pod, inputs, "Failed"),
+            ..finding(
+                IssueRule::PodImage,
+                IssueSeverity::Critical,
+                reason.to_string(),
+            )
+        }),
         DiagnosisCause::CrashLoop => Some(Finding {
-            onset: ready_since,
+            onset: first_event_or_creation(pod, inputs, "BackOff"),
             action: view_logs,
             ..finding(
                 IssueRule::PodCrash,

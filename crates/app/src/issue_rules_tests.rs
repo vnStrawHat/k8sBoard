@@ -309,10 +309,37 @@ fn crash_loop_is_critical_with_view_logs() {
 }
 
 #[test]
-fn crash_and_exit_onset_is_ready_transition() {
+fn crash_and_image_pull_start_at_the_first_event_or_the_pod() {
+    let finding_with = |pod: &PodSummary, events: Vec<EventSummary>| {
+        let feed = feed(events);
+        pod_finding(
+            pod,
+            &IssueInputs {
+                events: Some(&feed),
+                ..inputs()
+            },
+        )
+        .expect("a finding")
+    };
+    // The Ready condition flips on every restart; it must not move the start.
     let mut crashing = running_pod(vec![crash_looping()]);
-    crashing.conditions = vec![not_ready_since(900)];
-    assert_eq!(finding_of(&crashing).expect("crash").onset, Some(ago(900)));
+    crashing.conditions = vec![not_ready_since(90)];
+    let back_off = |first_ago| warning("Pod", "api-0", "BackOff", "x", 9, first_ago, 5);
+    let found = finding_with(&crashing, vec![back_off(800), back_off(1_200)]);
+    assert_eq!(found.onset, Some(ago(1_200)));
+    // No retained event: the pod's creation.
+    assert_eq!(finding_with(&crashing, Vec::new()).onset, Some(ago(3_600)));
+    let pulling = running_pod(vec![container(
+        "api",
+        waiting(StatusReason::ImagePullBackOff),
+    )]);
+    let failed = warning("Pod", "api-0", "Failed", "x", 3, 700, 5);
+    assert_eq!(finding_with(&pulling, vec![failed]).onset, Some(ago(700)));
+    assert_eq!(finding_with(&pulling, Vec::new()).onset, Some(ago(3_600)));
+}
+
+#[test]
+fn exit_onset_is_ready_transition() {
     let exited = container(
         "api",
         ContainerState::Terminated(termination(Some(StatusReason::Error), 2, 60)),
