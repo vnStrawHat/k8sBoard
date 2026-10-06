@@ -331,7 +331,7 @@ pub(crate) fn filtered_empty_state(
             .justify_center()
             .items_center()
             .text_color(muted)
-            .child(empty)
+            .child(div().text_center().child(empty))
             .into_any_element();
     }
     let shell = shell.clone();

@@ -92,3 +92,7 @@ Sections:
 
 - The Budget row label is "Unhealthy eviction" (the longer label truncated in the drawer).
 - The sidebar group that holds the active screen starts open (`is_section_open`); the kit keeps the toggle state after the first render, so this applies at launch.
+
+## Empty NetworkPolicies list
+
+The empty state of the NetworkPolicies table is two lines: `No networkpolicies in {scope}` and `No policy means all traffic is allowed in this namespace.` (`in the whole cluster` under the all-namespaces scope), since an empty list is not a gap but the permissive default (`empty_text` in `kind_table.rs`).
