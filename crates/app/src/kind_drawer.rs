@@ -17,6 +17,7 @@ use gpui_kit::{
 use crate::access_bindings::{BindingIndex, ready_binding_lists};
 use crate::age::format_age;
 use crate::app_shell::AppShell;
+use crate::batch_rows::cron_state_at;
 use crate::certificate_expiry::expiry_detail_label;
 use crate::clipboard_copy::copyable_mono;
 use crate::cluster_registry::ClusterRef;
@@ -827,6 +828,9 @@ fn field_value(value: &KindCell, id: usize, now: jiff::Timestamp, cx: &App) -> A
                 None => quantity,
             }
             .into_any_element()
+        }
+        KindCell::CronStatus(cron_job) => {
+            toned_text(cron_state_at(cron_job, now).label(), cx).into_any_element()
         }
         KindCell::Expiry { not_after } => toned_text(expiry_detail_label(*not_after, now), cx)
             .truncate()

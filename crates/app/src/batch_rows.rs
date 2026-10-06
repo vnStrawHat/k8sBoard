@@ -81,16 +81,9 @@ fn seconds_text(seconds: Option<impl std::fmt::Display>) -> Option<String> {
 }
 
 pub(crate) fn cron_job_row(cron_job: &CronJobSummary) -> KindRow {
-    let (status_text, status_tone) = if cron_job.is_suspended {
-        ("Suspended", StatusTone::Done)
-    } else {
-        match last_run(cron_job) {
-            LastRun::Running => ("Running", StatusTone::Info),
-            LastRun::Failed => ("Last run failed", StatusTone::Warn),
-            LastRun::Succeeded => ("Last run succeeded", StatusTone::Ok),
-            LastRun::NeverRun => ("Not run yet", StatusTone::Info),
-        }
-    };
+    // The subtitle is built with the row, so it never claims a time-dependent state: Missed is
+    // read at paint time by the Status cell and the diagnosis box.
+    let status = cron_state(cron_job).label();
     let last_schedule = KindCell::Age {
         at: cron_job.last_schedule_at,
         tone: last_run_tone(cron_job),
@@ -120,11 +113,9 @@ pub(crate) fn cron_job_row(cron_job: &CronJobSummary) -> KindRow {
         namespace: Some(cron_job.namespace.clone()),
         name: cron_job.name.clone(),
         created_at: cron_job.created_at,
-        status: StatusLabel {
-            text: status_text.into(),
-            tone: status_tone,
-        },
+        status,
         cells: vec![
+            KindCell::CronStatus(Box::new(cron_job.clone())),
             KindCell::Mono(cron_job.schedule.clone().into()),
             suspend.clone(),
             KindCell::count(cron_job.active_jobs.len()),
@@ -178,37 +169,103 @@ pub(crate) fn cron_job_row(cron_job: &CronJobSummary) -> KindRow {
     }
 }
 
-/// What the last schedule of a CronJob came to.
+/// What a CronJob is doing, most important first.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum LastRun {
-    NeverRun,
+pub(crate) enum CronState {
+    Suspended,
     Running,
-    Succeeded,
-    Failed,
+    /// A scheduled run did not start before its starting deadline ran out. `expected_at` is the
+    /// first run that was skipped.
+    Missed {
+        expected_at: jiff::Timestamp,
+    },
+    NeverRun,
+    LastRunFailed,
+    LastRunSucceeded,
 }
 
-/// A Job that succeeds sets `lastSuccessfulTime` after its schedule time, so a schedule newer
-/// than the last success, with no active job, means that run did not succeed.
-fn last_run(cron_job: &CronJobSummary) -> LastRun {
+impl CronState {
+    pub(crate) fn label(self) -> StatusLabel {
+        let (text, tone) = match self {
+            Self::Suspended => ("Suspended", StatusTone::Done),
+            Self::Running => ("Running", StatusTone::Info),
+            Self::Missed { .. } => ("Missed schedule", StatusTone::Warn),
+            Self::NeverRun => ("Not run yet", StatusTone::Info),
+            Self::LastRunFailed => ("Last run failed", StatusTone::Warn),
+            Self::LastRunSucceeded => ("Last run succeeded", StatusTone::Ok),
+        };
+        StatusLabel {
+            text: text.into(),
+            tone,
+        }
+    }
+}
+
+/// What the CronJob's own fields say, without a clock.
+pub(crate) fn cron_state(cron_job: &CronJobSummary) -> CronState {
+    if cron_job.is_suspended {
+        return CronState::Suspended;
+    }
+    last_run(cron_job)
+}
+
+fn last_run(cron_job: &CronJobSummary) -> CronState {
+    // A Job that succeeds sets `lastSuccessfulTime` after its schedule time, so a schedule newer
+    // than the last success, with no active job, means that run did not succeed.
     let Some(scheduled_at) = cron_job.last_schedule_at else {
-        return LastRun::NeverRun;
+        return CronState::NeverRun;
     };
     if !cron_job.active_jobs.is_empty() {
-        return LastRun::Running;
+        return CronState::Running;
     }
     match cron_job.last_success_at {
-        Some(succeeded_at) if succeeded_at >= scheduled_at => LastRun::Succeeded,
-        Some(_) | None => LastRun::Failed,
+        Some(succeeded_at) if succeeded_at >= scheduled_at => CronState::LastRunSucceeded,
+        Some(_) | None => CronState::LastRunFailed,
     }
+}
+
+/// The controller starts a Job at most `startingDeadlineSeconds` late, and 100 s when unset.
+const DEFAULT_STARTING_DEADLINE_SECONDS: i64 = 100;
+
+/// `cron_state` plus the one rule that needs the clock: the first run after the last schedule
+/// (after creation when it never ran) is overdue past its starting deadline. An `@every` schedule
+/// counts from the last run, so it has no calendar to miss, and a running Job may hold a new run
+/// back under the concurrency policy.
+pub(crate) fn cron_state_at(cron_job: &CronJobSummary, now: jiff::Timestamp) -> CronState {
+    let state = cron_state(cron_job);
+    if matches!(state, CronState::Suspended | CronState::Running) {
+        return state;
+    }
+    let Ok(timetable) = &cron_job.timetable else {
+        return state;
+    };
+    if timetable.is_every() {
+        return state;
+    }
+    let Some(since) = cron_job.last_schedule_at.or(cron_job.created_at) else {
+        return state;
+    };
+    let Some(expected) = timetable.next_after(since) else {
+        return state;
+    };
+    let expected_at = expected.timestamp();
+    let deadline = cron_job
+        .starting_deadline_seconds
+        .unwrap_or(DEFAULT_STARTING_DEADLINE_SECONDS)
+        .max(0);
+    if now.as_second() <= expected_at.as_second().saturating_add(deadline) {
+        return state;
+    }
+    CronState::Missed { expected_at }
 }
 
 fn last_run_tone(cron_job: &CronJobSummary) -> Option<StatusTone> {
     match last_run(cron_job) {
-        LastRun::NeverRun => None,
-        LastRun::Running => Some(StatusTone::Info),
-        LastRun::Succeeded => Some(StatusTone::Ok),
+        CronState::Suspended | CronState::NeverRun | CronState::Missed { .. } => None,
+        CronState::Running => Some(StatusTone::Info),
+        CronState::LastRunSucceeded => Some(StatusTone::Ok),
         // Warn, like the "Last run failed" subtitle: the CronJob itself is fine, its last run was not.
-        LastRun::Failed => Some(StatusTone::Warn),
+        CronState::LastRunFailed => Some(StatusTone::Warn),
     }
 }
 

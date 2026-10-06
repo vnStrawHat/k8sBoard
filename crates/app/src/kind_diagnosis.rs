@@ -6,11 +6,11 @@
 
 use cluster::{
     BindingSummary, BlockCause, BroadGroup, CertificateIssue, ConditionStatus, ContainerKind,
-    ContainerState, CustomObjectSummary, DaemonSetSummary, DeploymentSummary, DisruptionState,
-    HelmReleaseSummary, HelmStatus, HorizontalPodAutoscalerSummary, IngressSummary, JobStatus,
-    JobSummary, NamespacePhase, NamespaceSummary, NodeReadiness, NodeSummary,
-    PersistentVolumeClaimSummary, PersistentVolumeSummary, PodDisruptionBudgetSummary, PodStatus,
-    PodSummary, ResourceQuotaSummary, RoleSummary, SecretDetails, SecretSummary,
+    ContainerState, CronJobSummary, CustomObjectSummary, DaemonSetSummary, DeploymentSummary,
+    DisruptionState, HelmReleaseSummary, HelmStatus, HorizontalPodAutoscalerSummary,
+    IngressSummary, JobStatus, JobSummary, NamespacePhase, NamespaceSummary, NodeReadiness,
+    NodeSummary, PersistentVolumeClaimSummary, PersistentVolumeSummary, PodDisruptionBudgetSummary,
+    PodStatus, PodSummary, ResourceQuotaSummary, RoleSummary, SecretDetails, SecretSummary,
     ServiceAccountSummary, ServiceSummary, StatusReason, Subject, SubjectKind, Termination,
     WorkloadCondition,
 };
@@ -20,6 +20,7 @@ use crate::access_bindings::{
     BindingIndex, BroadAdmin, broad_admin, is_cluster_admin, service_account_text,
 };
 use crate::age::format_age;
+use crate::batch_rows::{CronState, cron_state_at};
 use crate::certificate_expiry::{ExpiryState, date_text, expiry_state};
 use crate::custom_rows::is_failing;
 use crate::kind_join::{ServiceHealth, tls_secret_names};
@@ -81,6 +82,7 @@ pub(crate) fn kind_diagnosis(
         KindObject::Deployment(deployment) => deployment_diagnosis(deployment, inputs),
         KindObject::DaemonSet(set) => daemon_set_diagnosis(set, inputs),
         KindObject::Job(job) => job_diagnosis(job, inputs),
+        KindObject::CronJob(cron_job) => cron_job_diagnosis(cron_job, inputs.now),
         KindObject::Service(service) => service_diagnosis(service, inputs),
         KindObject::PodDisruptionBudget(budget) => pod_disruption_budget_diagnosis(budget),
         KindObject::HorizontalPodAutoscaler(hpa) => horizontal_pod_autoscaler_diagnosis(hpa),
@@ -96,7 +98,6 @@ pub(crate) fn kind_diagnosis(
         KindObject::Custom(summary) => custom_object_diagnosis(summary),
         KindObject::Namespace(namespace) => namespace_diagnosis(namespace, inputs.now),
         KindObject::Plain
-        | KindObject::CronJob(_)
         | KindObject::StatefulSet(_)
         | KindObject::ReplicaSet(_)
         | KindObject::ConfigMap(_)
@@ -814,6 +815,57 @@ fn job_diagnosis(job: &JobSummary, inputs: &DiagnosisInputs) -> Option<KindDiagn
         }
         JobStatus::Running | JobStatus::Complete | JobStatus::Suspended => None,
     }
+}
+
+/// A CronJob that is suspended, missed a run, or whose last run failed, with the next step. It
+/// reads only the CronJob and the clock, so it shows while the lists load; the failed run is read
+/// from Recent jobs below, because the CronJob names no finished Job.
+fn cron_job_diagnosis(cron_job: &CronJobSummary, now: Timestamp) -> Option<KindDiagnosis> {
+    let (tone, title, text) = match cron_state_at(cron_job, now) {
+        CronState::Suspended => (
+            StatusTone::Warn,
+            "SUSPENDED",
+            concat!(
+                "Suspend is on, so no run is scheduled. Resume the CronJob to run on schedule ",
+                "again, or Trigger now for a single run."
+            )
+            .to_owned(),
+        ),
+        CronState::Missed { expected_at } => {
+            let deadline = cron_job.starting_deadline_seconds.unwrap_or(100);
+            (
+                StatusTone::Warn,
+                "SCHEDULE MISSED",
+                format!(
+                    concat!(
+                        "No job started for the run due {} ago, and its starting deadline of ",
+                        "{}s has passed. The CronJob controller may be down or too busy, or the ",
+                        "deadline too short. Trigger now to run it once."
+                    ),
+                    format_age(Some(expected_at), now),
+                    deadline
+                ),
+            )
+        }
+        CronState::LastRunFailed => (
+            StatusTone::Warn,
+            "LAST RUN FAILED",
+            format!(
+                concat!(
+                    "The run started {} ago did not succeed. Open its job under Recent jobs for ",
+                    "the reason, or Trigger now to retry."
+                ),
+                format_age(cron_job.last_schedule_at, now)
+            ),
+        ),
+        CronState::Running | CronState::NeverRun | CronState::LastRunSucceeded => return None,
+    };
+    Some(KindDiagnosis {
+        tone,
+        title: title.to_owned(),
+        text,
+        link: None,
+    })
 }
 
 fn failed_job_diagnosis(job: &JobSummary, inputs: &DiagnosisInputs) -> Option<KindDiagnosis> {

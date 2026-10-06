@@ -52,7 +52,7 @@ pub(crate) fn percent(ratio: f64) -> u8;
 
 | Kind | Columns after Name | Step |
 |---|---|---|
-| CronJobs | Schedule 140 · Suspend 80 · Active 70 r · Last schedule 120 r · **Next run 100 r** · Age | 2 |
+| CronJobs | **Status 150** · Schedule 140 · Suspend 80 · Active 70 r · Last schedule 120 r · **Next run 100 r** · Age | 2 |
 | Services | Type 130 · Cluster IP 140 · External IP 200 · Ports 180 · **Endpoints 100 r** · Age | 4a |
 | ConfigMaps | Data 70 r · **Used by 220** · Age | 4b |
 | Namespaces | Status 140 · **Pods 70 r · CPU req 110 r · Memory req 120 r** · Age | 4b |

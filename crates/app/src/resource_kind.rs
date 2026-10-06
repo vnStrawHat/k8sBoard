@@ -388,6 +388,7 @@ static CRON_JOBS: KindSpec = KindSpec {
         access_check: AccessCheck::ListCronJobs,
     },
     columns: &[
+        column("Status", 150., Align::Left),
         column("Schedule", 140., Align::Left),
         column("Suspend", 80., Align::Left),
         column("Active", 70., Align::Right),

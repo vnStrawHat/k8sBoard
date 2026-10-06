@@ -16,6 +16,7 @@ use gpui_kit::{
 
 use crate::age::format_age;
 use crate::app_shell::{AppShell, Screen};
+use crate::batch_rows::cron_state_at;
 use crate::cell_truncation::{Sibling, mono_capacity, qualified_text};
 use crate::certificate_expiry::expiry_label;
 use crate::cluster_registry::ClusterRef;
@@ -329,6 +330,13 @@ impl TableRow for KindTableRow<'_> {
                 tone: label.tone,
                 text: label.text.clone(),
             },
+            Some(KindCell::CronStatus(cron_job)) => {
+                let label = cron_state_at(cron_job, jiff::Timestamp::now()).label();
+                CellValue::Status {
+                    tone: label.tone,
+                    text: label.text,
+                }
+            }
             Some(KindCell::Age { at, .. }) => CellValue::Age(*at),
             Some(KindCell::Duration {
                 started_at,
@@ -795,6 +803,10 @@ fn cell_element<'a>(
                 Some(text) => base().child(text),
                 None => base().text_color(cx.theme().muted_foreground).child("—"),
             }
+        }
+        KindCell::CronStatus(cron_job) => {
+            let label = cron_state_at(cron_job, jiff::Timestamp::now()).label();
+            base().child(toned_text(label, cx))
         }
         KindCell::Expiry { not_after } => {
             // Read per cell: days left change while the screen is open.

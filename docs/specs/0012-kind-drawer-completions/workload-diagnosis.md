@@ -52,6 +52,16 @@ pub(crate) fn kind_diagnosis(object: &KindObject, inputs: &DiagnosisInputs) -> O
 | J3* | Failed or Failing with another reason | Bad · JOB FAILED | `{reason}: {message}` |
 | J4* | Running and failed > 0 | Warn · `{failed} FAILED ATTEMPTS` | `Retrying; the job fails after {backoff_limit + 1} failed attempts.` (`backoff_limit` default 6) |
 
+## CronJobs (UX walk H6)
+
+The Status column is `KindCell::CronStatus`, read at paint time: Suspended, Running, Missed schedule, Not run yet, Last run failed, Last run succeeded. **Missed**: the first run after `last_schedule_at` (after `created_at` when never run) is overdue by more than `startingDeadlineSeconds` (100 s when unset); never for suspended, running, `@every`, or invalid schedules. The subtitle stays clock-free (no Missed).
+
+| # | When | Tone · title | Text |
+|---|---|---|---|
+| C1 | Suspended | Warn · SUSPENDED | Resume, or Trigger now for one run |
+| C2 | Missed | Warn · SCHEDULE MISSED | The overdue run, the deadline, Trigger now |
+| C3 | Last run failed | Warn · LAST RUN FAILED | Open the job under Recent jobs, or Trigger now |
+
 ## Services (step 4a)
 
 | # | When | Tone · title | Text |
@@ -63,4 +73,4 @@ ExternalName and selector-less services never get V1.
 
 ## Not covered (stay without a box)
 
-StatefulSets, ReplicaSets, CronJobs, Ingresses (CERTIFICATE is 0016), ConfigMaps, Namespaces (STUCK is 0018). Pod events are not read here, so probe-failure causes appear only in the pod drawer.
+StatefulSets, ReplicaSets, Ingresses (CERTIFICATE is 0016), ConfigMaps, Namespaces (STUCK is 0018). Pod events are not read here, so probe-failure causes appear only in the pod drawer.

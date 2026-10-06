@@ -2162,3 +2162,70 @@ fn no_box_while_recently_terminating() {
     let untimed = stuck_namespace(cluster::NamespacePhase::Terminating, None, &[]);
     assert_eq!(namespace_diagnosis(&untimed, at(100_000)), None);
 }
+
+// ---- CronJobs ----
+
+fn cron_job_ran_at_ten() -> cluster::CronJobSummary {
+    let ran_at: Timestamp = "2024-10-04T10:00:00Z".parse().expect("timestamp");
+    cluster::CronJobSummary {
+        namespace: "team-a".to_owned(),
+        name: "reconcile".to_owned(),
+        created_at: None,
+        labels: Vec::new(),
+        schedule: "*/5 * * * *".to_owned(),
+        time_zone: None,
+        timetable: cluster::CronSchedule::parse("*/5 * * * *", None),
+        is_suspended: false,
+        concurrency_policy: "Forbid".to_owned(),
+        starting_deadline_seconds: Some(60),
+        successful_history_limit: None,
+        failed_history_limit: None,
+        active_jobs: Vec::new(),
+        last_schedule_at: Some(ran_at),
+        last_success_at: Some(ran_at),
+        containers: Vec::new(),
+    }
+}
+
+#[test]
+fn cron_job_healthy_has_no_box() {
+    let now = "2024-10-04T10:02:00Z".parse().expect("timestamp");
+    assert!(cron_job_diagnosis(&cron_job_ran_at_ten(), now).is_none());
+}
+
+#[test]
+fn cron_job_suspended_names_resume_and_trigger_now() {
+    let mut cron = cron_job_ran_at_ten();
+    cron.is_suspended = true;
+    let now = "2024-10-04T12:00:00Z".parse().expect("timestamp");
+    let diagnosis = cron_job_diagnosis(&cron, now).expect("a box");
+    assert_eq!(diagnosis.tone, StatusTone::Warn);
+    assert_eq!(diagnosis.title, "SUSPENDED");
+    assert!(diagnosis.text.contains("Resume") && diagnosis.text.contains("Trigger now"));
+}
+
+#[test]
+fn cron_job_missed_run_names_the_overdue_run() {
+    let now = "2024-10-04T10:20:00Z".parse().expect("timestamp");
+    let diagnosis = cron_job_diagnosis(&cron_job_ran_at_ten(), now).expect("a box");
+    assert_eq!(diagnosis.title, "SCHEDULE MISSED");
+    assert_eq!(
+        diagnosis.text,
+        concat!(
+            "No job started for the run due 15m ago, and its starting deadline of 60s has ",
+            "passed. The CronJob controller may be down or too busy, or the deadline too ",
+            "short. Trigger now to run it once."
+        )
+    );
+}
+
+#[test]
+fn cron_job_failed_last_run_points_to_recent_jobs() {
+    let mut cron = cron_job_ran_at_ten();
+    cron.last_success_at = None;
+    let now = "2024-10-04T10:05:30Z".parse().expect("timestamp");
+    let diagnosis = cron_job_diagnosis(&cron, now).expect("a box");
+    assert_eq!(diagnosis.title, "LAST RUN FAILED");
+    assert!(diagnosis.text.contains("Recent jobs"));
+    assert!(diagnosis.text.contains("Trigger now"));
+}

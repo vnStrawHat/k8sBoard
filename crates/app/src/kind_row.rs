@@ -156,6 +156,8 @@ pub(crate) enum KindCell {
     },
     /// The next run, painted relative to now so it never goes stale.
     NextRun(CronSchedule),
+    /// A CronJob's status, read at paint time because a missed schedule is a state of the clock.
+    CronStatus(Box<CronJobSummary>),
     /// Mono text that shrinks with an ellipsis, then a pinned ` +{more}` that never does, such as
     /// the first owner and the count of the others.
     MonoWithMore {

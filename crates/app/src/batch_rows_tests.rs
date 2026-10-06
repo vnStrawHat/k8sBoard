@@ -120,22 +120,22 @@ fn job_failed_count_is_bad_only_when_positive() {
 #[test]
 fn cron_last_run_outcomes() {
     let mut cron = cron_job();
-    assert_eq!(last_run(&cron), LastRun::NeverRun);
+    assert_eq!(last_run(&cron), CronState::NeverRun);
     assert_eq!(last_run_tone(&cron), None);
 
     cron.last_schedule_at = Some(at(100));
-    assert_eq!(last_run(&cron), LastRun::Failed);
+    assert_eq!(last_run(&cron), CronState::LastRunFailed);
     assert_eq!(last_run_tone(&cron), Some(StatusTone::Warn));
 
     cron.last_success_at = Some(at(100));
-    assert_eq!(last_run(&cron), LastRun::Succeeded);
+    assert_eq!(last_run(&cron), CronState::LastRunSucceeded);
     assert_eq!(last_run_tone(&cron), Some(StatusTone::Ok));
 
     cron.last_success_at = Some(at(50));
-    assert_eq!(last_run(&cron), LastRun::Failed);
+    assert_eq!(last_run(&cron), CronState::LastRunFailed);
 
     cron.active_jobs = vec!["reconcile-1".to_owned()];
-    assert_eq!(last_run(&cron), LastRun::Running);
+    assert_eq!(last_run(&cron), CronState::Running);
     assert_eq!(last_run_tone(&cron), Some(StatusTone::Info));
 }
 
@@ -145,7 +145,7 @@ fn cron_last_schedule_cell_is_toned_by_outcome() {
     cron.last_schedule_at = Some(at(100));
     cron.last_success_at = Some(at(120));
     assert_eq!(
-        cron_job_row(&cron).cells.get(3),
+        cron_job_row(&cron).cells.get(4),
         Some(&KindCell::Age {
             at: Some(at(100)),
             tone: Some(StatusTone::Ok),
@@ -218,7 +218,7 @@ fn cron_failed_last_run_has_the_same_tone_in_cell_and_subtitle() {
     cron.last_schedule_at = Some(at(100));
     let row = cron_job_row(&cron);
     assert_eq!(
-        row.cells.get(3),
+        row.cells.get(4),
         Some(&KindCell::Age {
             at: Some(at(100)),
             tone: Some(StatusTone::Warn),
@@ -241,12 +241,12 @@ fn cron_suspended_status_wins_over_last_run() {
 fn cron_suspend_cell_reads_yes_toned_or_plain_no() {
     let mut cron = cron_job();
     assert_eq!(
-        cron_job_row(&cron).cells.get(1),
+        cron_job_row(&cron).cells.get(2),
         Some(&KindCell::Text("No".into()))
     );
     cron.is_suspended = true;
     assert_eq!(
-        cron_job_row(&cron).cells.get(1),
+        cron_job_row(&cron).cells.get(2),
         Some(&KindCell::Toned(StatusLabel {
             text: "Yes".into(),
             tone: StatusTone::Done,
@@ -325,7 +325,7 @@ fn cron_job_row_has_next_run_cell() {
         .iter()
         .position(|column| column.name == "Next run")
         .expect("a Next run column");
-    assert_eq!(next_run, 4);
+    assert_eq!(next_run, 5);
     assert!(matches!(
         row.cells.get(next_run),
         Some(KindCell::NextRun(_))
@@ -339,12 +339,12 @@ fn suspended_cron_job_has_no_next_run() {
     let mut suspended = cron_job();
     suspended.is_suspended = true;
     assert_eq!(
-        cron_job_row(&suspended).cells.get(4),
+        cron_job_row(&suspended).cells.get(5),
         Some(&KindCell::Absent)
     );
     let mut invalid = cron_job();
     invalid.timetable = cluster::CronSchedule::parse("61 * * * *", None);
-    assert_eq!(cron_job_row(&invalid).cells.get(4), Some(&KindCell::Absent));
+    assert_eq!(cron_job_row(&invalid).cells.get(5), Some(&KindCell::Absent));
 }
 
 #[test]
@@ -363,5 +363,113 @@ fn cron_job_sections_start_with_next_runs() {
         row.section("Recent jobs")
             .map(|section| section.rows.clone()),
         Some(vec![DetailRow::Live(LiveContent::RecentJobs)])
+    );
+}
+
+fn time(text: &str) -> jiff::Timestamp {
+    text.parse().expect("valid timestamp")
+}
+
+/// Every five minutes, last started at 10:00, so the 10:05 run is the next expected one.
+fn cron_ran_at_ten() -> CronJobSummary {
+    let mut cron = cron_job();
+    cron.last_schedule_at = Some(time("2024-10-04T10:00:00Z"));
+    cron.last_success_at = cron.last_schedule_at;
+    cron
+}
+
+#[test]
+fn cron_run_is_missed_only_once_the_starting_deadline_has_passed() {
+    let cron = cron_ran_at_ten();
+    // The deadline is 60 s: the 10:05 run may still start until 10:06.
+    assert_eq!(
+        cron_state_at(&cron, time("2024-10-04T10:06:00Z")),
+        CronState::LastRunSucceeded
+    );
+    assert_eq!(
+        cron_state_at(&cron, time("2024-10-04T10:06:01Z")),
+        CronState::Missed {
+            expected_at: time("2024-10-04T10:05:00Z")
+        }
+    );
+    // The label is the Warn state the cell and the box read.
+    let label = cron_state_at(&cron, time("2024-10-04T10:30:00Z")).label();
+    assert_eq!(label.text, "Missed schedule");
+    assert_eq!(label.tone, StatusTone::Warn);
+}
+
+#[test]
+fn cron_run_deadline_defaults_to_one_hundred_seconds() {
+    let mut cron = cron_ran_at_ten();
+    cron.starting_deadline_seconds = None;
+    assert_eq!(
+        cron_state_at(&cron, time("2024-10-04T10:06:40Z")),
+        CronState::LastRunSucceeded
+    );
+    assert!(matches!(
+        cron_state_at(&cron, time("2024-10-04T10:06:41Z")),
+        CronState::Missed { .. }
+    ));
+}
+
+#[test]
+fn cron_never_run_counts_from_creation() {
+    let mut cron = cron_job();
+    cron.created_at = Some(time("2024-10-04T10:01:00Z"));
+    assert_eq!(
+        cron_state_at(&cron, time("2024-10-04T10:05:30Z")),
+        CronState::NeverRun
+    );
+    assert_eq!(
+        cron_state_at(&cron, time("2024-10-04T10:07:00Z")),
+        CronState::Missed {
+            expected_at: time("2024-10-04T10:05:00Z")
+        }
+    );
+    // Without a creation time there is nothing to count from.
+    cron.created_at = None;
+    assert_eq!(
+        cron_state_at(&cron, time("2024-10-04T10:07:00Z")),
+        CronState::NeverRun
+    );
+}
+
+#[test]
+fn cron_suspended_running_and_every_are_never_missed() {
+    let late = time("2024-10-04T12:00:00Z");
+    let mut suspended = cron_ran_at_ten();
+    suspended.is_suspended = true;
+    assert_eq!(cron_state_at(&suspended, late), CronState::Suspended);
+    let mut running = cron_ran_at_ten();
+    running.active_jobs = vec!["reconcile-1".to_owned()];
+    assert_eq!(cron_state_at(&running, late), CronState::Running);
+    let mut every = cron_ran_at_ten();
+    every.timetable = cluster::CronSchedule::parse("@every 5m", None);
+    assert_eq!(cron_state_at(&every, late), CronState::LastRunSucceeded);
+    let mut invalid = cron_ran_at_ten();
+    invalid.timetable = cluster::CronSchedule::parse("not a schedule", None);
+    assert_eq!(cron_state_at(&invalid, late), CronState::LastRunSucceeded);
+}
+
+#[test]
+fn cron_failed_run_that_was_also_missed_reads_missed() {
+    let mut cron = cron_ran_at_ten();
+    cron.last_success_at = None;
+    assert_eq!(
+        cron_state_at(&cron, time("2024-10-04T10:05:30Z")),
+        CronState::LastRunFailed
+    );
+    assert!(matches!(
+        cron_state_at(&cron, time("2024-10-04T10:20:00Z")),
+        CronState::Missed { .. }
+    ));
+}
+
+#[test]
+fn cron_status_cell_is_painted_from_the_whole_cron_job() {
+    let cron = cron_ran_at_ten();
+    assert_eq!(
+        cron_job_row(&cron).cells.first(),
+        Some(&KindCell::CronStatus(Box::new(cron)))
     );
 }
