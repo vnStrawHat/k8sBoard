@@ -786,15 +786,15 @@ pub(crate) fn link_style(element: Stateful<Div>, name: &SharedString, cx: &App) 
         .tooltip(move |window, cx| Tooltip::new(tooltip_text.clone()).build(window, cx))
 }
 
-/// The chokepoint every link click goes through, so a later step can refuse a denied or
-/// out-of-scope target in one place.
+/// The chokepoint every link click goes through: a denied or out-of-scope target is refused with
+/// a notice in `follow_link`, anything else opens its screen.
 pub(crate) fn open_link(
     shell: &mut AppShell,
     target: ResourceKey,
-    _window: &mut Window,
+    window: &mut Window,
     cx: &mut Context<AppShell>,
 ) {
-    shell.reveal(target, cx);
+    shell.follow_link(target, window, cx);
 }
 
 /// A mono value that opens `target` on its own screen.

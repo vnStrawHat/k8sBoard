@@ -4,17 +4,22 @@
 
 use std::rc::Rc;
 
+use gpui_kit::component::WindowExt as _;
+use gpui_kit::component::notification::Notification;
 use gpui_kit::component::table::{TableDelegate, TableState};
-use gpui_kit::{App, Context, Entity};
+use gpui_kit::{App, Context, Entity, Window};
 
 use super::keyboard_navigation::RowStep;
 use super::{AppShell, Screen, remapped_screen};
 use crate::custom_kind::CustomKind;
 use crate::drawer::{BackTarget, ClickHandler, DrawerNavigation, RowControls};
 
-use crate::navigation_history::{Place, row_position};
+use crate::navigation_history::{LinkStep, Place, link_step, row_position};
 use crate::table_filter::TableFilter;
-use crate::table_selection::ClusterObject;
+use crate::table_selection::{ClusterObject, ResourceKey};
+
+/// The id of the notice a refused link shows, so a second refusal replaces the first.
+struct LinkNotice;
 
 /// Which way `step_history` walks.
 #[derive(Clone, Copy)]
@@ -124,6 +129,29 @@ impl AppShell {
             on_previous: step(RowStep::Previous),
             on_next: step(RowStep::Next),
         })
+    }
+
+    /// Opens a drawer link: refused with a notice when the target's kind is denied or its
+    /// namespace is outside the scope, else revealed like any object. The scope is never widened
+    /// here: the picker caps it and relists every watch.
+    pub(crate) fn follow_link(
+        &mut self,
+        target: ResourceKey,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let live = self
+            .active_cluster()
+            .and_then(|cluster| self.live_of(&cluster, cx));
+        let step = live.map_or(LinkStep::Reveal, |live| {
+            link_step(&target, &live.access, &live.scope)
+        });
+        match step {
+            LinkStep::Reveal => self.reveal(target, cx),
+            LinkStep::Denied(text) | LinkStep::OutOfScope(text) => {
+                window.push_notification(Notification::warning(text).id::<LinkNotice>(), cx);
+            }
+        }
     }
 
     /// The custom kinds the open cluster serves, once its CRD list has loaded.

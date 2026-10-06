@@ -1,4 +1,7 @@
 use super::*;
+use cluster::{AccessDecision, AccessReport, AccessReview};
+use gpui_kit::Task;
+
 use crate::cluster_registry::ClusterRef;
 use crate::resource_kind::ResourceKind;
 
@@ -205,4 +208,143 @@ fn previous_is_the_place_back_would_restore() {
         history.previous().map(Place::back_label).as_deref(),
         Some("api")
     );
+}
+
+fn access_denying(denied: &[AccessCheck]) -> AccessState {
+    let reviews = AccessCheck::ALL
+        .into_iter()
+        .map(|check| AccessReview {
+            check,
+            decision: if denied.contains(&check) {
+                AccessDecision::Denied { reason: None }
+            } else {
+                AccessDecision::Allowed
+            },
+        })
+        .collect();
+    AccessState::Known(AccessReport { reviews })
+}
+
+fn kind_key(kind: ResourceKind, namespace: Option<&str>, name: &str) -> ResourceKey {
+    ResourceKey::Kind {
+        kind,
+        namespace: namespace.map(str::to_owned),
+        name: name.to_owned(),
+    }
+}
+
+fn scope_of(names: &[&str]) -> NamespaceScope {
+    NamespaceScope::of_namespaces(names.iter().map(|name| (*name).to_owned()))
+}
+
+#[test]
+fn an_allowed_target_in_scope_is_revealed() {
+    let access = access_denying(&[]);
+    let target = kind_key(ResourceKind::Secrets, Some("shop"), "credentials");
+    assert_eq!(
+        link_step(&target, &access, &scope_of(&["shop"])),
+        LinkStep::Reveal
+    );
+}
+
+#[test]
+fn a_denied_kind_is_refused_with_the_reason() {
+    let access = access_denying(&[AccessCheck::ListSecrets]);
+    let target = kind_key(ResourceKind::Secrets, Some("shop"), "credentials");
+    assert_eq!(
+        link_step(&target, &access, &NamespaceScope::All),
+        LinkStep::Denied("Not permitted: list secrets in all namespaces".into())
+    );
+    assert_eq!(
+        link_step(&target, &access, &scope_of(&["shop", "shop-b"])),
+        LinkStep::Denied("Not permitted: list secrets in shop, shop-b".into())
+    );
+}
+
+#[test]
+fn denied_pods_and_nodes_are_refused() {
+    let access = access_denying(&[AccessCheck::ListPods, AccessCheck::ListNodes]);
+    let pod = ResourceKey::Pod {
+        namespace: "shop".to_owned(),
+        name: "api-1".to_owned(),
+    };
+    let node = ResourceKey::Node {
+        name: "n1".to_owned(),
+    };
+    assert_eq!(
+        link_step(&pod, &access, &NamespaceScope::All),
+        LinkStep::Denied("Not permitted: list pods".into())
+    );
+    assert_eq!(
+        link_step(&node, &access, &NamespaceScope::All),
+        LinkStep::Denied("Not permitted: list nodes".into())
+    );
+}
+
+#[test]
+fn a_link_is_revealed_while_access_is_checking_or_unknown() {
+    let checking = AccessState::Checking {
+        _task: Task::ready(()),
+    };
+    let target = kind_key(ResourceKind::Secrets, Some("shop"), "credentials");
+    for access in [checking, AccessState::Unknown] {
+        assert_eq!(
+            link_step(&target, &access, &NamespaceScope::All),
+            LinkStep::Reveal
+        );
+    }
+}
+
+#[test]
+fn a_cluster_scoped_target_ignores_the_namespace_scope() {
+    let access = access_denying(&[]);
+    let target = kind_key(ResourceKind::Namespaces, None, "shop");
+    let node = ResourceKey::Node {
+        name: "n1".to_owned(),
+    };
+    for scope in [scope_of(&["other"]), scope_of(&["a", "b"])] {
+        assert_eq!(link_step(&target, &access, &scope), LinkStep::Reveal);
+        assert_eq!(link_step(&node, &access, &scope), LinkStep::Reveal);
+    }
+}
+
+#[test]
+fn a_target_outside_the_scope_is_refused_with_its_namespace() {
+    let access = access_denying(&[]);
+    let service = kind_key(ResourceKind::Services, Some("team-b"), "payments-api");
+    let pod = ResourceKey::Pod {
+        namespace: "team-b".to_owned(),
+        name: "payments-api-1".to_owned(),
+    };
+    let text = |name: &str| format!("{name} is in team-b, outside the scope").into();
+    for scope in [scope_of(&["team-a"]), scope_of(&["team-a", "team-c"])] {
+        assert_eq!(
+            link_step(&service, &access, &scope),
+            LinkStep::OutOfScope(text("payments-api"))
+        );
+        assert_eq!(
+            link_step(&pod, &access, &scope),
+            LinkStep::OutOfScope(text("payments-api-1"))
+        );
+    }
+}
+
+#[test]
+fn every_namespace_is_in_the_all_scope() {
+    let access = access_denying(&[]);
+    let service = kind_key(ResourceKind::Services, Some("team-b"), "payments-api");
+    assert_eq!(
+        link_step(&service, &access, &NamespaceScope::All),
+        LinkStep::Reveal
+    );
+}
+
+#[test]
+fn a_denied_kind_wins_over_an_out_of_scope_namespace() {
+    let access = access_denying(&[AccessCheck::ListSecrets]);
+    let target = kind_key(ResourceKind::Secrets, Some("team-b"), "credentials");
+    assert!(matches!(
+        link_step(&target, &access, &scope_of(&["team-a"])),
+        LinkStep::Denied(_)
+    ));
 }

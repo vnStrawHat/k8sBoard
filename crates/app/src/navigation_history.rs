@@ -1,13 +1,15 @@
 //! Back and forward through the places a link left (spec 0056 history). Pure: the shell reads its
 //! state into a `Place` and writes one back, so the stacks are tested without a window.
 
+use cluster::{AccessCheck, NamespaceScope};
+use gpui_kit::SharedString;
+
 use crate::app_shell::Screen;
-
+use crate::cluster_session::{AccessState, scope_includes};
 use crate::drawer::{ContainerTab, DrawerTab};
-
+use crate::navigation::{KindAvailability, kind_availability};
 use crate::table_filter::TableFilter;
 use crate::table_selection::{ClusterObject, ResourceKey};
-
 /// The most places `back` (and `forward`) keep; the oldest is dropped.
 const HISTORY_CAP: usize = 50;
 /// The most characters of the previous name the Back button shows.
@@ -144,6 +146,61 @@ pub(crate) fn row_position(
 ) -> Option<(usize, usize)> {
     let row = selected_row.filter(|row| *row < visible_rows)?;
     Some((row + 1, visible_rows))
+}
+
+/// What following a link to an object does.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum LinkStep {
+    /// Open the target's screen with its drawer.
+    Reveal,
+    /// The known access report denies listing the target's kind; the text says which.
+    Denied(SharedString),
+    /// The target's namespace is not in the picked scope; a link never widens the scope.
+    OutOfScope(SharedString),
+}
+
+pub(crate) fn link_step(
+    target: &ResourceKey,
+    access: &AccessState,
+    scope: &NamespaceScope,
+) -> LinkStep {
+    if let Some(reason) = list_denial(target, access, scope) {
+        return LinkStep::Denied(reason);
+    }
+    match target {
+        ResourceKey::Pod { namespace, name }
+        | ResourceKey::Kind {
+            namespace: Some(namespace),
+            name,
+            ..
+        } if !scope_includes(scope, namespace) => {
+            LinkStep::OutOfScope(format!("{name} is in {namespace}, outside the scope").into())
+        }
+        _ => LinkStep::Reveal,
+    }
+}
+
+/// Why listing the target's kind is refused, when the access report is known and says so. While
+/// the review runs or has failed nothing is refused: the list's own error state explains a 403.
+fn list_denial(
+    target: &ResourceKey,
+    access: &AccessState,
+    scope: &NamespaceScope,
+) -> Option<SharedString> {
+    let check = match target {
+        ResourceKey::Pod { .. } => AccessCheck::ListPods,
+        ResourceKey::Node { .. } => AccessCheck::ListNodes,
+        ResourceKey::Kind { kind, .. } => {
+            return match kind_availability(*kind, access, scope) {
+                KindAvailability::Enabled => None,
+                KindAvailability::Denied { reason } => Some(reason),
+            };
+        }
+    };
+    let AccessState::Known(report) = access else {
+        return None;
+    };
+    (!report.is_allowed(check)).then(|| format!("Not permitted: {check}").into())
 }
 
 fn push_capped(stack: &mut Vec<Place>, place: Place) {
