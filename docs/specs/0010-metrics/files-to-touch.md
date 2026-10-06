@@ -30,7 +30,7 @@ No changes in any step. `DynamicObject`/`ApiResource` (kube), `serde_json`, `fut
 | 3 | `src/kind_row.rs` | `owns(owner, namespace, controller)`; `owns_pod` delegates |
 | 2 | `src/node_usage.rs` (new) | `NodeUsage`, `node_usage`, `node_allocatable`, `node_requests`, `node_pod_count`; tests in module |
 | 2 | `src/usage_bar.rs` (new) | `UsageBar`, `usage_bar` |
-| 2 | `src/pod_table.rs` | `PodRow` (`TableRow` moves from `PodSummary`), CPU and Memory columns, CPU hidden by default, `NODE` → 6 |
+| 2 | `src/pod_table.rs` | `PodRow` (`TableRow` moves from `PodSummary`), CPU and Memory columns, CPU shown by default, `NODE` → 6 |
 | 2 | `src/node_table.rs` | `NodeRow`, CPU and Memory bar columns |
 | 2 | `src/pod_drawer.rs` | container Info › Resources usage rows and bars |
 | 2 | `src/node_drawer.rs` | Allocatable used section; formatted Resources rows |

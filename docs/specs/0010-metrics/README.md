@@ -5,7 +5,7 @@ Status: amended after advisor review (HEAD `459e493`, 0008 steps 1–2). Crates:
 ## Goal
 
 - A per-session **sampler** that polls PodMetrics (session scope) and NodeMetrics every 15 s into bounded rings: 1 h at 15 s plus 24 h at 5 min.
-- **Pods** Memory column (CPU column via Columns ▾); **Nodes** CPU and Memory bars as % of allocatable.
+- **Pods** Memory and CPU columns (Columns ▾ hides either); **Nodes** CPU and Memory bars as % of allocatable.
 - Usage bars in container Info › Resources and the node drawer ("Allocatable used"); human-readable node quantities (0008 open item 4).
 - A **Monitor tab** (CPU, Memory charts, request/limit lines, OOMKilled markers, 15m/1h/6h/24h ranges, scope selector, Table view, source note) on Pod, Node, Deployment, StatefulSet, DaemonSet, ReplicaSet, Job drawers, plus a container Monitor sub-tab.
 - "Metrics unavailable · reason" when the API is missing, broken, or denied.

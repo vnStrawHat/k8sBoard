@@ -78,7 +78,7 @@ impl PodTableDelegate {
         saved: Option<&TablePrefs>,
     ) -> Self {
         let plan = pod_plan();
-        let mut view = pods_view();
+        let mut view = TableView::new(default_filter(Screen::Pods));
         if let Some(saved) = saved {
             view.apply_prefs(saved, &plan);
         }
@@ -176,14 +176,6 @@ fn pod_rows<'a>(pods: &'a [PodSummary], history: Option<&PodUsageHistory>) -> Ve
             usage: history.and_then(|history| history.latest(&pod.namespace, &pod.name)),
         })
         .collect()
-}
-
-/// The Pods view starts with the CPU column hidden: W4 shows Memory only. Columns ▾ brings it
-/// back.
-fn pods_view() -> TableView {
-    let mut view = TableView::new(default_filter(Screen::Pods));
-    view.hidden.insert(CPU);
-    view
 }
 
 fn saturating_number(value: u64) -> CellValue<'static> {
@@ -611,9 +603,10 @@ mod tests {
     }
 
     #[test]
-    fn pods_view_hides_cpu_by_default() {
-        let view = pods_view();
-        assert_eq!(view.hidden.iter().copied().collect::<Vec<_>>(), [CPU]);
+    fn new_pods_table_shows_the_cpu_column() {
+        let table =
+            PodTableDelegate::new(WeakEntity::new_invalid(), WeakEntity::new_invalid(), None);
+        assert!(table.view.hidden.is_empty());
     }
 
     #[test]

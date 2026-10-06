@@ -31,7 +31,7 @@
 |---|---|---|
 | 14 | Own integer parser in the cluster crate (`CpuAmount`, `ByteAmount`: u128 mantissa plus a decimal exponent); no quantity crate | exact for every valid quantity; ~70 lines; quantity crates pull decimal or regex dependencies; unblocks 0008 open item 4 |
 | 15 | Format: CPU `310m`, `<1m`, `1 core`, `2.5 cores`; memory binary `0B`, `498Mi`, `1.1Gi`, `15.6Gi`, `120Gi`; a pair shows the unit once when both share it (`9.8 / 15.8 cores`, `498 of 512Mi`), else both (`310m of 1 core`) | matches W4, W4b, W7 node drawer, and the W4c axis format |
-| 16 | Pods: Memory column shown, CPU column hidden by default (Columns ▾); both sort by value; "—" without a sample (a new pod reads "—" until metrics-server has two scrapes of it) | W4 shows Memory only; metrics-server needs two scrapes to compute a CPU rate |
+| 16 | Pods: Memory and CPU columns shown (Columns ▾ can hide CPU; it was hidden by default until the UX walkthrough of 2026-10); both sort by value; "—" without a sample (a new pod reads "—" until metrics-server has two scrapes of it) | W4 shows Memory only; metrics-server needs two scrapes to compute a CPU rate |
 | 17 | Nodes: CPU and Memory = bar + percent of **allocatable**; `usage_tone`: Warn ≥ 80 %, Bad ≥ 90 % | W5 colors 82 % yellow; W4b shows 97 % red; one rule for every bar |
 | 18 | Usage bars in container Info › Resources (fill = usage / limit, tick = request) and the node drawer "Allocatable used" (CPU, Memory, and Pods when the scope is All) | W4b note 5; W7 Nodes drawer |
 | 19 | Node Resources rows (0008) print cpu, memory, ephemeral-storage, hugepages human-readable | 0008 open item 4 |

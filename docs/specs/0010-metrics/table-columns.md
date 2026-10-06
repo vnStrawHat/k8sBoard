@@ -26,11 +26,11 @@ pub(crate) fn node_pod_count(node: &str, pods: &[PodSummary]) -> usize;
 | Logical | Column | Width | `CellValue` | Cell |
 |---|---|---|---|---|
 | 0–3 | Name, Status, Ready, Restarts | 0009 | 0009 | 0009 |
-| 4 | CPU (new, **hidden by default**) | 70 | `Number(nanocores)` or `Absent` | mono `Measure::Cpu.format`, muted "—" |
+| 4 | CPU (new; shown by default, Columns ▾ hides it) | 70 | `Number(nanocores)` or `Absent` | mono `Measure::Cpu.format`, muted "—" |
 | 5 | Memory (new) | 80 | `Number(bytes)` or `Absent` | mono `Measure::Bytes.format`, muted "—" |
 | 6, 7 | Node, Age | 0009 | 0009 | 0009 |
 
-- The Pods `TableView` is created with `hidden = {CPU}`; Columns ▾ lists CPU unchecked. A context switch keeps `hidden` (0009 decision 11).
+- The Pods `TableView` starts with no hidden column; Columns ▾ lists CPU checked and can hide it. A context switch keeps `hidden` (0009 decision 11).
 - The `NODE` const moves to 6; "View pods on node" (0009) uses the const, so nothing else changes.
 - The text filter does not match usage numbers (`Number` is not text, 0009 rule).
 - A new pod reads "—" for its first 15–30 s: metrics-server needs two scrapes before it reports a pod (decision 16).

@@ -509,10 +509,10 @@ fn cycle_sort_persists_the_sort_by_column_name(cx: &mut TestAppContext) {
 fn toggle_column_persists_hidden_columns_by_name(cx: &mut TestAppContext) {
     let (_window, shell) = open_shell(cx);
     cx.update(|cx| shell.update(cx, |shell, cx| shell.show_screen(Screen::Pods, cx)));
-    // Logical column 6 of the Pods table is Node; CPU is hidden by default.
+    // Logical column 6 of the Pods table is Node; no column is hidden by default.
     cx.update(|cx| shell.update(cx, |shell, cx| shell.toggle_column(6, cx)));
     let hidden = saved_pods(cx).map(|prefs| prefs.hidden);
-    assert_eq!(hidden, Some(vec!["CPU".to_owned(), "Node".to_owned()]));
+    assert_eq!(hidden, Some(vec!["Node".to_owned()]));
 }
 
 fn toggle_default(shell: &Entity<AppShell>, cx: &mut TestAppContext) {
