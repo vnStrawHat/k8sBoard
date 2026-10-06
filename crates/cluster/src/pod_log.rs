@@ -24,8 +24,10 @@ pub struct LogRequest {
     pub pod: String,
     pub container: String,
     pub source: LogSource,
-    /// Lines of history requested at open.
+    /// Lines of history requested at open. Ignored when `since_seconds` is set.
     pub tail_lines: u32,
+    /// Only the lines of the last N seconds, with no line limit.
+    pub since_seconds: Option<u32>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -78,7 +80,12 @@ fn log_params(request: &LogRequest) -> LogParams {
         container: Some(request.container.clone()),
         follow: request.source == LogSource::Current,
         previous: request.source == LogSource::Previous,
-        tail_lines: Some(i64::from(request.tail_lines)),
+        // The window replaces the tail: both together would cut a long window to the tail.
+        tail_lines: match request.since_seconds {
+            Some(_) => None,
+            None => Some(i64::from(request.tail_lines)),
+        },
+        since_seconds: request.since_seconds.map(i64::from),
         timestamps: true,
         ..LogParams::default()
     }

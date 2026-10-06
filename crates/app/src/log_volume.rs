@@ -9,7 +9,7 @@ use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::chart::BarChart;
 use gpui_kit::component::tooltip::Tooltip;
-use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _, h_flex};
+use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _, h_flex, v_flex};
 use gpui_kit::{
     AnyElement, App, Bounds, DispatchPhase, Hsla, InteractiveElement as _, IntoElement,
     MouseButton, MouseMoveEvent, MouseUpEvent, ParentElement as _, Pixels, SharedString,
@@ -103,6 +103,16 @@ fn bucket_label(start: jiff::Timestamp, width: Duration, zone: &TimeZone) -> Str
         _ => "%m-%d",
     };
     start.to_zoned(zone.clone()).strftime(format).to_string()
+}
+
+/// The labels under the chart: where its first bucket starts and where its last one ends.
+fn axis_ticks(volume: &Volume, zone: &TimeZone) -> Option<(String, String)> {
+    let first = volume.buckets.first()?;
+    let last = volume.buckets.last()?;
+    Some((
+        bucket_label(first.start, volume.width, zone),
+        bucket_label(bucket_end(last.start, volume.width)?, volume.width, zone),
+    ))
 }
 
 /// `1s`, `15s`, `5m`, `3h`, `1d`.
@@ -244,7 +254,6 @@ pub(crate) fn volume_chart(volume: &Rc<Volume>, brush: BrushView, cx: &App) -> A
         .id("log-volume-brush")
         .debug_selector(|| "log-volume-brush".into())
         .relative()
-        .flex_1()
         .h(px(CHART_HEIGHT))
         .py_1()
         .cursor_crosshair()
@@ -270,6 +279,16 @@ pub(crate) fn volume_chart(volume: &Rc<Volume>, brush: BrushView, cx: &App) -> A
                 .bg(theme.selection)
         }))
         .child(bounds_canvas(drag, bounds, handlers.clone()));
+    let ticks = axis_ticks(volume, &zone).map(|(start, end)| {
+        h_flex()
+            .justify_between()
+            .text_xs()
+            .font_family(theme.mono_font_family.clone())
+            .text_color(theme.muted_foreground)
+            .child(start)
+            .child(end)
+    });
+    let cell = v_flex().flex_1().child(cell).children(ticks);
     h_flex()
         .flex_shrink_0()
         .items_center()
@@ -495,6 +514,38 @@ mod tests {
             "05-01 10:47"
         );
         assert_eq!(bucket_label(start, secs(86_400), &TimeZone::UTC), "05-01");
+    }
+
+    #[test]
+    fn axis_ticks_label_the_first_start_and_the_last_end() {
+        let volume = Volume {
+            width: secs(300),
+            buckets: vec![
+                VolumeBucket {
+                    start: at("2024-05-01T10:45:00Z"),
+                    lines: 1,
+                    errors: 0,
+                },
+                VolumeBucket {
+                    start: at("2024-05-01T10:50:00Z"),
+                    lines: 2,
+                    errors: 0,
+                },
+            ],
+        };
+        assert_eq!(
+            axis_ticks(&volume, &TimeZone::UTC),
+            Some(("10:45".to_owned(), "10:55".to_owned()))
+        );
+    }
+
+    #[test]
+    fn axis_ticks_need_a_bucket() {
+        let volume = Volume {
+            width: secs(5),
+            buckets: Vec::new(),
+        };
+        assert_eq!(axis_ticks(&volume, &TimeZone::UTC), None);
     }
 
     /// Ten buckets of 5 s from 10:00:00.

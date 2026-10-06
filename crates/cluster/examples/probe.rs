@@ -976,6 +976,7 @@ async fn logs_for(
         container: container.name.clone(),
         source: LogSource::Current,
         tail_lines: 1000,
+        since_seconds: None,
     }));
     let mut stats = LogStats::default();
     let mut is_ended = false;

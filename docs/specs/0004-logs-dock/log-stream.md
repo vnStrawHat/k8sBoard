@@ -50,10 +50,11 @@ impl ClusterConnection {
 | `container` | `Some(container)` | same |
 | `follow` | true | false |
 | `previous` | false | true |
-| `tail_lines` | `Some(request.tail_lines)`: 1000 for pod tabs (0019 decision 33 made it a request field) | same |
+| `tail_lines` | `Some(request.tail_lines)`: 1000 for pod tabs (0019 decision 33 made it a request field); `None` when `since_seconds` is set | same |
+| `since_seconds` | `request.since_seconds` (the Since picker of the tab; `None` keeps the tail) | same |
 | `timestamps` | true | true |
 
-The other fields (`since_seconds`, `since_time`, `limit_bytes`, `pretty`) keep their defaults. There is no resume: Reconnect starts over ([log-tab.md](log-tab.md)).
+The other fields (`since_time`, `limit_bytes`, `pretty`) keep their defaults. There is no resume: Reconnect starts over ([log-tab.md](log-tab.md)).
 
 - The API is `Api::<Pod>::namespaced(client, namespace).log_stream(pod, &params)`. It is a plain HTTP GET with a chunked body, and it is not behind `ws` (kube-client 4.2 `api/subresource.rs`).
 

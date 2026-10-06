@@ -48,6 +48,14 @@ impl LevelSet {
         self
     }
 
+    /// The Alt-click: only `level` stays visible; when it already is the only one, every level
+    /// comes back.
+    pub(crate) fn toggled_only(self, level: LogLevel) -> Self {
+        let mut only = Self { hidden: [true; 4] };
+        only.hidden[level.index()] = false;
+        if self == only { Self::default() } else { only }
+    }
+
     pub(crate) fn hides_none(self) -> bool {
         self.hidden == [false; 4]
     }
@@ -275,5 +283,35 @@ mod tests {
         assert!(!set.is_hidden(LogLevel::Error));
         assert!(!set.hides_none());
         assert!(set.toggled(LogLevel::Info).hides_none());
+    }
+
+    #[test]
+    fn alt_click_shows_only_that_level_and_a_second_one_restores_all() {
+        let only_error = LevelSet::default().toggled_only(LogLevel::Error);
+        assert!(!only_error.is_hidden(LogLevel::Error));
+        assert!(
+            LogLevel::ALL[1..]
+                .iter()
+                .all(|level| only_error.is_hidden(*level))
+        );
+        assert!(only_error.toggled_only(LogLevel::Error).hides_none());
+    }
+
+    #[test]
+    fn alt_click_on_another_level_switches_the_only_level() {
+        let set = LevelSet::default()
+            .toggled_only(LogLevel::Error)
+            .toggled_only(LogLevel::Warn);
+        assert!(!set.is_hidden(LogLevel::Warn));
+        assert!(set.is_hidden(LogLevel::Error));
+    }
+
+    #[test]
+    fn alt_click_after_a_plain_toggle_still_selects_only() {
+        let set = LevelSet::default()
+            .toggled(LogLevel::Debug)
+            .toggled_only(LogLevel::Debug);
+        assert!(!set.is_hidden(LogLevel::Debug));
+        assert!(set.is_hidden(LogLevel::Info));
     }
 }

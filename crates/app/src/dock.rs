@@ -700,6 +700,17 @@ impl Dock {
             )
             .child(self.render_new_tab_button())
             .child(div().flex_1())
+            .children(match self.active_tab() {
+                Some(DockTab::Logs(tab)) => Some(
+                    div()
+                        .id("log-dock-status")
+                        .px_2()
+                        .text_xs()
+                        .text_color(theme.muted_foreground)
+                        .child(tab.read(cx).status_line(cx)),
+                ),
+                _ => None,
+            })
             .child(
                 Button::new("log-dock-zoom")
                     .ghost()

@@ -15,6 +15,7 @@ fn request(source: LogSource) -> LogRequest {
         container: "app".to_owned(),
         source,
         tail_lines: 1000,
+        since_seconds: None,
     }
 }
 
@@ -91,6 +92,21 @@ fn log_params_uses_requested_tail() {
         ..request(LogSource::Current)
     });
     assert_eq!(params.tail_lines, Some(50));
+}
+
+#[test]
+fn log_params_since_replaces_the_tail() {
+    let params = log_params(&LogRequest {
+        since_seconds: Some(900),
+        ..request(LogSource::Current)
+    });
+    assert_eq!(params.since_seconds, Some(900));
+    assert_eq!(params.tail_lines, None);
+}
+
+#[test]
+fn log_params_without_since_has_no_window() {
+    assert_eq!(log_params(&request(LogSource::Current)).since_seconds, None);
 }
 
 // Splitter

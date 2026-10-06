@@ -36,6 +36,7 @@ use crate::log_buffer::{
 use crate::log_legend::{LegendChip, legend_row, pod_color};
 use crate::log_level::{LevelSet, LogLevel};
 use crate::log_rows::{RowPrefix, RowStyle, log_row};
+use crate::log_since::LogSince;
 use crate::log_target::{LogTarget, PodTarget, WorkloadTarget};
 use crate::log_volume::{
     BrushDrag, BrushHandlers, BrushView, FractionHandler, Volume, brush_window, volume,
@@ -301,6 +302,8 @@ pub(crate) struct LogTab {
     connection: ClusterConnection,
     subject: LogSubject,
     instance: LogInstance,
+    /// How far back the streams read; a change restarts them.
+    since: LogSince,
     shows_timestamps: bool,
     /// The zone of the timestamp column, read once when the tab opens.
     time_zone: TimeZone,
@@ -372,6 +375,7 @@ impl LogTab {
             connection: origin.connection,
             subject,
             instance: LogInstance::Current,
+            since: LogSince::default(),
             shows_timestamps: defaults.show_timestamps,
             time_zone: TimeZone::system(),
             wraps_lines: defaults.wrap_lines,
@@ -494,6 +498,7 @@ impl LogTab {
                     full_prefix: SharedString::from(format!("{}/{container}", target.pod)),
                     color_slot: 0,
                     tail_lines: log_defaults(cx).tail_lines(),
+                    since_seconds: self.since.seconds(),
                 };
                 self.open_stream(open, cx);
                 self.note_restarts(cx);
@@ -523,6 +528,7 @@ impl LogTab {
             container: open.container.clone(),
             source,
             tail_lines: open.tail_lines,
+            since_seconds: open.since_seconds,
         });
         let runtime = cx.global::<ClusterRuntime>().clone();
         let subscription = runtime.subscribe(
@@ -731,6 +737,7 @@ impl LogTab {
                     container,
                     color_slot,
                     tail_lines,
+                    since_seconds: self.since.seconds(),
                 };
                 self.open_stream(open, cx);
             }
@@ -883,6 +890,14 @@ impl LogTab {
             return;
         }
         *container = name;
+        self.restart_stream(cx);
+    }
+
+    fn pick_since(&mut self, since: LogSince, cx: &mut Context<Self>) {
+        if since == self.since {
+            return;
+        }
+        self.since = since;
         self.restart_stream(cx);
     }
 
@@ -1121,6 +1136,8 @@ impl LogTab {
         }
         let tab = cx.weak_entity();
         let is_export_unavailable = self.is_export_unavailable();
+        // The docked row has no room for the Since picker either: its choices end the menu.
+        let since = (self.layout == LogLayout::Compact).then_some(self.since);
         elements.push(
             Button::new("log-overflow")
                 .ghost()
@@ -1128,7 +1145,7 @@ impl LogTab {
                 .icon(Icon::new(IconName::Ellipsis))
                 .tooltip("More")
                 .dropdown_menu(move |menu, _, _| {
-                    placement.overflow.iter().fold(menu, |menu, action| {
+                    let menu = placement.overflow.iter().fold(menu, |menu, action| {
                         let action = *action;
                         let tab = tab.clone();
                         menu.item(
@@ -1141,7 +1158,13 @@ impl LogTab {
                                     });
                                 }),
                         )
-                    })
+                    });
+                    match since {
+                        Some(selected) => since_items(selected, "Since ", &tab)
+                            .into_iter()
+                            .fold(menu.separator(), |menu, item| menu.item(item)),
+                        None => menu,
+                    }
                 })
                 .into_any_element(),
         );
@@ -1178,11 +1201,15 @@ impl LogTab {
         }
     }
 
-    fn render_toolbar(&self, cx: &Context<Self>) -> impl IntoElement {
-        let theme = cx.theme();
-        let is_scrolled_up = self.scroller.read(cx).is_scrolled_up();
-        let status = self.status_text(is_scrolled_up);
-        let status = match &self.export_state {
+    /// The stream state and line count, with the result of the last export. The dock shows it in
+    /// its tab strip; a popped-out tab has no strip, so its toolbar shows it.
+    pub(crate) fn status_line(&self, cx: &App) -> String {
+        let mut status = self.status_text(self.scroller.read(cx).is_scrolled_up());
+        // The docked picker sits in the `⋯` menu, so a window in force must show somewhere.
+        if self.since != LogSince::Tail {
+            status = format!("{status} · last {}", self.since.label());
+        }
+        match &self.export_state {
             ExportState::Saved { file_name } => {
                 format!(
                     "Saved {} lines to {file_name} · {status}",
@@ -1190,7 +1217,34 @@ impl LogTab {
                 )
             }
             _ => status,
-        };
+        }
+    }
+
+    /// `Since: 15m ▾`: how far back the streams read. The docked tab has it in the `⋯` menu.
+    fn render_since_picker(&self, cx: &Context<Self>) -> Option<AnyElement> {
+        if self.layout == LogLayout::Compact {
+            return None;
+        }
+        let tab = cx.weak_entity();
+        let selected = self.since;
+        Some(
+            Button::new("log-since")
+                .ghost()
+                .small()
+                .tooltip("How far back to read")
+                .child(format!("Since: {}", selected.label()))
+                .dropdown_caret(true)
+                .dropdown_menu(move |menu, _, _| {
+                    since_items(selected, "", &tab)
+                        .into_iter()
+                        .fold(menu, |menu, item| menu.item(item))
+                })
+                .into_any_element(),
+        )
+    }
+
+    fn render_toolbar(&self, cx: &Context<Self>) -> impl IntoElement {
+        let theme = cx.theme();
         let is_connecting = self.phase() == TabPhase::Connecting;
         h_flex()
             .flex_shrink_0()
@@ -1224,11 +1278,17 @@ impl LogTab {
                     .small()
                     .label(level.label())
                     .checked(!self.hidden_levels.is_hidden(level))
-                    .on_click(cx.listener(move |tab, _: &bool, _, cx| {
-                        tab.hidden_levels = tab.hidden_levels.toggled(level);
+                    .tooltip("Alt-click: only this level")
+                    .on_click(cx.listener(move |tab, _: &bool, window, cx| {
+                        tab.hidden_levels = if window.modifiers().alt {
+                            tab.hidden_levels.toggled_only(level)
+                        } else {
+                            tab.hidden_levels.toggled(level)
+                        };
                         tab.refresh_view(cx);
                     }))
             }))
+            .children(self.render_since_picker(cx))
             .when(!self.is_workload(), |toolbar| {
                 toolbar.child(
                     Toggle::new("log-previous")
@@ -1288,7 +1348,9 @@ impl LogTab {
                                 .child(InvalidRegex.to_string()),
                         )
                     })
-                    .child(status),
+                    .when(self.is_popped_out, |status| {
+                        status.child(self.status_line(cx))
+                    }),
             )
     }
 
@@ -1519,6 +1581,20 @@ impl LogTab {
     }
 }
 
+/// One menu item per Since choice, `{prefix}{label}`, the selected one checked.
+fn since_items(selected: LogSince, prefix: &str, tab: &WeakEntity<LogTab>) -> Vec<PopupMenuItem> {
+    LogSince::ALL
+        .map(|since| {
+            let tab = tab.clone();
+            PopupMenuItem::new(format!("{prefix}{}", since.label()))
+                .checked(since == selected)
+                .on_click(move |_, _, cx| {
+                    let _ = tab.update(cx, |tab, cx| tab.pick_since(since, cx));
+                })
+        })
+        .into()
+}
+
 fn row_of(tab: &WeakEntity<LogTab>, index: usize, cx: &App) -> AnyElement {
     tab.read_with(cx, |tab, cx| tab.render_row(index, cx))
         .unwrap_or_else(|_| div().into_any_element())
@@ -1589,6 +1665,7 @@ struct StreamOpen {
     full_prefix: SharedString,
     color_slot: usize,
     tail_lines: u32,
+    since_seconds: Option<u32>,
 }
 
 /// A pod admitted to a workload tab, with the selected containers it has.

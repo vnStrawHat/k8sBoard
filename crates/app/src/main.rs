@@ -79,6 +79,7 @@ mod log_json;
 mod log_legend;
 mod log_level;
 mod log_rows;
+mod log_since;
 mod log_tab;
 mod log_target;
 mod log_volume;

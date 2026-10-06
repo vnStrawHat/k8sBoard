@@ -335,3 +335,36 @@ fn a_popped_out_or_connecting_tab_offers_fewer_actions() {
     let connecting = toolbar_actions(LogLayout::Compact, false, true);
     assert!(!connecting.overflow.contains(&ToolbarAction::Reconnect));
 }
+
+#[gpui_kit::test]
+fn picking_a_since_window_restarts_the_stream_with_since_seconds(cx: &mut TestAppContext) {
+    let (fixture, tab) = open_full_tab(cx);
+    let first = fixture
+        .api
+        .requests()
+        .into_iter()
+        .find(|request| request.path.ends_with("/log"))
+        .expect("the first log request");
+    assert!(first.has_query_key("tailLines"));
+    assert!(!first.has_query_key("sinceSeconds"));
+
+    tab.update(cx, |tab, cx| tab.pick_since(LogSince::Minutes15, cx));
+    fixture.wait_until("the second log request", cx, |_| fixture.log_reads() == 2);
+    let second = fixture
+        .api
+        .requests()
+        .into_iter()
+        .filter(|request| request.path.ends_with("/log"))
+        .nth(1)
+        .expect("the restarted log request");
+    assert!(second.has_query("sinceSeconds", "900"), "{}", second.query);
+    assert!(!second.has_query_key("tailLines"), "{}", second.query);
+}
+
+#[gpui_kit::test]
+fn picking_the_same_since_window_keeps_the_stream(cx: &mut TestAppContext) {
+    let (fixture, tab) = open_full_tab(cx);
+    tab.update(cx, |tab, cx| tab.pick_since(LogSince::Tail, cx));
+    cx.run_until_parked();
+    assert_eq!(fixture.log_reads(), 1);
+}
