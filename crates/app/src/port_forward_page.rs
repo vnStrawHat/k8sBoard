@@ -26,19 +26,35 @@ use crate::drawer::{
     first_section_title, menu_button, section_title, truncated_text, truncated_text_with_tooltip,
     wide_detail_row,
 };
-use crate::environment::environment_badge;
 use crate::port_forwards::{Forward, ForwardFailure, ForwardId, ForwardState, byte_count_text};
 use crate::resource_actions::{ActionAvailability, MenuItemIcon as _, disabled_menu_item};
 use crate::status_tone::{tone_color, toned_text};
 use crate::table_selection::ClusterObject;
 
-/// Fixed, so the middle cut of a long target knows how many characters fit.
-const TARGET_WIDTH: f32 = 380.;
-const PORTS_WIDTH: f32 = 200.;
-const STATUS_WIDTH: f32 = 210.;
-const CLUSTER_WIDTH: f32 = 200.;
+/// The least the Target column keeps when the other columns leave it less.
+const TARGET_MIN_WIDTH: f32 = 160.;
+/// Holds `65535 → localhost:65535` in the mono font, so the local port is never cut.
+const PORTS_WIDTH: f32 = 230.;
+const STATUS_WIDTH: f32 = 170.;
 const UPTIME_WIDTH: f32 = 80.;
-const ACTION_WIDTH: f32 = 96.;
+const ACTION_WIDTH: f32 = 104.;
+/// The gap between columns and the side padding of a row (`gap_3`, `px_4`).
+const COLUMN_GAP: f32 = 12.;
+const ROW_PADDING: f32 = 16.;
+
+/// How wide the Target column is, so the middle cut of a long target knows how many characters
+/// fit. It takes what the other columns leave of the list. The drawer covers the right part of the
+/// list, so while it is open Target shrinks to keep Ports in view instead.
+fn target_width(workspace: f32, drawer: Option<f32>) -> f32 {
+    let room = match drawer {
+        Some(drawer) => workspace - drawer - ROW_PADDING - PORTS_WIDTH - COLUMN_GAP,
+        None => {
+            let fixed = PORTS_WIDTH + STATUS_WIDTH + UPTIME_WIDTH + ACTION_WIDTH;
+            workspace - 2. * ROW_PADDING - fixed - 4. * COLUMN_GAP
+        }
+    };
+    room.max(TARGET_MIN_WIDTH)
+}
 
 const EMPTY_TEXT: &str = "No port forwards. Use Forward next to a port, or New forward.";
 const BIND_TOOLTIP: &str = "The forward listens on this computer only (127.0.0.1 and ::1). On Windows another local program could bind the same port first.";
@@ -116,6 +132,8 @@ impl AppShell {
         let selected = forwards.selected().map(|forward| forward.id);
         let rows = forwards.sorted(&filter);
         let now = jiff::Timestamp::now();
+        let drawer = selected.map(|_| f32::from(self.drawer.width(DrawerSize::Standard)));
+        let target = target_width(f32::from(self.drawer.workspace_width()), drawer);
         let body = if forwards.forwards().is_empty() {
             note(EMPTY_TEXT, cx)
         } else if rows.is_empty() {
@@ -127,7 +145,14 @@ impl AppShell {
                 .min_h_0()
                 .overflow_y_scroll()
                 .children(rows.iter().enumerate().map(|(index, forward)| {
-                    self.forward_row(index, forward, selected == Some(forward.id), now, cx)
+                    self.forward_row(
+                        index,
+                        forward,
+                        selected == Some(forward.id),
+                        target,
+                        now,
+                        cx,
+                    )
                 }))
                 .into_any_element()
         };
@@ -146,12 +171,12 @@ impl AppShell {
                             .child(Input::new(&self.forward_filter).small().cleanable(true)),
                     ),
             )
-            .child(self.forward_header_row(cx))
+            .child(self.forward_header_row(target, cx))
             .child(body)
             .into_any_element()
     }
 
-    fn forward_header_row(&self, cx: &Context<Self>) -> AnyElement {
+    fn forward_header_row(&self, target: f32, cx: &Context<Self>) -> AnyElement {
         let theme = cx.theme();
         let cell = |text: &'static str, width: f32| div().w(px(width)).flex_shrink_0().child(text);
         h_flex()
@@ -164,10 +189,9 @@ impl AppShell {
             .text_color(theme.table_head_foreground)
             .border_b_1()
             .border_color(theme.border)
-            .child(cell("Target", TARGET_WIDTH))
+            .child(cell("Target", target))
             .child(cell("Ports", PORTS_WIDTH))
             .child(cell("Status", STATUS_WIDTH))
-            .child(cell("Cluster", CLUSTER_WIDTH))
             .child(cell("Uptime", UPTIME_WIDTH))
             .child(div().w(px(ACTION_WIDTH)).flex_shrink_0())
             .into_any_element()
@@ -178,6 +202,7 @@ impl AppShell {
         index: usize,
         forward: &Forward,
         is_selected: bool,
+        target_width: f32,
         now: jiff::Timestamp,
         cx: &Context<Self>,
     ) -> AnyElement {
@@ -186,7 +211,9 @@ impl AppShell {
         let mono = theme.mono_font_family.clone();
         let target = forward.spec.target_text();
         let shown_target =
-            middle_truncate(&target, mono_capacity_of_width(px(TARGET_WIDTH), cx)).into_owned();
+            middle_truncate(&target, mono_capacity_of_width(px(target_width), cx)).into_owned();
+        // The Cluster column is gone: this app shows one cluster at a time.
+        let target_tooltip = format!("{target} · {}", forward.cluster_label);
         let data = h_flex()
             .id(("forward-row", index))
             .flex_1()
@@ -202,10 +229,14 @@ impl AppShell {
             }))
             .child(
                 // Cut in the middle: the end of the name tells forwards apart.
-                truncated_text_with_tooltip(("forward-target", index), shown_target, target)
-                    .w(px(TARGET_WIDTH))
-                    .flex_shrink_0()
-                    .font_family(mono.clone()),
+                truncated_text_with_tooltip(
+                    ("forward-target", index),
+                    shown_target,
+                    target_tooltip,
+                )
+                .w(px(target_width))
+                .flex_shrink_0()
+                .font_family(mono.clone()),
             )
             .child(
                 div()
@@ -220,18 +251,6 @@ impl AppShell {
                     .flex_shrink_0()
                     .truncate()
                     .child(toned_text(forward.status(), cx)),
-            )
-            .child(
-                h_flex()
-                    .w(px(CLUSTER_WIDTH))
-                    .flex_shrink_0()
-                    .gap_2()
-                    .items_center()
-                    .child(environment_badge(&forward.environment, cx))
-                    .child(
-                        truncated_text(("forward-cluster", index), forward.cluster_label.clone())
-                            .min_w_0(),
-                    ),
             )
             .child(
                 div()
@@ -623,6 +642,33 @@ impl StoppedRowAction {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn target_takes_what_the_fixed_columns_leave() {
+        // 1100 and 1320 px windows, less the 220 px sidebar, drawer closed.
+        assert_eq!(target_width(880., None), 880. - 32. - 584. - 48.);
+        assert_eq!(target_width(1100., None), 1100. - 32. - 584. - 48.);
+    }
+
+    #[test]
+    fn target_keeps_ports_in_view_beside_the_drawer() {
+        // The drawer covers the right half of an 1100 px list: Target ends where Ports can still
+        // end before the drawer starts.
+        let target = target_width(1100., Some(550.));
+        assert!(ROW_PADDING + target + COLUMN_GAP + PORTS_WIDTH <= 1100. - 550.);
+    }
+
+    #[test]
+    fn target_never_shrinks_below_its_minimum() {
+        assert_eq!(target_width(500., None), TARGET_MIN_WIDTH);
+        assert_eq!(target_width(800., Some(480.)), TARGET_MIN_WIDTH);
+    }
+
+    #[test]
+    fn ports_width_holds_the_longest_ports_text() {
+        // 23 mono characters of about 9.6 px each.
+        assert!(PORTS_WIDTH >= "65535 → localhost:65535".chars().count() as f32 * 9.6);
+    }
 
     #[test]
     fn a_port_in_use_offers_change_port_instead_of_retry() {

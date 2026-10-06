@@ -145,6 +145,10 @@ impl DrawerState {
         self.workspace_width.set(width);
     }
 
+    pub(crate) fn workspace_width(&self) -> Pixels {
+        self.workspace_width.get()
+    }
+
     pub(crate) fn width(&self, size: DrawerSize) -> Pixels {
         drawer_width(size, self.workspace_width.get())
     }
