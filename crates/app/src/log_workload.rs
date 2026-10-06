@@ -79,6 +79,35 @@ pub(crate) fn pod_short_name<'a>(owner: &PodOwner, pod: &'a str) -> &'a str {
     pod.rsplit('-').next().unwrap_or(pod)
 }
 
+/// Characters that fit the 9 rem prefix column of a log row (mono `text_xs`, 0.45 rem each).
+const PREFIX_COLUMN_CHARS: usize = 20;
+
+/// The `{pod}/{container}` cell of a workload log row. A StatefulSet pod drops the owner name and
+/// keeps the ordinal (`-0`); other owners keep the last `-` segment. A pod that has no suffix to
+/// keep shows its whole name cut from the start, so the end of the name stays readable.
+pub(crate) fn pod_origin_label(owner: &PodOwner, pod: &str, container: &str) -> String {
+    let suffix = match owner {
+        PodOwner::Controller { kind, name, .. } if *kind == STATEFUL_SET_KIND => pod
+            .strip_prefix(name.as_str())
+            .filter(|rest| !rest.is_empty()),
+        _ => Some(pod_short_name(owner, pod)).filter(|short| *short != pod),
+    };
+    match suffix {
+        Some(suffix) => format!("{suffix}/{container}"),
+        None => cut_from_start(&format!("{pod}/{container}"), PREFIX_COLUMN_CHARS),
+    }
+}
+
+/// `text` as its last `max_chars` characters behind a `…`; unchanged when it already fits.
+fn cut_from_start(text: &str, max_chars: usize) -> String {
+    let count = text.chars().count();
+    if count <= max_chars {
+        return text.to_owned();
+    }
+    let tail: String = text.chars().skip(count - (max_chars - 1)).collect();
+    format!("…{tail}")
+}
+
 pub(crate) fn scope_covers(scope: &NamespaceScope, namespace: &str) -> bool {
     match scope {
         NamespaceScope::All => true,
@@ -168,7 +197,7 @@ mod tests {
     use cluster::{ControllerRef, PodStatus, ReadyCount, StatusReason};
 
     use super::*;
-    use crate::kind_row::{JOB_KIND, REPLICA_SET_KIND};
+    use crate::kind_row::{DAEMON_SET_KIND, JOB_KIND, REPLICA_SET_KIND};
 
     fn pod(name: &str, ready: (u32, u32), created: Option<&str>) -> PodSummary {
         PodSummary {
@@ -338,6 +367,49 @@ mod tests {
             name: "postgres".to_owned(),
         };
         assert_eq!(pod_short_name(&stateful, "postgres-0"), "postgres-0");
+    }
+
+    #[test]
+    fn origin_label_keeps_what_tells_replicas_apart() {
+        let stateful = PodOwner::Controller {
+            namespace: "ns".to_owned(),
+            kind: STATEFUL_SET_KIND,
+            name: "argocd-application-controller".to_owned(),
+        };
+        assert_eq!(
+            pod_origin_label(&stateful, "argocd-application-controller-1", "app"),
+            "-1/app"
+        );
+        let deployment = PodOwner::Deployment {
+            namespace: "ns".to_owned(),
+            name: "api".to_owned(),
+        };
+        assert_eq!(
+            pod_origin_label(&deployment, "api-7d9f8c-x2k4q", "web"),
+            "x2k4q/web"
+        );
+        let daemon = PodOwner::Controller {
+            namespace: "ns".to_owned(),
+            kind: DAEMON_SET_KIND,
+            name: "node-exporter".to_owned(),
+        };
+        assert_eq!(
+            pod_origin_label(&daemon, "node-exporter-k7x2p", "exporter"),
+            "k7x2p/exporter"
+        );
+    }
+
+    #[test]
+    fn origin_label_without_a_suffix_is_cut_from_the_start() {
+        let stateful = PodOwner::Controller {
+            namespace: "ns".to_owned(),
+            kind: STATEFUL_SET_KIND,
+            name: "argocd-application-controller".to_owned(),
+        };
+        let label = pod_origin_label(&stateful, "argocd-application-controller", "app");
+        assert_eq!(label.chars().count(), PREFIX_COLUMN_CHARS);
+        assert!(label.starts_with('…') && label.ends_with("controller/app"));
+        assert_eq!(pod_origin_label(&stateful, "db", "c"), "db/c");
     }
 
     fn container(name: &str, kind: ContainerKind) -> cluster::ContainerSummary {

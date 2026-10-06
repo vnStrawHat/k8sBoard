@@ -41,8 +41,8 @@ use crate::log_volume::{
     volume_chart,
 };
 use crate::log_workload::{
-    MemberChange, RestartBaselines, container_names, join_slots, member_change, pod_short_name,
-    ranked_pods, restart_marker, rising_restarts, scope_covers,
+    MemberChange, RestartBaselines, container_names, join_slots, member_change, pod_origin_label,
+    pod_short_name, ranked_pods, restart_marker, rising_restarts, scope_covers,
 };
 use crate::pod_drawer::{default_container, kind_tag_text};
 use crate::settings::{AppSettings, LogSettings};
@@ -651,12 +651,15 @@ impl LogTab {
             } else {
                 LATE_JOIN_TAIL_LINES
             };
-            let short = pod_short_name(&owner, &admission.pod).to_owned();
             for container in admission.containers {
                 let open = StreamOpen {
                     namespace: admission.namespace.clone(),
                     pod: admission.pod.clone(),
-                    prefix: SharedString::from(format!("{short}/{container}")),
+                    prefix: SharedString::from(pod_origin_label(
+                        &owner,
+                        &admission.pod,
+                        &container,
+                    )),
                     full_prefix: SharedString::from(format!("{}/{container}", admission.pod)),
                     container,
                     color_slot,
