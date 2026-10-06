@@ -800,10 +800,13 @@ fn waiting_reasons_reach_the_terminal_as_notes(cx: &mut TestAppContext) {
 
 #[test]
 fn waiting_words_read_as_plain_text() {
-    assert_eq!(waiting_text("ContainerCreating"), "Creating container…");
-    assert_eq!(waiting_text("PodInitializing"), "Starting…");
-    assert_eq!(waiting_text("Pulling"), "Pulling image…");
-    assert_eq!(waiting_text("Odd"), "Waiting: Odd");
+    assert_eq!(
+        waiting_text("ContainerCreating", &debug_kind()),
+        "Creating container…"
+    );
+    assert_eq!(waiting_text("PodInitializing", &debug_kind()), "Starting…");
+    assert_eq!(waiting_text("Pulling", &debug_kind()), "Pulling image…");
+    assert_eq!(waiting_text("Odd", &debug_kind()), "Waiting: Odd");
     assert_eq!(starting_text(&debug_kind()), "Starting debug container…");
     assert_eq!(starting_text(&node_kind()), "Starting node shell pod…");
 }
@@ -1064,4 +1067,76 @@ fn the_find_arrows_step_through_the_matches(cx: &mut TestAppContext) {
     assert_eq!(status(cx).as_deref(), Some("2 of 3"));
     click("shell-find-previous", cx);
     assert_eq!(status(cx).as_deref(), Some("1 of 3"));
+}
+
+#[test]
+fn a_node_shell_pod_says_which_image_it_pulls_on_which_node() {
+    for reason in ["ContainerCreating", "Pulling"] {
+        assert_eq!(
+            waiting_text(reason, &node_kind()),
+            format!("Pulling {DEBUG_IMAGE} on wk-03…")
+        );
+    }
+    assert_eq!(waiting_text("PodInitializing", &node_kind()), "Starting…");
+}
+
+#[test]
+fn a_failed_pull_names_the_image_the_node_the_cause_and_where_to_change_it() {
+    assert_eq!(
+        pull_failed_text(&node_kind(), Some("pull access denied")),
+        format!(
+            "Image {DEBUG_IMAGE} could not be pulled on wk-03: pull access denied. Set another \
+             image in the node shell options or Settings › Clusters"
+        )
+    );
+    // No readable event: the sentence still names the image and where to change it.
+    let text = pull_failed_text(&debug_kind(), None);
+    assert_eq!(
+        text,
+        format!(
+            "Image {DEBUG_IMAGE} could not be pulled. Set another image in the debug options or \
+             Settings › Clusters"
+        )
+    );
+}
+
+#[gpui_kit::test]
+fn a_failed_pull_ends_the_node_shell_tab_and_replaces_reconnect(cx: &mut TestAppContext) {
+    let fixture = open_debug_tab(node_kind(), cx);
+    let events = std::rc::Rc::new(RefCell::new(Vec::new()));
+    let seen = std::rc::Rc::clone(&events);
+    cx.update(|cx| {
+        cx.subscribe(&fixture.tab, move |_, event: &ShellEvent, _| {
+            seen.borrow_mut().push(event.clone());
+        })
+        .detach();
+    });
+    fixture
+        .tab
+        .update(cx, |tab, _| tab.is_start_unreported = true);
+    assert_eq!(
+        fixture.tab.read_with(cx, |tab, _| tab.reconnect_texts().0),
+        "Reconnect"
+    );
+    apply(
+        &fixture,
+        ShellUpdate::ImagePullFailed {
+            detail: Some("not found".to_owned()),
+        },
+        cx,
+    );
+    let expected = pull_failed_text(&node_kind(), Some("not found"));
+    assert_eq!(
+        *events.borrow(),
+        [
+            ShellEvent::OpenFailed { error: expected },
+            ShellEvent::Ended
+        ]
+    );
+    assert_eq!(
+        fixture.tab.read_with(cx, |tab, _| tab.reconnect_texts().0),
+        "New node shell…"
+    );
+    let text = screen_text(&fixture, cx).join("\n");
+    assert!(text.contains("could not be pulled on wk-03"), "{text}");
 }

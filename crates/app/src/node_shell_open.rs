@@ -145,6 +145,7 @@ impl AppShell {
             notify(window, cx, format!("{} is not open", cluster.context));
             return;
         };
+        self.record_run_started(cx);
         let name = node_shell_pod_name(node, &random_suffix());
         let request = ObjectRef::new(
             ObjectKind::Pod,

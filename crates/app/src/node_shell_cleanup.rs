@@ -15,6 +15,7 @@ use gpui_kit::{AppContext as _, Context, EntityId, Subscription, Task, Window};
 
 use super::AppShell;
 use super::leaving_work::LeavingWork;
+use super::node_shell_run_history::{RunEvent, record_run_event};
 use super::write_flow::{CleanupOutcome, NodeShellCleanup, notify, run_cleanup};
 use crate::audit_log::{AuditEntry, AuditOutcome, append_audit};
 use crate::cluster_runtime::ClusterRuntime;
@@ -41,6 +42,8 @@ pub(super) struct NodeShellRuns {
     /// The main window was asked to close while pods remained: it closes when the last delete
     /// reports.
     is_closing: bool,
+    /// This run wrote its `started` line to the run history (`node_shell_run_history`).
+    is_run_recorded: bool,
     quit: Option<Subscription>,
 }
 
@@ -65,6 +68,23 @@ impl NodeShellRuns {
 }
 
 impl AppShell {
+    /// The first node shell create of the run is written to the run history, so a pod it leaves
+    /// behind is told from another user's by the next review.
+    pub(super) fn record_run_started(&mut self, cx: &mut Context<Self>) {
+        if self.node_shell_runs.is_run_recorded {
+            return;
+        }
+        let Some(dir) = AppSettings::config_dir(cx) else {
+            return;
+        };
+        match record_run_event(dir, &self.run_id, RunEvent::Started) {
+            Ok(()) => self.node_shell_runs.is_run_recorded = true,
+            Err(error) => {
+                tracing::warn!(kind = ?error.kind(), "could not write the node shell run history")
+            }
+        }
+    }
+
     /// Remembers how to delete the pod behind `tab`. The first call also hooks the app quit.
     pub(super) fn register_cleanup(
         &mut self,
@@ -215,6 +235,11 @@ impl AppShell {
             self.begin_cleanup(cleanup, cx);
         }
         if let Some(dir) = AppSettings::config_dir(cx).map(std::path::Path::to_path_buf) {
+            if self.node_shell_runs.is_run_recorded
+                && let Err(error) = record_run_event(&dir, &self.run_id, RunEvent::Quit)
+            {
+                tracing::warn!(kind = ?error.kind(), "could not write the node shell run history");
+            }
             for entry in self.node_shell_runs.pending.values() {
                 if let Err(error) = append_audit(&dir, entry) {
                     tracing::warn!(kind = ?error.kind(), "could not append to the audit log");

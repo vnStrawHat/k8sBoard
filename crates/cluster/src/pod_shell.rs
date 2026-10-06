@@ -101,6 +101,10 @@ pub enum ShellUpdate {
     Exited(ShellExit),
     /// The session could not open or broke. Nothing follows.
     Failed(ClusterError),
+    /// The container of a debug container or node shell pod could not pull its image. `detail` is
+    /// the cause the kubelet reported in its newest `Failed` event, cut to one short line, when it
+    /// could be read. Nothing follows.
+    ImagePullFailed { detail: Option<String> },
 }
 
 impl fmt::Debug for ShellUpdate {
@@ -114,6 +118,10 @@ impl fmt::Debug for ShellUpdate {
                 .finish(),
             Self::Exited(exit) => formatter.debug_tuple("Exited").field(exit).finish(),
             Self::Failed(error) => formatter.debug_tuple("Failed").field(error).finish(),
+            Self::ImagePullFailed { detail } => formatter
+                .debug_struct("ImagePullFailed")
+                .field("detail", detail)
+                .finish(),
         }
     }
 }

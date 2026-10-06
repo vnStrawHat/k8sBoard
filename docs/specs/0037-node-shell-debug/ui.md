@@ -74,8 +74,9 @@ Continue → `run_guarded(GuardedIntent { cluster, action, label, risk, expected
 | Debug container | `›_ debug · {pod suffix}/{container}` | `›_ debug {name} → {container} · {pod} · {image} · {context}` | hidden |
 | Node shell | `›_ node shell · {node} (debug pod)` (W5) | `›_ node {node} · pod {ns}/{name} · {image} · {context}` | hidden |
 
-- `Connecting` shows `Starting debug container…` / `Starting node shell pod…`, then the waiting reason when known (`Pulling image…`).
-- Reconnect (header) re-opens the options dialog prefilled; it never reuses a pod or container.
+- `Connecting` shows `Starting debug container…` / `Starting node shell pod…`, then the waiting reason when known (`Pulling image…`). A node shell pod says `Pulling {image} on {node}…` while it waits.
+- A pull failure ends the tab with `Image {image} could not be pulled on {node}: {cause}. Set another image in the node shell options or Settings › Clusters` (debug container: `… in the debug options …`, no node).
+- Reconnect (header) re-opens the options dialog prefilled; it never reuses a pod or container. On an ended node shell tab (its pod is deleted) the button reads `New node shell…`.
 - The 8-tab cap of 0036 counts these tabs too.
 
 ## Screenshot (`--screen node-shell-confirm`, `screenshot` feature only)

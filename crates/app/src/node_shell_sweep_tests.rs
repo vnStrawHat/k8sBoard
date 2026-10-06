@@ -21,6 +21,7 @@ fn leftover(name: &str, phase: LeftoverPhase) -> NodeShellLeftover {
         name: name.to_owned(),
         uid: format!("uid-{name}"),
         node: Some("wk-03".to_owned()),
+        instance: Some("otherrun01".to_owned()),
         phase,
         created_at: None,
     }
@@ -209,11 +210,35 @@ fn finished_pods_are_checked_and_running_ones_are_not() {
         (LeftoverPhase::Unknown, false),
     ] {
         assert_eq!(
-            is_checked_by_default(&leftover("x", phase)),
+            is_checked_by_default(&leftover("x", phase), &PastRuns::default()),
             expected,
             "{phase:?}"
         );
     }
+}
+
+#[test]
+fn a_running_pod_of_an_earlier_run_of_this_folder_is_checked_with_a_note() {
+    let runs = PastRuns::parse("otherrun01 quit 2026-10-06T07:41:00Z\n");
+    let rows = review_rows(
+        vec![
+            leftover("mine", LeftoverPhase::Running),
+            NodeShellLeftover {
+                instance: Some("someone-else".to_owned()),
+                ..leftover("theirs", LeftoverPhase::Running)
+            },
+        ],
+        &runs,
+    );
+    assert!(rows[0].is_checked);
+    assert!(
+        rows[0]
+            .note
+            .as_deref()
+            .is_some_and(|note| note.starts_with("left by your session, quit at "))
+    );
+    assert!(!rows[1].is_checked);
+    assert_eq!(rows[1].note, None);
 }
 
 #[test]

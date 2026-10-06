@@ -7,19 +7,21 @@
 //! the shell with it.
 //!
 //! Nothing here logs, traces, or keeps session bytes (C1); the poll keeps fixed reason words and
-//! drops the server's messages, because a registry error can quote credentials.
+//! drops the server's messages. The one exception is a failed image pull, which reads the newest
+//! `Failed` event of the pod once, keeps one masked line, and sends it as `ImagePullFailed`.
 
 use std::pin::Pin;
 use std::time::Duration;
 
 use futures::{Stream, StreamExt, stream};
-use k8s_openapi::api::core::v1::{ContainerState, ContainerStatus, Pod};
+use k8s_openapi::api::core::v1::{ContainerState, ContainerStatus, Event, Pod};
 use kube::Api;
-use kube::api::{AttachParams, AttachedProcess};
+use kube::api::{AttachParams, AttachedProcess, ListParams};
 use tokio::time::Instant;
 
 use crate::connection::{ClusterConnection, ClusterError, run_raw};
 use crate::object_write::{WriteError, WritePolicy};
+use crate::object_yaml::mask_url_userinfo;
 use crate::pod_shell::{
     GridSize, READ_BYTES, ShellInput, ShellUpdate, UpgradeVerb, connect_error, drive_process,
 };
@@ -41,10 +43,10 @@ const WAIT_CAP: Duration = Duration::from_secs(120);
 const NO_SHELL: &str = "the node has no shell; node shell needs sh on the host";
 /// The exit codes of a shell that is missing (127) or cannot run (126).
 const NO_SHELL_EXIT_CODES: [i32; 2] = [126, 127];
+/// The waiting reasons of an image that cannot be pulled; the user is told which image and why.
+const IMAGE_PULL_REASONS: [&str; 2] = ["ErrImagePull", "ImagePullBackOff"];
 /// Waiting reasons that will not clear by themselves.
-const FATAL_WAITING_REASONS: [&str; 6] = [
-    "ErrImagePull",
-    "ImagePullBackOff",
+const FATAL_WAITING_REASONS: [&str; 4] = [
     "InvalidImageName",
     "CreateContainerConfigError",
     "CreateContainerError",
@@ -110,6 +112,8 @@ pub(crate) enum Readiness {
     Waiting(Option<String>),
     Running,
     Failed(String),
+    /// The image could not be pulled (`ErrImagePull` or `ImagePullBackOff`).
+    ImagePullFailed,
 }
 
 type Input = Box<dyn Stream<Item = ShellInput> + Send + Unpin>;
@@ -203,6 +207,11 @@ async fn step(phase: Phase) -> Option<(ShellUpdate, Phase)> {
                     Readiness::Failed(message) => {
                         return Some(failed(ClusterError::Rendered { message }));
                     }
+                    Readiness::ImagePullFailed => {
+                        let detail = pull_failure_detail(&wait.connection, &wait.request).await;
+                        let update = ShellUpdate::ImagePullFailed { detail };
+                        return Some((update, Phase::Finished(None)));
+                    }
                     Readiness::Waiting(reason) => {
                         if wait.started.elapsed() >= WAIT_CAP {
                             return Some(failed(timeout_error(wait.reason.as_deref())));
@@ -242,6 +251,62 @@ async fn step(phase: Phase) -> Option<(ShellUpdate, Phase)> {
             Phase::Finished(None) => return None,
         };
     }
+}
+
+/// The cause of a failed pull from the newest `Failed` event of the pod, or `None` when the events
+/// cannot be read or say nothing: the user is still told the image could not be pulled. This read
+/// is best effort, so its own failure is swallowed.
+async fn pull_failure_detail(
+    connection: &ClusterConnection,
+    request: &AttachRequest,
+) -> Option<String> {
+    let api: Api<Event> = Api::namespaced(connection.client().clone(), &request.namespace);
+    let params = ListParams::default().fields(&format!(
+        "involvedObject.name={},reason=Failed",
+        request.pod
+    ));
+    let events = connection
+        .run("reading the image pull events", api.list(&params))
+        .await
+        .ok()?;
+    let newest = events
+        .items
+        .iter()
+        .filter(|event| {
+            event
+                .message
+                .as_deref()
+                .is_some_and(|message| message.starts_with(PULL_FAILURE_PREFIX))
+        })
+        .max_by_key(|event| event.last_timestamp.as_ref().map(|time| time.0))?;
+    pull_cause(newest.message.as_deref()?)
+}
+
+/// What the kubelet starts every pull failure message with.
+const PULL_FAILURE_PREFIX: &str = "Failed to pull image \"";
+/// The longest cause kept.
+const MAX_CAUSE_CHARS: usize = 200;
+
+/// The cause of a kubelet pull failure message on one line: the head repeats the image name, which
+/// the app already shows, so it is cut off. Credentials in a URL are masked.
+fn pull_cause(message: &str) -> Option<String> {
+    let tail = message
+        .split_once("\": ")
+        .map_or(message, |(_, tail)| tail)
+        .lines()
+        .next()?
+        .trim();
+    let masked = mask_url_userinfo(tail);
+    let tail = masked.as_deref().unwrap_or(tail);
+    let mut cause: String = tail
+        .chars()
+        .filter(|character| !character.is_control())
+        .take(MAX_CAUSE_CHARS)
+        .collect();
+    if tail.chars().count() > MAX_CAUSE_CHARS {
+        cause.push('…');
+    }
+    (!cause.is_empty()).then_some(cause)
 }
 
 fn failed(error: ClusterError) -> (ShellUpdate, Phase) {
@@ -369,6 +434,12 @@ fn state_readiness(state: &ContainerState, wait: AttachWait) -> Readiness {
         .and_then(|waiting| waiting.reason.as_deref())
         .map(fixed_word)
         .filter(|reason| !reason.is_empty());
+    if reason
+        .as_deref()
+        .is_some_and(|reason| IMAGE_PULL_REASONS.contains(&reason))
+    {
+        return Readiness::ImagePullFailed;
+    }
     match reason {
         Some(reason) if FATAL_WAITING_REASONS.contains(&reason.as_str()) => {
             Readiness::Failed(format!("the container could not start: {reason}"))

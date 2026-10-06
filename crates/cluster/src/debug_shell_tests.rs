@@ -70,6 +70,12 @@ fn readiness_table() {
             Readiness::Failed(format!("the container could not start: {reason}"))
         );
     }
+    for reason in IMAGE_PULL_REASONS {
+        assert_eq!(
+            readiness(Some(&pod(waiting(reason))), "shell", node),
+            Readiness::ImagePullFailed
+        );
+    }
     for code in NO_SHELL_EXIT_CODES {
         assert_eq!(
             readiness(Some(&pod(terminated(code))), "shell", node),
@@ -343,7 +349,7 @@ async fn wait_times_out_after_120_s_with_the_last_reason() {
 
 #[tokio::test(start_paused = true)]
 async fn a_fatal_waiting_reason_fails_at_once() {
-    let (connection, api, _) = scripted(vec![waiting("ImagePullBackOff")], 403);
+    let (connection, api, _) = scripted(vec![waiting("CreateContainerConfigError")], 403);
     let updates: Vec<_> = connection
         .attach_shell(
             AttachPermit::for_tests(),
@@ -354,11 +360,103 @@ async fn a_fatal_waiting_reason_fails_at_once() {
         .await;
     match updates.as_slice() {
         [ShellUpdate::Failed(ClusterError::Rendered { message })] => {
-            assert_eq!(message, "the container could not start: ImagePullBackOff");
+            assert_eq!(
+                message,
+                "the container could not start: CreateContainerConfigError"
+            );
         }
         other => panic!("unexpected updates: {other:?}"),
     }
     assert_eq!(api.requests().len(), 1);
+}
+
+/// A fake cluster whose pod waits with `ErrImagePull` and whose events list answers `events`.
+fn pull_failing(events: Value) -> (ClusterConnection, FakeApi) {
+    FakeApi::connection(WritePolicy::Allowed, move |request| {
+        if request.path.ends_with("/events") {
+            return (200, events.to_string());
+        }
+        (
+            200,
+            pod_with("containerStatuses", waiting("ErrImagePull")).to_string(),
+        )
+    })
+}
+
+fn pull_event(message: &str, last: &str) -> Value {
+    json!({
+        "metadata": {"name": format!("e-{last}"), "namespace": "kube-system"},
+        "reason": "Failed", "type": "Warning", "message": message, "lastTimestamp": last,
+    })
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_pull_failure_reports_the_newest_kubelet_cause_on_one_masked_line() {
+    let old = pull_event(
+        "Failed to pull image \"x\": old cause",
+        "2026-10-06T07:00:00Z",
+    );
+    let new = pull_event(
+        "Failed to pull image \"x\": rpc error: pull access denied at https://user:pw@reg.io/v2\nsecond line",
+        "2026-10-06T07:01:00Z",
+    );
+    let (connection, api) = pull_failing(json!({"apiVersion": "v1", "kind": "EventList",
+        "metadata": {}, "items": [new, old]}));
+    let updates: Vec<_> = connection
+        .attach_shell(
+            AttachPermit::for_tests(),
+            request(AttachWait::NodeShellPod),
+            blocked_input(),
+        )
+        .collect()
+        .await;
+    match updates.as_slice() {
+        [ShellUpdate::ImagePullFailed { detail }] => {
+            let detail = detail.as_deref().expect("a cause");
+            assert!(
+                detail.starts_with("rpc error: pull access denied"),
+                "{detail}"
+            );
+            assert!(!detail.contains("pw"), "{detail}");
+            assert!(!detail.contains("second line"), "{detail}");
+        }
+        other => panic!("unexpected updates: {other:?}"),
+    }
+    let events = api
+        .requests()
+        .into_iter()
+        .find(|request| request.path.ends_with("/events"))
+        .expect("the events were read");
+    assert_eq!(events.method, "GET");
+    assert!(events.has_query_key("fieldSelector"), "{}", events.query);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_pull_failure_without_readable_events_still_reports_the_failure() {
+    let (connection, _api) = pull_failing(json!({"kind": "Status", "code": 403}));
+    let updates: Vec<_> = connection
+        .attach_shell(
+            AttachPermit::for_tests(),
+            request(AttachWait::NodeShellPod),
+            blocked_input(),
+        )
+        .collect()
+        .await;
+    assert!(
+        matches!(
+            updates.as_slice(),
+            [ShellUpdate::ImagePullFailed { detail: None }]
+        ),
+        "{updates:?}"
+    );
+}
+
+#[test]
+fn a_long_pull_cause_is_cut() {
+    let message = format!("Failed to pull image \"x\": {}", "e".repeat(500));
+    let cause = pull_cause(&message).expect("a cause");
+    assert_eq!(cause.chars().count(), MAX_CAUSE_CHARS + 1);
+    assert!(cause.ends_with('…'));
 }
 
 #[tokio::test(start_paused = true)]

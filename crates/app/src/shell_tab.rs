@@ -308,7 +308,9 @@ impl ShellTab {
         match update {
             // Only a debug start waits for its container; an exec never sends it.
             ShellUpdate::Waiting(reason) => {
-                self.session.borrow_mut().note(&waiting_text(&reason));
+                self.session
+                    .borrow_mut()
+                    .note(&waiting_text(&reason, &self.kind));
             }
             ShellUpdate::Started => {
                 self.state = ShellState::Live;
@@ -324,22 +326,28 @@ impl ShellTab {
                 let end = exit_end(&exit);
                 self.finish(end, cx);
             }
-            ShellUpdate::Failed(error) => {
-                let reason = error_text(&error);
-                if std::mem::take(&mut self.is_start_unreported) {
-                    cx.emit(ShellEvent::OpenFailed {
-                        error: reason.clone(),
-                    });
-                }
-                self.finish(
-                    ShellEnd::Failed {
-                        reason: reason.into(),
-                    },
-                    cx,
-                );
+            ShellUpdate::Failed(error) => self.fail(error_text(&error), cx),
+            ShellUpdate::ImagePullFailed { detail } => {
+                self.fail(pull_failed_text(&self.kind, detail.as_deref()), cx);
             }
         }
         cx.notify();
+    }
+
+    /// The session broke or could not open: the first failure of a start is reported once, then
+    /// the tab ends.
+    fn fail(&mut self, reason: String, cx: &mut Context<Self>) {
+        if std::mem::take(&mut self.is_start_unreported) {
+            cx.emit(ShellEvent::OpenFailed {
+                error: reason.clone(),
+            });
+        }
+        self.finish(
+            ShellEnd::Failed {
+                reason: reason.into(),
+            },
+            cx,
+        );
     }
 
     /// The stream ended without `Exited` or `Failed`: the owner dropped it, or the runtime stopped.
@@ -885,16 +893,33 @@ impl ShellTab {
                     .on_click(cx.listener(|tab, _, _, cx| tab.clear(cx))),
             )
             .children((self.kind != ShellKind::Attach).then(|| {
+                let (label, tooltip) = self.reconnect_texts();
                 Button::new("shell-reconnect")
                     .ghost()
                     .small()
-                    .label("Reconnect")
-                    .tooltip("Open a new shell in this container; the screen is kept")
+                    .label(label)
+                    .tooltip(tooltip)
                     .disabled(self.state == ShellState::Connecting)
                     .on_click(cx.listener(|tab, _, window, cx| {
                         tab.request_reconnect(tab.command, window, cx);
                     }))
             }))
+    }
+
+    /// The label and tooltip of the Reconnect button. A node shell pod is deleted when its tab ends,
+    /// so there is nothing to reconnect to: the button then reopens the node shell options, which
+    /// is where another image is set.
+    fn reconnect_texts(&self) -> (&'static str, &'static str) {
+        if self.kind.is_node_shell() && matches!(self.state, ShellState::Ended(_)) {
+            return (
+                "New node shell…",
+                "The pod of this shell is deleted; open the node shell options again",
+            );
+        }
+        (
+            "Reconnect",
+            "Open a new shell in this container; the screen is kept",
+        )
     }
 
     /// `Shell: Auto ▾`: a change reconnects with the new shell.
@@ -1027,14 +1052,38 @@ fn starting_text(kind: &ShellKind) -> &'static str {
 }
 
 /// The dim line for a waiting reason the pod reports. Anything unknown is shown as the word itself:
-/// the reason is a fixed CamelCase word (`cluster::debug_shell` drops the server's messages).
-fn waiting_text(reason: &str) -> String {
+/// the reason is a fixed CamelCase word (`cluster::debug_shell` drops the server's messages). A node
+/// shell pod is created on its node and waits mostly for its image, so it says which.
+fn waiting_text(reason: &str, kind: &ShellKind) -> String {
+    if let ShellKind::NodeShell { node, image } = kind
+        && matches!(reason, "ContainerCreating" | "Pulling")
+    {
+        return format!("Pulling {image} on {node}…");
+    }
     match reason {
         "ContainerCreating" => "Creating container…".to_owned(),
         "PodInitializing" => "Starting…".to_owned(),
-        "Pulling" | "ErrImagePull" | "ImagePullBackOff" => "Pulling image…".to_owned(),
+        "Pulling" => "Pulling image…".to_owned(),
         other => format!("Waiting: {other}"),
     }
+}
+
+/// What the tab says when the image of a debug container or node shell pod could not be pulled:
+/// the image, the node, the kubelet's cause when it was read, and where to change the image.
+fn pull_failed_text(kind: &ShellKind, detail: Option<&str>) -> String {
+    let (image, place, options) = match kind {
+        ShellKind::NodeShell { node, image } => {
+            (image.as_str(), format!(" on {node}"), "node shell options")
+        }
+        ShellKind::Debug { image, .. } => (image.as_str(), String::new(), "debug options"),
+        ShellKind::Exec | ShellKind::Attach => ("the image", String::new(), "options"),
+    };
+    let cause = detail
+        .map(|detail| format!(": {detail}"))
+        .unwrap_or_default();
+    format!(
+        "Image {image} could not be pulled{place}{cause}. Set another image in the {options} or Settings › Clusters"
+    )
 }
 
 /// Shown once the attach is up: a shell that printed no prompt yet looks stuck.

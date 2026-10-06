@@ -22,10 +22,11 @@ impl ClusterConnection {
 - **Kill switch first**: policy `Blocked` → one `Failed` with the 0030 `WritesBlocked` text, zero requests (as 0036 `pod_shell`).
 - **Wait** = a 1 s GET poll of the pod (`connection.run`, read-only) under a 120 s cap, behind the same private seam as the attach (tests script the GET answers through `FakeApi`; no watcher). Pure `fn readiness(pod: Option<&Pod>, container: &str, wait: AttachWait) -> Readiness` with `Readiness::{Waiting(Option<String>), Running, Failed(String)}`:
   - a running state → `Running`;
-  - waiting reason `ErrImagePull`, `ImagePullBackOff`, `InvalidImageName`, `CreateContainerConfigError`, `CreateContainerError`, `RunContainerError` → `Failed(reason)`;
+  - waiting reason `ErrImagePull` or `ImagePullBackOff` → `ImagePullFailed`: the poll reads the pod's events once (`list events`, field selector `involvedObject.name`), keeps the cause of the newest `Failed to pull image` event as one masked line of at most 200 characters, and sends `ShellUpdate::ImagePullFailed { detail }` (a failed read gives `detail: None`);
+  - waiting reason `InvalidImageName`, `CreateContainerConfigError`, `CreateContainerError`, `RunContainerError` → `Failed(reason)`;
   - node shell terminated with exit code 126 or 127 → `Failed("the node has no shell; node shell needs sh on the host")`; any other termination or pod phase `Failed`/`Succeeded` → `Failed`; pod gone → `Failed("the pod no longer exists")`;
   - cap reached → `Failed("container did not start within 120 s ({last waiting reason})")`.
-  Waiting and termination **messages** are dropped (registry errors can quote credentials); reasons are fixed CamelCase words.
+  Waiting and termination **messages** are dropped (registry errors can quote credentials); reasons are fixed CamelCase words. The one exception is the pull event cause above (URL userinfo masked).
 - **Attach**: `Api::<Pod>::attach(pod, &AttachParams::interactive_tty().container(c))` inside 0030 `run_raw` (so `UpgradeConnection` reaches `upgrade_error` before `classify_error`), then `Started`, the initial `Resize`, and 0036 `drive` (made `pub(crate)`). 0036 `upgrade_error` gains the verb name (`exec`, `attach`).
 - Allow-list row: `pods/attach` (pod-specs.md); the documentation grep gains `debug_shell.rs`.
 
@@ -74,5 +75,5 @@ The ephemeral container needs no delete: dropping the attach closes stdin and `s
 
 - Every app run has a random `instance` id (`random_suffix` × 2); node shell pods carry `k8sboard.io/instance: {id}`.
 - When a slot first goes Live (0027 `on_first_live(cluster)`) and `list pods` is allowed there: one read-only list over the session scope with selector `app.kubernetes.io/managed-by=k8sboard,k8sboard.io/purpose=node-shell,k8sboard.io/instance!={id}`, **any phase**.
-- `n > 0` → a notice `{n} leftover node shell pods` with `Review…`: a dialog lists `{ns}/{name}`, node, phase, age, with the warning `Running pods may belong to another k8sBoard window or user.`; checkboxes default on for finished pods, off for running ones; `Delete selected` is the click confirmation.
+- `n > 0` → a notice `{n} leftover node shell pods` with `Review…`: a dialog lists `{ns}/{name}`, node, phase, age, with the warning `Running pods may belong to another k8sBoard window or user.`; checkboxes default on for finished pods and for pods of an earlier run of this settings folder (`<config>/node-shell-runs.log`: `<run id> started|quit <time>`, written when a run creates its first node shell pod and when it quits), whose row says `left by your session, quit at 14:41`; other running pods stay off; `Delete selected` is the click confirmation.
 - Deletes go through `run_cleanup` (one audit line each), only when the cluster is unlocked and `delete pods` is allowed; otherwise the button shows the gate reason. Never automatic.

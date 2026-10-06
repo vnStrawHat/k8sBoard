@@ -21,11 +21,13 @@ use gpui_kit::{
 };
 
 use super::AppShell;
+use super::node_shell_run_history::PastRuns;
 use super::write_flow::{CleanupAudit, NodeShellCleanup};
 use crate::age::format_age;
 use crate::cluster_registry::ClusterRef;
 use crate::cluster_runtime::ClusterRuntime;
 use crate::cluster_session::AccessState;
+use crate::settings::AppSettings;
 use crate::write_guard::{ClusterGuard, WriteLock};
 
 const DIALOG_WIDTH: f32 = 560.;
@@ -84,9 +86,10 @@ fn may_list_pods(access: &AccessState) -> bool {
     }
 }
 
-/// Finished pods are checked by default; a running one may be someone else's.
-pub(crate) fn is_checked_by_default(leftover: &NodeShellLeftover) -> bool {
-    leftover.phase.is_finished()
+/// Finished pods are checked by default, and so are the pods of an earlier run of this settings
+/// folder (the user's own); any other running pod may be someone else's.
+pub(crate) fn is_checked_by_default(leftover: &NodeShellLeftover, runs: &PastRuns) -> bool {
+    leftover.phase.is_finished() || runs.owns(leftover)
 }
 
 /// The delete of one listed pod, or `None` when its name or uid does not fit the write path.
@@ -188,16 +191,13 @@ impl AppShell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let runs = AppSettings::config_dir(cx)
+            .map(PastRuns::load)
+            .unwrap_or_default();
         let review = LeftoverReview {
             shell: cx.weak_entity(),
             cluster,
-            rows: found
-                .into_iter()
-                .map(|leftover| ReviewRow {
-                    is_checked: is_checked_by_default(&leftover),
-                    leftover,
-                })
-                .collect(),
+            rows: review_rows(found, &runs),
             #[cfg(feature = "screenshot")]
             is_fixture: false,
         };
@@ -258,6 +258,20 @@ impl AppShell {
 struct ReviewRow {
     leftover: NodeShellLeftover,
     is_checked: bool,
+    /// `left by your session, quit at 14:41` for a pod of an earlier run of this settings folder.
+    note: Option<String>,
+}
+
+fn review_rows(found: Vec<NodeShellLeftover>, runs: &PastRuns) -> Vec<ReviewRow> {
+    let zone = jiff::tz::TimeZone::system();
+    found
+        .into_iter()
+        .map(|leftover| ReviewRow {
+            is_checked: is_checked_by_default(&leftover, runs),
+            note: runs.note(&leftover, &zone),
+            leftover,
+        })
+        .collect()
 }
 
 /// The body of the review dialog.
@@ -310,7 +324,7 @@ impl Render for LeftoverReview {
                 phase_text(leftover),
                 format_age(leftover.created_at, now)
             );
-            h_flex()
+            let line = h_flex()
                 .gap_2()
                 .items_center()
                 .child(
@@ -332,7 +346,13 @@ impl Render for LeftoverReview {
                         .font_family(mono.clone())
                         .child(format!("{}/{}", leftover.namespace, leftover.name)),
                 )
-                .child(div().text_xs().text_color(muted).child(detail))
+                .child(div().text_xs().text_color(muted).child(detail));
+            // Indented under the name, past the checkbox.
+            let note = row
+                .note
+                .as_ref()
+                .map(|note| div().pl_6().text_xs().text_color(muted).child(note.clone()));
+            v_flex().child(line).children(note)
         });
         let weak = cx.weak_entity();
         v_flex()
@@ -401,60 +421,67 @@ fn phase_text(leftover: &NodeShellLeftover) -> &'static str {
 #[cfg(feature = "screenshot")]
 impl AppShell {
     /// `--screen leftover-sweep-fixture`: the review dialog over four fixed pods of a fixed cluster,
-    /// two finished (checked) and two not. It reads no gate and `Delete selected` finds no cluster,
-    /// so it can never delete a pod.
+    /// two finished (checked), one running that an earlier run of this settings folder left
+    /// (checked, with its note), and one pending of an unknown run (unchecked). It reads no gate and
+    /// `Delete selected` finds no cluster, so it can never delete a pod.
     pub(super) fn open_leftover_fixture(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         use cluster::LeftoverPhase;
 
         let now = jiff::Timestamp::now();
-        let row = |name: &str, node: &str, phase: LeftoverPhase, minutes: i64| {
-            let leftover = NodeShellLeftover {
+        let quit_at = now
+            .checked_sub(jiff::SignedDuration::from_mins(10))
+            .unwrap_or(now);
+        let runs = PastRuns::parse(&format!("fixtureprev quit {quit_at}\n"));
+        let row = |name: &str, node: &str, phase: LeftoverPhase, minutes: i64, run: &str| {
+            NodeShellLeftover {
                 namespace: "kube-system".to_owned(),
                 name: name.to_owned(),
                 uid: format!("uid-{name}"),
                 node: Some(node.to_owned()),
+                instance: Some(run.to_owned()),
                 phase,
                 created_at: now
                     .checked_sub(jiff::SignedDuration::from_mins(minutes))
                     .ok(),
-            };
-            ReviewRow {
-                is_checked: is_checked_by_default(&leftover),
-                leftover,
             }
         };
+        let found = vec![
+            row(
+                "k8sboard-node-shell-wk-03-x7k2q",
+                "wk-03",
+                LeftoverPhase::Succeeded,
+                190,
+                "otherrun01",
+            ),
+            row(
+                "k8sboard-node-shell-wk-01-m4d9z",
+                "wk-01",
+                LeftoverPhase::Failed,
+                75,
+                "otherrun01",
+            ),
+            row(
+                "k8sboard-node-shell-wk-02-q8r5t",
+                "wk-02",
+                LeftoverPhase::Running,
+                12,
+                "fixtureprev",
+            ),
+            row(
+                "k8sboard-node-shell-wk-04-h2j6c",
+                "wk-04",
+                LeftoverPhase::Pending,
+                3,
+                "otherrun02",
+            ),
+        ];
         let review = LeftoverReview {
             shell: cx.weak_entity(),
             cluster: ClusterRef {
                 kubeconfig: std::path::PathBuf::from("fixture.yaml"),
                 context: crate::screenshot::SHELL_FIXTURE_CLUSTER.to_owned(),
             },
-            rows: vec![
-                row(
-                    "k8sboard-node-shell-wk-03-x7k2q",
-                    "wk-03",
-                    LeftoverPhase::Succeeded,
-                    190,
-                ),
-                row(
-                    "k8sboard-node-shell-wk-01-m4d9z",
-                    "wk-01",
-                    LeftoverPhase::Failed,
-                    75,
-                ),
-                row(
-                    "k8sboard-node-shell-wk-02-q8r5t",
-                    "wk-02",
-                    LeftoverPhase::Running,
-                    12,
-                ),
-                row(
-                    "k8sboard-node-shell-wk-04-h2j6c",
-                    "wk-04",
-                    LeftoverPhase::Pending,
-                    3,
-                ),
-            ],
+            rows: review_rows(found, &runs),
             is_fixture: true,
         };
         Self::open_review_dialog(review, window, cx);

@@ -57,6 +57,8 @@ pub struct NodeShellLeftover {
     /// The delete's precondition: another pod that took the name later is never deleted.
     pub uid: String,
     pub node: Option<String>,
+    /// The `k8sboard.io/instance` label: the id of the app run that created the pod.
+    pub instance: Option<String>,
     pub phase: LeftoverPhase,
     pub created_at: Option<jiff::Timestamp>,
 }
@@ -88,6 +90,7 @@ fn leftover_of(pod: &Pod, instance: &str) -> Option<NodeShellLeftover> {
         name: name.to_owned(),
         uid: meta.uid.clone().filter(|uid| !uid.is_empty())?,
         node: pod.spec.as_ref().and_then(|spec| spec.node_name.clone()),
+        instance: labels.get(INSTANCE_LABEL).cloned(),
         phase: LeftoverPhase::of(
             pod.status
                 .as_ref()

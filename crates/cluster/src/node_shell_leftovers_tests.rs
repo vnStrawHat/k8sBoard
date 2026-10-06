@@ -97,6 +97,7 @@ async fn running_and_finished_pods_of_other_runs_are_listed_and_this_runs_are_no
     assert!(found[1].phase.is_finished());
     assert_eq!(found[0].uid, "uid-k8sboard-node-shell-wk-03-aaaaa");
     assert_eq!(found[0].node.as_deref(), Some("wk-03"));
+    assert_eq!(found[0].instance.as_deref(), Some("other-run"));
     assert!(found[0].created_at.is_some());
 }
 

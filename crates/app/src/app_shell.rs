@@ -167,6 +167,8 @@ pub(crate) mod node_editor;
 mod node_shell_cleanup;
 #[path = "node_shell_open.rs"]
 mod node_shell_open;
+#[path = "node_shell_run_history.rs"]
+mod node_shell_run_history;
 #[path = "node_shell_sweep.rs"]
 mod node_shell_sweep;
 #[path = "object_delete.rs"]
