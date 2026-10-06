@@ -225,14 +225,11 @@ fn pods_row_counts_pods_that_take_room() {
 }
 
 #[test]
-fn pods_row_note_without_all_scope() {
+fn pods_row_without_all_scope_shows_capacity_only() {
     let nodes = two_nodes();
     let rows = cluster_capacity(&inputs(&nodes, None, None));
-    assert_eq!(
-        rows[2].note().as_deref(),
-        Some("Pod counts need all namespaces")
-    );
-    assert_eq!(label(&rows[2]), "— / 220");
+    assert_eq!(rows[2].note(), None);
+    assert_eq!(label(&rows[2]), "220 capacity");
 }
 
 fn usage(claim: &str, used: Option<u64>, capacity: Option<u64>) -> PvcUsage {
@@ -352,7 +349,7 @@ fn pods_loading_shows_dash_without_scope_note() {
     assert_eq!(label(&rows[0]), "— used · — req · 8 cores");
     assert_eq!(rows[0].note(), None);
     assert!(!rows[0].has_requested());
-    assert_eq!(label(&rows[2]), "— / 220");
+    assert_eq!(label(&rows[2]), "— running / 220 capacity");
     assert_eq!(rows[2].note(), None);
 }
 
@@ -387,12 +384,24 @@ fn zero_allocatable_omits_row() {
 }
 
 #[test]
-fn cpu_label_prints_unit_once() {
+fn compute_label_prints_a_unit_on_every_figure() {
     let nodes = [node("a", "168", "16Gi", "110")];
     let pods = [pod("p", "a", StatusReason::Running, "131", "1Gi")];
     let usage = history(&[sample("a", 104_000, 1)]);
     let rows = cluster_capacity(&inputs(&nodes, Some(&pods), Some(&usage)));
-    assert_eq!(label(&rows[0]), "104 used · 131 req · 168 cores");
+    assert_eq!(
+        label(&rows[0]),
+        "104 cores used · 131 cores req · 168 cores"
+    );
+}
+
+#[test]
+fn memory_label_prints_a_unit_on_every_figure() {
+    let nodes = [node("a", "168", "101Gi", "110")];
+    let pods = [pod("p", "a", StatusReason::Running, "1", "30Gi")];
+    let usage = history(&[sample("a", 1_000, 65)]);
+    let rows = cluster_capacity(&inputs(&nodes, Some(&pods), Some(&usage)));
+    assert_eq!(label(&rows[1]), "65Gi used · 30Gi req · 101Gi");
 }
 
 #[test]
@@ -400,7 +409,7 @@ fn label_drops_req_without_requests() {
     let nodes = [node("a", "168", "16Gi", "110")];
     let usage = history(&[sample("a", 104_000, 1)]);
     let rows = cluster_capacity(&inputs(&nodes, None, Some(&usage)));
-    assert_eq!(label(&rows[0]), "104 used · 168 cores");
+    assert_eq!(label(&rows[0]), "104 cores used · 168 cores");
     let rows = cluster_capacity(&inputs(&nodes, None, None));
     assert_eq!(label(&rows[0]), "— used · 168 cores");
 }
@@ -411,7 +420,7 @@ fn pods_label_groups_digits() {
         taking_room: FromPods::Known(1_284),
         allocatable: 4_620,
     };
-    assert_eq!(label(&row), "1,284 / 4,620");
+    assert_eq!(label(&row), "1,284 running / 4,620 capacity");
 }
 
 #[test]

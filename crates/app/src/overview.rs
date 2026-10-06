@@ -53,6 +53,8 @@ const REGION_LABEL: &str = "topology.kubernetes.io/region=";
 const WIDE_PANEL: f32 = 560.;
 const NARROW_PANEL: f32 = 360.;
 const LEGEND_SWATCH: f32 = 9.;
+/// Under a namespace scope the pods list is narrowed, so requests and pod counts are not shown.
+const SCOPED_CAPACITY_NOTE: &str = "Cluster capacity is shown for all namespaces. Requests and pod counts need the all-namespaces scope.";
 
 /// `{context} · Kubernetes {git_version}`, plus ` · {region}` when known.
 pub(crate) fn headline_text(
@@ -135,6 +137,21 @@ struct StatsText {
     namespaces: String,
     /// Some node is not Ready, so the nodes part is toned.
     has_unready_nodes: bool,
+    /// A namespace scope is set: the pods part follows it, the other two stay cluster-wide.
+    is_scoped: bool,
+}
+
+impl StatsText {
+    /// The line's pieces in display order, separators included. A scope puts the cluster figures
+    /// together and sets the scoped pods apart: `cluster: 4 / 4 nodes ready · 20 namespaces — pg:
+    /// 13 / 13 pods running`.
+    fn pieces(&self) -> [&str; 5] {
+        if self.is_scoped {
+            [&self.nodes, "·", &self.namespaces, "—", &self.pods]
+        } else {
+            [&self.nodes, "·", &self.pods, "·", &self.namespaces]
+        }
+    }
 }
 
 fn stats_parts(live: &LiveCluster) -> StatsText {
@@ -155,13 +172,15 @@ fn stats_parts(live: &LiveCluster) -> StatsText {
             },
         )
     };
-    let pods_scope = match &live.scope {
-        NamespaceScope::All => String::new(),
-        _ => format!(" in {}", live.scope_label()),
+    // Nodes and namespaces are cluster-wide whatever the scope; only the pods follow it.
+    let (nodes_prefix, pods_prefix) = match &live.scope {
+        NamespaceScope::All => (String::new(), String::new()),
+        _ => ("cluster: ".to_owned(), format!("{}: ", live.scope_label())),
     };
     StatsText {
-        nodes: format!("{} nodes ready", figure(stats.nodes)),
-        pods: format!("{} pods running{pods_scope}", figure(stats.pods)),
+        is_scoped: live.scope != NamespaceScope::All,
+        nodes: format!("{nodes_prefix}{} nodes ready", figure(stats.nodes)),
+        pods: format!("{pods_prefix}{} pods running", figure(stats.pods)),
         namespaces: format!(
             "{} namespaces",
             stats
@@ -176,8 +195,7 @@ fn stats_parts(live: &LiveCluster) -> StatsText {
 
 /// The stats line as one string, for the report.
 pub(crate) fn stats_text(live: &LiveCluster) -> String {
-    let parts = stats_parts(live);
-    format!("{} · {} · {}", parts.nodes, parts.pods, parts.namespaces)
+    stats_parts(live).pieces().join(" ")
 }
 
 /// The muted line under the header (user-requested, not in W3). A node count below the total is
@@ -195,15 +213,19 @@ pub(crate) fn stats_line(live: &LiveCluster, cx: &App) -> impl IntoElement {
         .py_1()
         .text_xs()
         .text_color(cx.theme().muted_foreground)
-        .child(
-            div()
-                .when_some(nodes_tone, |this, color| this.text_color(color))
-                .child(parts.nodes),
+        .children(
+            parts
+                .pieces()
+                .into_iter()
+                .enumerate()
+                .map(|(index, piece)| {
+                    div()
+                        .when(index == 0, |this| {
+                            this.when_some(nodes_tone, |this, color| this.text_color(color))
+                        })
+                        .child(piece.to_owned())
+                }),
         )
-        .child("·")
-        .child(parts.pods)
-        .child("·")
-        .child(parts.namespaces)
 }
 
 /// What the panels read besides the clock.
@@ -410,6 +432,7 @@ fn capacity_rows(live: &LiveCluster, rows: &[CapacityRow], cx: &App) -> AnyEleme
         .children(rows.iter().enumerate().map(|(index, row)| {
             capacity_row(index, row, &scope_suffix, metrics_reason.as_deref(), cx)
         }))
+        .children((live.scope != NamespaceScope::All).then(|| muted_text(SCOPED_CAPACITY_NOTE, cx)))
         .into_any_element()
 }
 
@@ -1120,6 +1143,25 @@ mod tests {
         ];
         let stats = cluster_stats(None, Some(&pods), None);
         assert_eq!(stats.pods, Some(Counted { ready: 2, total: 4 }));
+    }
+
+    #[test]
+    fn scoped_stats_separate_cluster_from_namespace_figures() {
+        let text = |is_scoped| StatsText {
+            nodes: "4 / 4 nodes ready".to_owned(),
+            pods: "13 / 13 pods running".to_owned(),
+            namespaces: "20 namespaces".to_owned(),
+            has_unready_nodes: false,
+            is_scoped,
+        };
+        assert_eq!(
+            text(false).pieces().join(" "),
+            "4 / 4 nodes ready · 13 / 13 pods running · 20 namespaces"
+        );
+        assert_eq!(
+            text(true).pieces().join(" "),
+            "4 / 4 nodes ready · 20 namespaces — 13 / 13 pods running"
+        );
     }
 
     #[test]

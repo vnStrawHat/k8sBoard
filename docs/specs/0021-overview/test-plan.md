@@ -53,7 +53,7 @@
 - The stats line under the header is user-requested and not in W3; do not flag it.
 - `--screen overview` at 1320 px: two columns at ≈ 1.5 : 1, with Needs attention top-left, Capacity top-right, Nodes bottom-left, and Recent changes bottom-right (W3 pins 1–4). Before step 3, row 1 holds only Capacity.
 - `--screen overview --window-width 1000` (step 3): one column, in the order Needs attention, Capacity, Nodes, Recent changes. No horizontal overflow; rows truncate with an ellipsis.
-- Capacity: CPU and Memory show three layers (used darker than requested), the legend matches, labels are right-aligned mono with one unit (`104 used · 131 req · 168 cores`).
+- Capacity: CPU and Memory show three layers (used darker than requested), the legend matches, labels are right-aligned mono with a unit on every figure (`104 cores used · 131 cores req · 168 cores`).
 - Heatmap: square cells, intensity varies, NotReady outlined in the Bad tone, header `{n} · colored by CPU`.
 - Recent changes: time | text | who columns, and the muted footnote `… events kept ~1 h by the API server`.
 - Needs attention rows: the pill in a 118 px column, a mono object line, a muted cause, and one ghost button (`View logs`, `See why`, `Open Secret`). The count pill is toned.

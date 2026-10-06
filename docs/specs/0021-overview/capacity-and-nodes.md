@@ -62,8 +62,8 @@ pub(crate) fn volume_totals<'a>(usages: impl Iterator<Item = &'a PvcUsage>) -> V
 
 | Row | Built from (all through `node_usage.rs`, no second quantity math) | `label()` | `note()` |
 |---|---|---|---|
-| Cpu / Memory | used: Σ `latest(node)` over sampled nodes. requested: Σ `node_requests(node, pods)`. allocatable: Σ `node_allocatable` | `format_shared([used, req, alloc])` → `104 used · 131 req · 168 cores`. A missing used prints `—`; a missing req drops its part | `used from {k} of {n} nodes` when `unsampled_nodes > 0`; `Requests need all namespaces` when `requested` is None |
-| Pods | taking_room: `takes_room` count. allocatable: Σ `node_pod_limit` | `1,284 / 4,620` (`— / 4,620`) | `Pod counts need all namespaces` when None |
+| Cpu / Memory | used: Σ `latest(node)` over sampled nodes. requested: Σ `node_requests(node, pods)`. allocatable: Σ `node_allocatable` | each figure with its own unit → `104 cores used · 131 cores req · 168 cores`. A missing used prints `—`; a missing req drops its part | `used from {k} of {n} nodes` when `unsampled_nodes > 0` |
+| Pods | taking_room: `takes_room` count. allocatable: Σ `node_pod_limit` | `1,284 running / 4,620 capacity` (`— running / …` while loading; `4,620 capacity` when the scope is not All) | none; the card carries the scope note |
 | Volumes | `volume_totals(kubelet.history.pvc_usages())` | `Measure::Bytes.format_pair(used, capacity, " / ")` + ` · {claims} PVCs` | `limited` (`Volume usage: 10 of 42 nodes polled.`) |
 
 - **Ceilings.** `ceiling()` for Cpu/Memory: `Init-container requests are not counted. Allocatable includes NotReady and cordoned nodes.`; for Pods, the second sentence only.

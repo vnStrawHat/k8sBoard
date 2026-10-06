@@ -13,11 +13,10 @@ use crate::node_usage::{node_allocatable, node_pod_limit, requests_of, takes_roo
 use crate::status_tone::StatusTone;
 use crate::usage_format::{Measure, group_digits, usage_tone};
 
-const ALLOCATABLE_CEILING: &str = "Allocatable includes NotReady and cordoned nodes.";
+const POD_CAPACITY_CEILING: &str =
+    "Capacity is the number of pods the nodes allow. It includes NotReady and cordoned nodes.";
 const COMPUTE_CEILING: &str =
     "Init-container requests are not counted. Allocatable includes NotReady and cordoned nodes.";
-const REQUESTS_NOTE: &str = "Requests need all namespaces";
-const POD_COUNTS_NOTE: &str = "Pod counts need all namespaces";
 const UNCHECKED_VOLUMES_NOTE: &str = "Totals may include node filesystems";
 
 /// What a figure that comes from the pods list has to show. The list is scoped, so the figure
@@ -121,13 +120,15 @@ impl CapacityRow {
                 taking_room,
                 allocatable,
             } => {
-                let used = taking_room
-                    .known()
-                    .map_or_else(|| "—".to_owned(), group_digits);
-                vec![plain(format!(
-                    "{used} / {}",
-                    group_digits_u64(*allocatable)
-                ))]
+                let capacity = format!("{} capacity", group_digits_u64(*allocatable));
+                // A scoped pods list cannot count the cluster's pods, so only the capacity shows.
+                vec![plain(match taking_room {
+                    FromPods::Known(count) => {
+                        format!("{} running / {capacity}", group_digits(*count))
+                    }
+                    FromPods::Pending => format!("— running / {capacity}"),
+                    FromPods::NeedsAllNamespaces => capacity,
+                })]
             }
             Self::Volumes(VolumeFeed::Live(totals)) if totals.claims == 0 => {
                 vec![plain("—".to_owned())]
@@ -154,15 +155,8 @@ impl CapacityRow {
                         layers.nodes
                     ));
                 }
-                if layers.requested == FromPods::NeedsAllNamespaces {
-                    notes.push(REQUESTS_NOTE.to_owned());
-                }
             }
-            Self::Pods { taking_room, .. } => {
-                if *taking_room == FromPods::NeedsAllNamespaces {
-                    notes.push(POD_COUNTS_NOTE.to_owned());
-                }
-            }
+            Self::Pods { .. } => {}
             Self::Volumes(VolumeFeed::Live(totals)) => {
                 if totals.shared_claims > 0 {
                     notes.push(shared_claims_note(totals.shared_claims));
@@ -183,7 +177,7 @@ impl CapacityRow {
     pub(crate) fn ceiling(&self) -> Option<&'static str> {
         match self {
             Self::Cpu(_) | Self::Memory(_) => Some(COMPUTE_CEILING),
-            Self::Pods { .. } => Some(ALLOCATABLE_CEILING),
+            Self::Pods { .. } => Some(POD_CAPACITY_CEILING),
             Self::Volumes(_) => None,
         }
     }
@@ -246,40 +240,31 @@ fn group_digits_u64(number: u64) -> String {
     group_digits(usize::try_from(number).unwrap_or(usize::MAX))
 }
 
-/// `104 used · 131 req · 168 cores`. A missing used prints `—`. A request that needs another scope
-/// drops its part; one that is still loading prints `—`.
+/// `104 cores used · 131 cores req · 168 cores`: every figure carries its unit. A missing used
+/// prints `—`. A request that needs another scope drops its part; one that is still loading
+/// prints `—`.
 fn compute_label(measure: Measure, layers: &Layers) -> Vec<LabelPart> {
-    let figures: Vec<f64> = [layers.used, layers.requested.known()]
-        .into_iter()
-        .flatten()
-        .chain([layers.allocatable])
-        .collect();
-    let mut shared = measure.format_shared(&figures).into_iter();
-    let mut part = |is_known: bool, suffix: &str, value: Option<f64>| {
-        let text = if is_known {
-            shared.next().unwrap_or_default()
-        } else {
-            "—".to_owned()
-        };
-        LabelPart {
-            text: format!("{text} {suffix}"),
-            tone: value.and_then(|value| usage_tone(value / layers.allocatable)),
-        }
+    let part = |value: Option<f64>, suffix: &str| LabelPart {
+        text: format!(
+            "{} {suffix}",
+            value.map_or_else(|| "—".to_owned(), |value| measure.format(value))
+        ),
+        tone: value.and_then(|value| usage_tone(value / layers.allocatable)),
     };
-    let mut parts = vec![part(layers.used.is_some(), "used", layers.used)];
+    let mut parts = vec![part(layers.used, "used")];
     match layers.requested {
         FromPods::Known(requested) => {
             parts.push(plain(" · ".to_owned()));
-            parts.push(part(true, "req", Some(requested)));
+            parts.push(part(Some(requested), "req"));
         }
         FromPods::Pending => {
             parts.push(plain(" · ".to_owned()));
-            parts.push(part(false, "req", None));
+            parts.push(part(None, "req"));
         }
         FromPods::NeedsAllNamespaces => {}
     }
     parts.push(plain(" · ".to_owned()));
-    parts.push(plain(shared.next().unwrap_or_default()));
+    parts.push(plain(measure.format(layers.allocatable)));
     parts
 }
 

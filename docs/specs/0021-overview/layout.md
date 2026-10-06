@@ -21,7 +21,7 @@
 | Title | `Overview` |
 | Count text | `headline_text(...)`: `readonly@Monitor · Kubernetes v1.29.5 · ap-southeast-1` ([capacity-and-nodes.md](capacity-and-nodes.md)) |
 | Right | step 2: `Last 15 min ▾` (ghost small button + `dropdown_menu` with items `Last 15 min` and `Last 1 h`, a check on the current one, tooltip `Time window of Recent changes`); step 4: `Export report` |
-| Stats line (user-requested, not in W3) | below the header, muted `text_xs`: `41 / 42 nodes ready · 1,284 / 1,310 pods running · 37 namespaces`. The not-ready part is toned Bad when ready < total. Pods add ` in {namespaces_label}` when the scope is not All. A part whose list is not Ready shows `—` |
+| Stats line (user-requested, not in W3) | below the header, muted `text_xs`: `41 / 42 nodes ready · 1,284 / 1,310 pods running · 37 namespaces`. The not-ready part is toned Bad when ready < total. When the scope is not All the line reads `cluster: 4 / 4 nodes ready · 20 namespaces — {scope}: 13 / 13 pods running`. A part whose list is not Ready shows `—` |
 
 ## Body
 

@@ -110,7 +110,7 @@ fn report_capacity_and_nodes_tables() {
         cells: &cells,
         ..inputs()
     });
-    assert!(report.contains("| CPU | 104 used · 131 req · 168 cores |"));
+    assert!(report.contains("| CPU | 104 cores used · 131 cores req · 168 cores |"));
     assert!(report.contains("| wk-1 | Ready | 62% | 48% |"));
     assert!(report.contains("| wk-2 | NotReady, SchedulingDisabled | — | — |"));
 }
