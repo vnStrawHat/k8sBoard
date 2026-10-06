@@ -17,6 +17,10 @@ use super::AppShell;
 use crate::cluster_registry::ClusterRef;
 use crate::fresh_enter::FreshEnter;
 
+/// The buttons name what happens, so neither reads as a way to keep the work.
+const CONFIRM_BUTTON: &str = "Close and stop them";
+const CANCEL_BUTTON: &str = "Cancel";
+
 /// What releasing some clusters would end.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct LeavingWork {
@@ -151,9 +155,9 @@ impl AppShell {
                         .confirm()
                         .button_props(
                             DialogButtonProps::default()
-                                .ok_text("Continue")
+                                .ok_text(CONFIRM_BUTTON)
                                 .ok_variant(ButtonVariant::Primary)
-                                .cancel_text("Keep everything")
+                                .cancel_text(CANCEL_BUTTON)
                                 .show_cancel(true),
                         )
                         .on_ok(move |_, _, cx| {
@@ -169,6 +173,12 @@ impl AppShell {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_buttons_name_the_outcome() {
+        assert_eq!(CONFIRM_BUTTON, "Close and stop them");
+        assert_eq!(CANCEL_BUTTON, "Cancel");
+    }
 
     #[test]
     fn no_work_has_no_lines() {
