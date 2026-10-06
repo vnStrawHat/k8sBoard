@@ -11,7 +11,7 @@ use gpui_kit::{
 
 use crate::age::format_age;
 use crate::app_shell::{AppShell, Screen};
-use crate::cell_truncation::{mono_capacity, plain_text, qualified_text};
+use crate::cell_truncation::{NameScope, mono_capacity, plain_text, scoped_name_text};
 use crate::dock::Dock;
 use crate::filter_bar::filtered_empty_state;
 use crate::metrics_history::PodUsageHistory;
@@ -172,6 +172,16 @@ impl PodTableDelegate {
             .and_then(|session| session.session.read(cx).live())
             .map_or_else(String::new, |live| live.scope_label())
     }
+
+    /// Whether the title-bar scope is one namespace, so the Name column drops `namespace/`.
+    fn name_scope(&self, cx: &App) -> NameScope {
+        self.session
+            .as_ref()
+            .and_then(|session| session.session.read(cx).live())
+            .map_or(NameScope::SeveralNamespaces, |live| {
+                NameScope::of(&live.scope)
+            })
+    }
 }
 
 /// A pod with its newest usage: what the table toolkit filters, sorts, and ticks.
@@ -300,10 +310,11 @@ impl PodTableDelegate {
         };
         let mono = cx.theme().mono_font_family.clone();
         match logical {
-            NAME => qualified_text(
+            NAME => scoped_name_text(
                 ("pod-name", row_ix),
                 Some(&pod.namespace),
                 &pod.name,
+                self.name_scope(cx),
                 capacity,
                 self.shown_pods(cx)
                     .map(|pod| (Some(pod.namespace.as_str()), pod.name.as_str())),

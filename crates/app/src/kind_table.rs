@@ -17,7 +17,7 @@ use gpui_kit::{
 use crate::age::format_age;
 use crate::app_shell::{AppShell, Screen};
 use crate::batch_rows::cron_state_at;
-use crate::cell_truncation::{Sibling, mono_capacity, qualified_text};
+use crate::cell_truncation::{NameScope, Sibling, mono_capacity, qualified_text, scoped_name_text};
 use crate::certificate_expiry::expiry_label;
 use crate::cluster_registry::ClusterRef;
 use crate::custom_rows::{date_text, date_tone};
@@ -260,6 +260,16 @@ impl KindTableDelegate {
             .map_or_else(String::new, |live| live.scope_label())
     }
 
+    /// Whether the title-bar scope is one namespace, so the Name column drops `namespace/`.
+    fn name_scope(&self, cx: &App) -> NameScope {
+        self.session
+            .as_ref()
+            .and_then(|session| session.session.read(cx).live())
+            .map_or(NameScope::SeveralNamespaces, |live| {
+                NameScope::of(&live.scope)
+            })
+    }
+
     fn align(&self, logical: usize) -> Align {
         self.layout
             .plan
@@ -444,7 +454,7 @@ impl KindTableDelegate {
             let siblings = self
                 .shown_rows(cx)
                 .map(|row| (row.namespace.as_deref(), row.name.as_str()));
-            return name_cell(row, row_ix, capacity, siblings, cx);
+            return name_cell(row, row_ix, self.name_scope(cx), capacity, siblings, cx);
         };
         match row.cells.get(cell_ix) {
             Some(cell) => {
@@ -680,18 +690,20 @@ fn empty_text(kind: ResourceKind, scope_label: &str) -> String {
     }
 }
 
-/// `{namespace}/` is muted so the name stands out.
+/// `{namespace}/` is muted so the name stands out; one namespace in scope leaves it out.
 fn name_cell<'a>(
     row: &KindRow,
     row_ix: usize,
+    scope: NameScope,
     capacity: usize,
     siblings: impl IntoIterator<Item = Sibling<'a>>,
     cx: &App,
 ) -> AnyElement {
-    qualified_text(
+    scoped_name_text(
         ("kind-name", row_ix),
         row.namespace.as_deref(),
         &row.name,
+        scope,
         capacity,
         siblings,
         cx,

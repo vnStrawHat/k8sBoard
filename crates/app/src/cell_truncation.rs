@@ -5,6 +5,7 @@
 
 use std::borrow::Cow;
 
+use cluster::NamespaceScope;
 use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::component::table::Column;
 use gpui_kit::component::tooltip::Tooltip;
@@ -147,6 +148,57 @@ pub(crate) fn plain_text<'a>(
         .w_full()
         .font_family(cx.theme().mono_font_family.clone())
         .into_any_element()
+}
+
+/// Whether the title-bar scope holds one namespace: then `namespace/` says nothing a row's name
+/// does not, and only costs room.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum NameScope {
+    OneNamespace,
+    SeveralNamespaces,
+}
+
+impl NameScope {
+    pub(crate) fn of(scope: &NamespaceScope) -> Self {
+        match scope {
+            NamespaceScope::Named(_) => Self::OneNamespace,
+            NamespaceScope::All | NamespaceScope::Several(_) => Self::SeveralNamespaces,
+        }
+    }
+
+    /// The namespace a name cell spells out: none under one namespace.
+    fn shown_prefix(self, namespace: Option<&str>) -> Option<&str> {
+        match self {
+            Self::OneNamespace => None,
+            Self::SeveralNamespaces => namespace,
+        }
+    }
+}
+
+/// `qualified_text` of a name column, minus the `namespace/` under a one-namespace scope. The
+/// tooltip keeps the whole `namespace/name`.
+pub(crate) fn scoped_name_text<'a>(
+    id: (&'static str, usize),
+    namespace: Option<&str>,
+    name: &str,
+    scope: NameScope,
+    capacity: usize,
+    siblings: impl IntoIterator<Item = Sibling<'a>>,
+    cx: &App,
+) -> AnyElement {
+    let shown = scope.shown_prefix(namespace);
+    if shown.is_some() || namespace.is_none() {
+        return qualified_text(id, shown, name, capacity, siblings, cx);
+    }
+    let siblings = siblings.into_iter().map(|(_, name)| (None, name));
+    plain_text(
+        id,
+        name,
+        &join_qualified(namespace, name),
+        capacity,
+        siblings,
+        cx,
+    )
 }
 
 /// Mono text with a muted `{prefix}/`. Both share one text run so a long value is cut instead of
@@ -296,5 +348,36 @@ mod tests {
     fn a_tiny_capacity_leaves_only_the_ellipsis() {
         assert_eq!(middle_truncate("kong-kong", 1), "…");
         assert_eq!(middle_truncate("kong-kong", 0), "…");
+    }
+
+    #[test]
+    fn one_namespace_drops_the_prefix_and_the_rest_keep_it() {
+        let one = NameScope::of(&NamespaceScope::Named("lab-broken".to_owned()));
+        let several = NameScope::of(&NamespaceScope::of_namespaces([
+            "a".to_owned(),
+            "b".to_owned(),
+        ]));
+        let all = NameScope::of(&NamespaceScope::All);
+        assert_eq!(one, NameScope::OneNamespace);
+        assert_eq!(one.shown_prefix(Some("lab-broken")), None);
+        assert_eq!(several.shown_prefix(Some("a")), Some("a"));
+        assert_eq!(all.shown_prefix(Some("kube-system")), Some("kube-system"));
+        // A cluster-scoped row has no prefix under any scope.
+        assert_eq!(all.shown_prefix(None), None);
+    }
+
+    #[test]
+    fn a_name_without_its_prefix_is_cut_from_the_middle_not_the_left() {
+        let name = "crashloop-85cc769bcd-q4nqt";
+        // 26 characters in a 24-character column: the prefix would have been cut first.
+        let shown = cut_name(name, 24, [(None, name)]);
+        assert!(
+            shown.starts_with("crashl") && shown.ends_with("q4nqt"),
+            "{shown}"
+        );
+        assert_eq!(
+            join_qualified(Some("lab-broken"), name),
+            "lab-broken/crashloop-85cc769bcd-q4nqt"
+        );
     }
 }
