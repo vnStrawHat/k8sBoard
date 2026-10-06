@@ -32,6 +32,7 @@ pub(crate) fn action_availability(action: ResourceAction, guard: &ClusterGuard) 
 | 5 | `WriteLock::Locked` | `{cluster} is read-only` (`{cluster}` = display name) |
 | 6 | otherwise | Enabled |
 
+- A locked cluster has an unlock path in place (UX walkthrough M17): a disabled menu row reads `Read-only · Ctrl+Shift+R` (`Cmd` on macOS) and its tooltip, a disabled bulk button, and the block line of a write dialog add `Unlock {cluster} with Ctrl+Shift+R or the title-bar badge`; the item stays disabled.
 - RBAC before the lock: unlocking cannot fix a denial, so it is the more useful reason.
 - `READ_ONLY_MODE_REASON` and `READ_ONLY_FEATURE_REASON` are replaced by the row-2 text; the 0028 test strings change with it.
 - `ActionGate` gains `mutates: bool`; `ResourceAction::Cordon` maps to `AccessCheck::PatchNodes`, `mutates: true` (step 4 sets it shipped). Kind-dependent actions carry their kind (`Scale(ObjectKind)`, `RestartRollout(ObjectKind)`, 0032), so `gate()` picks the per-resource check and `action_availability` stays two-argument (decision 35). `key_availability` (0028) builds the guard from the subject row's cluster.

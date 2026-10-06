@@ -52,6 +52,7 @@ use crate::environment::{Environment, environment_badge};
 use crate::keymap::FORWARD_FORM;
 use crate::resource_actions::{
     ActionAvailability, ResourceAction, action_availability, action_label, unavailable_text,
+    with_unlock_hint,
 };
 use crate::status_tone::{StatusTone, tone_color};
 use crate::write_guard::{ActionRisk, ConfirmMode, DialogConfirm, WriteLock, confirm_step};
@@ -1397,7 +1398,12 @@ impl Render for DrainDialog {
             .child(self.render_dry_run(cx));
         // Outside the scroll area, so the name to type, the note, and the reason Drain is off are
         // never out of sight (ticking Skip makes the name appear below a full list).
-        let reason = block_text.map(|text| div().text_xs().text_color(muted).child(text));
+        let reason = block_text.map(|text| {
+            div()
+                .text_xs()
+                .text_color(muted)
+                .child(with_unlock_hint(&text))
+        });
         v_flex()
             .key_context(FORWARD_FORM)
             .track_focus(&self.focus_handle)

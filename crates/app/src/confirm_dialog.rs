@@ -37,7 +37,7 @@ use crate::app_shell::write_flow::{
 };
 use crate::cluster_registry::ClusterRef;
 use crate::environment::{Environment, environment_badge};
-use crate::resource_actions::ResourceAction;
+use crate::resource_actions::{ResourceAction, with_unlock_hint};
 use crate::settings::AppSettings;
 use crate::write_guard::{ActionRisk, DialogConfirm, confirm_step};
 
@@ -1098,7 +1098,12 @@ impl Render for ConfirmDialog {
             .children(self.render_dry_run(cx))
             .children(self.render_typed(cx))
             .children(self.render_note_input(cx))
-            .children(block_text.map(|text| div().text_xs().text_color(muted).child(text)))
+            .children(block_text.map(|text| {
+                div()
+                    .text_xs()
+                    .text_color(muted)
+                    .child(with_unlock_hint(&text))
+            }))
             .child(self.render_buttons(block.is_some(), cx))
     }
 }

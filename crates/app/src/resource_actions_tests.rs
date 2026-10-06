@@ -3974,10 +3974,13 @@ fn row_keyed_sets_key_and_icon() {
 
 #[test]
 fn short_reason_reduces_known_sentences_to_a_few_words() {
+    assert_eq!(
+        short_reason("prod-eu is read-only"),
+        format!("Read-only · {UNLOCK_KEYS}")
+    );
     for (reason, short) in [
         ("Not permitted: delete pods", "No permission"),
         ("Not permitted: get and create pods/exec", "No permission"),
-        ("prod-eu is read-only", "Read-only"),
         (NOT_SHIPPED_REASON, "Later version"),
         (NOT_RUNNING_REASON, "Not running"),
         (STATIC_POD_TEXT, "Static pod"),
@@ -4028,4 +4031,18 @@ fn only_the_icon_of_a_disabled_item_fades() {
     assert_eq!(opacity(disabled), Some(DISABLED_ITEM_OPACITY));
     let enabled = PopupMenuItem::new("Copy name").menu_icon(IconName::Copy);
     assert_eq!(opacity(enabled), None);
+}
+
+#[test]
+fn a_read_only_reason_says_how_to_unlock_and_others_are_left_alone() {
+    let hint = |reason: &str| with_unlock_hint(&SharedString::from(reason.to_owned()));
+    assert_eq!(
+        hint("stg-b is read-only"),
+        format!("stg-b is read-only. Unlock stg-b with {UNLOCK_KEYS} or the title-bar badge")
+    );
+    assert!(hint("stg-b was locked; nothing was changed").contains("Unlock stg-b with"));
+    assert_eq!(
+        hint("Not permitted: delete pods"),
+        "Not permitted: delete pods"
+    );
 }

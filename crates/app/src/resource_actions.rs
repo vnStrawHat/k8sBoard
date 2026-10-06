@@ -3098,7 +3098,31 @@ impl MenuItemIcon for PopupMenuItem {
 
 /// The widest the reason of a disabled item grows; a longer one is cut with an ellipsis, so that a
 /// reason never stretches the menu.
-const REASON_WIDTH: Pixels = px(120.);
+const REASON_WIDTH: Pixels = px(190.);
+
+/// The chord of the read-only toggle (`ToggleReadOnly`, bound with the platform modifier).
+const UNLOCK_KEYS: &str = if cfg!(target_os = "macos") {
+    "Cmd+Shift+R"
+} else {
+    "Ctrl+Shift+R"
+};
+
+/// `reason`, followed by how to unlock the cluster when the reason says it is read-only or was
+/// locked while a dialog was open. Any other reason comes back as it is.
+pub(crate) fn with_unlock_hint(reason: &SharedString) -> SharedString {
+    let name = reason
+        .strip_suffix(READ_ONLY_SUFFIX)
+        .or_else(|| reason.strip_suffix(LOCKED_SUFFIX));
+    match name {
+        Some(name) => {
+            format!("{reason}. Unlock {name} with {UNLOCK_KEYS} or the title-bar badge").into()
+        }
+        None => reason.clone(),
+    }
+}
+
+const READ_ONLY_SUFFIX: &str = " is read-only";
+const LOCKED_SUFFIX: &str = " was locked; nothing was changed";
 
 /// A disabled item: its label, then a short reason on the right where an enabled item shows its
 /// key. Both are muted like the rest of the row; the full reason is the tooltip.
@@ -3126,7 +3150,7 @@ fn disabled_label(label: SharedString, reason: SharedString) -> AnyElement {
                 .text_sm()
                 .child(short),
         )
-        .tooltip(move |window, cx| Tooltip::new(reason.clone()).build(window, cx))
+        .tooltip(move |window, cx| Tooltip::new(with_unlock_hint(&reason)).build(window, cx))
         .into_any_element()
 }
 
@@ -3136,8 +3160,8 @@ fn disabled_label(label: SharedString, reason: SharedString) -> AnyElement {
 pub(crate) fn short_reason(reason: &str) -> SharedString {
     let short = if reason.starts_with("Not permitted") {
         "No permission"
-    } else if reason.ends_with(" is read-only") {
-        "Read-only"
+    } else if reason.ends_with(READ_ONLY_SUFFIX) {
+        return format!("Read-only · {UNLOCK_KEYS}").into();
     } else if reason == NOT_SHIPPED_REASON {
         "Later version"
     } else if reason == "Permissions could not be checked" {
