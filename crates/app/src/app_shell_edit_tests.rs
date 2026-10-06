@@ -852,7 +852,7 @@ fn the_lock_stops_the_preview_before_anything_is_sent(cx: &mut TestAppContext) {
         let PreviewState::Failed(PreviewFailure::Server(text)) = view.preview_state() else {
             panic!("expected a refusal");
         };
-        assert!(text.ends_with("stg-b is read-only"), "{text}");
+        assert!(text.contains("stg-b is read-only"), "{text}");
     });
     assert!(t.puts().is_empty());
 }

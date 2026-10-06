@@ -565,6 +565,10 @@ fn create_label(kind: ObjectKind) -> &'static str {
 /// The notice of an offered key that is unavailable, such as "Edit YAML is unavailable: Read-only
 /// mode".
 pub(crate) fn unavailable_text(label: &str, reason: &str) -> String {
+    // A lock is the one reason the user can lift on the spot, so the notice says how.
+    if reason.ends_with(READ_ONLY_SUFFIX) {
+        return format!("{label} is unavailable: {reason} · {UNLOCK_KEYS} to unlock");
+    }
     format!("{label} is unavailable: {reason}")
 }
 

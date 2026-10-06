@@ -1549,6 +1549,16 @@ fn an_unavailable_key_says_what_and_why() {
 }
 
 #[test]
+fn a_read_only_cluster_notice_says_how_to_unlock() {
+    let text = unavailable_text("Scale", "lab-prod is read-only");
+    assert_eq!(
+        text,
+        format!("Scale is unavailable: lab-prod is read-only · {UNLOCK_KEYS} to unlock")
+    );
+    assert!(text.contains("Ctrl+Shift+R") || text.contains("Cmd+Shift+R"));
+}
+
+#[test]
 fn menu_hints_name_the_key_action() {
     use crate::keymap::{OpenShell, ViewLogs};
     assert!(RowAction::ViewLogs.key_action().partial_eq(&ViewLogs));
