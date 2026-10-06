@@ -222,7 +222,7 @@ static EVENTS: KindSpec = KindSpec {
         column("Reason", 260., Align::Left).grows(1).up_to(320.),
         column("Object", 220., Align::Left).grows(1).up_to(360.),
         column("Message", 160., Align::Left).grows(4),
-        column("Count", 70., Align::Right),
+        column("Count", 90., Align::Right),
         column("First seen", 90., Align::Right),
         column("Last seen", 80., Align::Right),
     ],
@@ -1397,6 +1397,17 @@ mod tests {
         for kind in ResourceKind::ALL {
             assert_eq!(kind.has_count(), kind != ResourceKind::HelmReleases);
         }
+    }
+
+    #[test]
+    fn events_count_holds_the_largest_abbreviated_count() {
+        // `999.9k` is 6 mono characters of about 9.6 px, plus the 24 px of cell padding.
+        let count = ResourceKind::Events
+            .columns()
+            .iter()
+            .find(|column| column.name == "Count")
+            .map(|column| column.width);
+        assert!(count >= Some(6. * 9.6 + 24.), "{count:?}");
     }
 
     #[test]
