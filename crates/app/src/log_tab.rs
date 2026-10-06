@@ -148,6 +148,20 @@ fn toolbar_actions(layout: LogLayout, is_popped_out: bool, is_connecting: bool) 
         },
     }
 }
+
+/// The narrowest window whose docked toolbar still holds the Since chip on its one row: the
+/// longest docked row (a workload tab) ends near 1100 px in a 1320 px window and has no room at
+/// 1100 px.
+const SINCE_CHIP_MIN_WINDOW: f32 = 1280.;
+
+/// Whether the toolbar shows `Since: tail ▾` itself, or leaves it to the `⋯` menu. The zoomed and
+/// popped-out tabs always have the room.
+fn shows_since_chip(layout: LogLayout, window_width: f32) -> bool {
+    match layout {
+        LogLayout::Full => true,
+        LogLayout::Compact => window_width >= SINCE_CHIP_MIN_WINDOW,
+    }
+}
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum LogInstance {
     Current,
@@ -1128,7 +1142,12 @@ impl LogTab {
 
     /// Copy, Export, Pop out, and Reconnect: a button each in the zoomed and popped-out tabs, one
     /// `⋯` menu in the docked tab, where they would wrap the toolbar onto a second row.
-    fn render_toolbar_actions(&self, is_connecting: bool, cx: &Context<Self>) -> Vec<AnyElement> {
+    fn render_toolbar_actions(
+        &self,
+        is_connecting: bool,
+        has_since_chip: bool,
+        cx: &Context<Self>,
+    ) -> Vec<AnyElement> {
         let placement = toolbar_actions(self.layout, self.is_popped_out, is_connecting);
         let mut elements: Vec<AnyElement> = placement
             .inline
@@ -1153,8 +1172,8 @@ impl LogTab {
         }
         let tab = cx.weak_entity();
         let is_export_unavailable = self.is_export_unavailable();
-        // The docked row has no room for the Since picker either: its choices end the menu.
-        let since = (self.layout == LogLayout::Compact).then_some(self.since);
+        // A docked row too narrow for the Since chip ends its menu with the choices.
+        let since = (!has_since_chip).then_some(self.since);
         elements.push(
             Button::new("log-overflow")
                 .ghost()
@@ -1275,9 +1294,10 @@ impl LogTab {
         }
     }
 
-    /// `Since: 15m ▾`: how far back the streams read. The docked tab has it in the `⋯` menu.
-    fn render_since_picker(&self, cx: &Context<Self>) -> Option<AnyElement> {
-        if self.layout == LogLayout::Compact {
+    /// `Since: 15m ▾`: how far back the streams read. A docked tab in a narrow window has it in the
+    /// `⋯` menu.
+    fn render_since_picker(&self, has_since_chip: bool, cx: &Context<Self>) -> Option<AnyElement> {
+        if !has_since_chip {
             return None;
         }
         let tab = cx.weak_entity();
@@ -1298,9 +1318,10 @@ impl LogTab {
         )
     }
 
-    fn render_toolbar(&self, cx: &Context<Self>) -> impl IntoElement {
+    fn render_toolbar(&self, window: &Window, cx: &Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
         let is_connecting = self.phase() == TabPhase::Connecting;
+        let has_since_chip = shows_since_chip(self.layout, f32::from(window.viewport_size().width));
         h_flex()
             .flex_shrink_0()
             .flex_wrap()
@@ -1343,7 +1364,7 @@ impl LogTab {
                         tab.refresh_view(cx);
                     }))
             }))
-            .children(self.render_since_picker(cx))
+            .children(self.render_since_picker(has_since_chip, cx))
             .when(!self.is_workload(), |toolbar| {
                 toolbar.child(
                     Toggle::new("log-previous")
@@ -1392,7 +1413,7 @@ impl LogTab {
                         tab.remeasure(cx);
                     })),
             )
-            .children(self.render_toolbar_actions(is_connecting, cx))
+            .children(self.render_toolbar_actions(is_connecting, has_since_chip, cx))
             .child(
                 h_flex()
                     .ml_auto()
@@ -1681,7 +1702,7 @@ impl EventEmitter<LogTabEvent> for LogTab {}
 
 impl Render for LogTab {
     #[cfg_attr(feature = "hotpath-profiling", hotpath::measure(impl_type = "LogTab"))]
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let stream_failure = match self.phase() {
             TabPhase::Failed { message } => Some(("log-error", "Cannot read the logs", message)),
             _ => None,
@@ -1719,7 +1740,7 @@ impl Render for LogTab {
             .on_action(cx.listener(|tab, _: &CopyLogLines, _, cx| tab.copy_selected_lines(cx)))
             .on_action(cx.listener(|tab, _: &ClearLogSelection, _, cx| tab.clear_selection(cx)))
             .children(legend)
-            .child(self.render_toolbar(cx))
+            .child(self.render_toolbar(window, cx))
             .children(histogram)
             .children([stream_failure, export_failure].into_iter().flatten().map(
                 |(id, title, message)| {
@@ -1975,6 +1996,19 @@ mod tests {
 
     use super::*;
     use crate::kind_row::JOB_KIND;
+
+    #[test]
+    fn the_docked_toolbar_keeps_the_since_chip_while_the_row_fits() {
+        // 1320 px has the room; 1100 px leaves Since to the `⋯` menu.
+        assert!(shows_since_chip(LogLayout::Compact, 1320.));
+        assert!(shows_since_chip(LogLayout::Compact, SINCE_CHIP_MIN_WINDOW));
+        assert!(!shows_since_chip(LogLayout::Compact, 1100.));
+    }
+
+    #[test]
+    fn the_zoomed_and_popped_out_toolbars_always_show_the_since_chip() {
+        assert!(shows_since_chip(LogLayout::Full, 600.));
+    }
 
     fn tone_of(list: &[LogStreamState]) -> StatusTone {
         workload_tone(list.iter())
