@@ -75,3 +75,7 @@ C1 and C5 decide on `status_tone::is_bad_reason` (now `pub(crate)`, with the new
 ## `next_retry` (W4b header "next retry in 3m20s")
 
 The kubelet's CrashLoopBackOff waiting message is `back-off %s restarting failed container=…` (verified), and the back-off is measured from `lastState.terminated.finishedAt`. So: Waiting `CrashLoopBackOff`, message contains `back-off {go duration}`, and a last termination `finished_at` → `finished_at + duration - now` when positive, else None. The parser accepts integer `h`, `m`, `s` parts (`5m0s`, `40s`, `1h0m0s`); anything else → None.
+
+## Pull secrets (walk H11)
+
+For a failed pull (ImagePullBackOff or ErrImagePull) the drawer appends `Pull secrets: x (missing), y` to the WHY text (`PodDiagnosis::with_pull_secrets`) and links each existing secret under the box. A name is `(missing)` only when the Secrets screen has the namespace's list loaded and lacks it; otherwise nothing is called missing. The Overview Pod section lists `Image pull secrets` as links when the pod has any. The Issues and kind diagnoses keep the short text.

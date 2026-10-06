@@ -141,6 +141,53 @@ pub(crate) fn pod_diagnosis(
     })
 }
 
+/// One name of a pod's `imagePullSecrets`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct PullSecret {
+    pub(crate) name: String,
+    /// Not in the namespace's Secrets list. Always `false` while that list is not loaded.
+    pub(crate) is_missing: bool,
+}
+
+/// The pod's pull secrets. `existing` holds the names of the Secrets in the pod's namespace when
+/// that list is loaded; without it nothing is called missing.
+pub(crate) fn pull_secrets(pod: &PodSummary, existing: Option<&[&str]>) -> Vec<PullSecret> {
+    pod.image_pull_secrets
+        .iter()
+        .map(|name| PullSecret {
+            is_missing: existing.is_some_and(|names| !names.contains(&name.as_str())),
+            name: name.clone(),
+        })
+        .collect()
+}
+
+impl PodDiagnosis {
+    /// C1 for a pull that was refused or retried, not for a bad image name or a never-pull policy.
+    pub(crate) fn is_pull_failure(&self) -> bool {
+        matches!(
+            self.cause,
+            DiagnosisCause::ImagePull(StatusReason::ImagePullBackOff | StatusReason::ErrImagePull)
+        )
+    }
+
+    /// Adds the secrets the kubelet tried to a failed pull, so a missing one is seen at once.
+    pub(crate) fn with_pull_secrets(mut self, secrets: &[PullSecret]) -> Self {
+        if self.is_pull_failure() && !secrets.is_empty() {
+            let names: Vec<String> = secrets
+                .iter()
+                .map(|secret| {
+                    if secret.is_missing {
+                        format!("{} (missing)", secret.name)
+                    } else {
+                        secret.name.clone()
+                    }
+                })
+                .collect();
+            self.text = format!("{}\nPull secrets: {}", self.text, names.join(", "));
+        }
+        self
+    }
+}
 /// P0: a pod that is going away or is done has nothing to explain.
 pub(crate) fn is_diagnosis_skipped(pod: &PodSummary) -> bool {
     matches!(

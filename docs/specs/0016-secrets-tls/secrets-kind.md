@@ -82,3 +82,7 @@ Order: **Reveal values (30s)** · **Copy value ▸** (submenu: `Copy {key}` per 
 ## W7 parts not rendered
 
 List-level "Reveal all" (decision 4); drawer `meta` "values hidden"; Age warn tone (decision 19); "New" (0031).
+
+## Restart all (walk H12)
+
+The Used by section of a Secret or ConfigMap drawer gets a `Restart all N` button above its rows when more than one workload reads the value through env (volume-only users, Jobs, CronJobs, and bare pods are not counted). It calls `restart_consumers`, so each workload kind opens its own Restart rollout batch with the normal confirm; it is off with the first reason when a kind of the set is not allowed.

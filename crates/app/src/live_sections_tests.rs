@@ -1908,3 +1908,23 @@ fn only_an_env_reading_workload_gets_a_restart_button_that_follows_the_gate() {
         RestartButton::Disabled(_)
     ));
 }
+
+#[test]
+fn restart_all_counts_only_the_workloads_that_read_the_value_through_env() {
+    let users = [
+        workload_user(ResourceKind::Deployments, "api", &["env"]),
+        workload_user(ResourceKind::StatefulSets, "db", &["env"]),
+        workload_user(ResourceKind::Deployments, "web", &["volume"]),
+        workload_user(ResourceKind::CronJobs, "nightly", &["env"]),
+        used_by("pod/api-0", &["env"]),
+    ];
+    let consumers = env_workloads(&users);
+    let kinds: Vec<ObjectKind> = consumers.iter().map(|(kind, _)| *kind).collect();
+    assert_eq!(kinds, [ObjectKind::Deployment, ObjectKind::StatefulSet]);
+    assert_eq!(restart_all_label(consumers.len()), "Restart all 2");
+    assert_eq!(
+        env_workloads(&users[..1]).len(),
+        1,
+        "one consumer shows no button"
+    );
+}

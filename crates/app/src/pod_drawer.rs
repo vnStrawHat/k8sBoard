@@ -34,13 +34,13 @@ use crate::kind_join::services_selecting;
 use crate::kind_row::deployment_of_pod;
 use crate::monitor_tab::{MonitorView, monitor_tab};
 use crate::object_events::{event_subject, recent_events};
-use crate::pod_diagnosis::{PodDiagnosis, pod_diagnosis};
+use crate::pod_diagnosis::{PodDiagnosis, PullSecret, pod_diagnosis, pull_secrets};
 use crate::port_forward_menu::{ForwardMenu, PortButtons, pod_drawer_subject};
 use crate::related_objects::key_related_subject;
 use crate::resource_actions::{
     LogsMenu, PodMenuItems, PodMenuLinks, ShellMenu, container_menu, pod_menu, view_logs_reason,
 };
-use crate::resource_kind::POD_ICON;
+use crate::resource_kind::{POD_ICON, ResourceKind};
 use crate::row_context::RowContext;
 use crate::status_tone::{
     StatusLabel, StatusTone, container_state_label, pod_status_label, toned_text,
@@ -267,7 +267,16 @@ fn overview(
         ))
     });
     let labels: Vec<SharedString> = pod.labels.iter().cloned().map(SharedString::from).collect();
-    let diagnosis = pod_diagnosis(pod, events, now);
+    let existing = secret_names_in(live, &pod.namespace);
+    let pull = pull_secrets(pod, existing.as_deref());
+    let diagnosis = pod_diagnosis(pod, events, now).map(|found| found.with_pull_secrets(&pull));
+    let pull_row = (!pull.is_empty()).then(|| {
+        detail_row(
+            "Image pull secrets",
+            pull_secret_links(&pull, &pod.namespace, 10, cx),
+            cx,
+        )
+    });
     // The first heading keeps its room above only when a box comes before it.
     let pod_title = if diagnosis.is_some() {
         section_title("Pod", cx).into_any_element()
@@ -275,7 +284,10 @@ fn overview(
         first_section_title("Pod", cx).into_any_element()
     };
     v_flex()
-        .children(diagnosis.map(|diagnosis| why_box(&diagnosis, cx)))
+        .children(diagnosis.map(|diagnosis| {
+            let links = why_pull_links(&diagnosis, &pull, &pod.namespace, cx);
+            why_box(&diagnosis, links, cx)
+        }))
         .child(pod_title)
         .child(detail_row("Node", node, cx))
         .child(detail_row(
@@ -292,6 +304,7 @@ fn overview(
             cx,
         ))
         .child(detail_row("Service account", service_account, cx))
+        .children(pull_row)
         .child(detail_row(
             "Controlled by",
             controller.unwrap_or_else(|| absent_text(cx).into_any_element()),
@@ -317,9 +330,78 @@ fn overview(
         .into_any_element()
 }
 
+/// The names of the Secrets in `namespace` while the Secrets screen has them loaded; `None`
+/// otherwise, so nothing is called missing on a guess.
+fn secret_names_in<'a>(live: Option<&'a LiveCluster>, namespace: &str) -> Option<Vec<&'a str>> {
+    let list = &live?.kind_list(ResourceKind::Secrets)?.list;
+    list.ready_count()?;
+    Some(
+        list.items()
+            .iter()
+            .filter(|row| row.namespace.as_deref() == Some(namespace))
+            .map(|row| row.name.as_str())
+            .collect(),
+    )
+}
+
+/// Each pull secret that exists opens its Secrets row; a missing one is plain text. `id_base`
+/// keeps the link ids of two rows on one screen apart.
+fn pull_secret_links(
+    secrets: &[PullSecret],
+    namespace: &str,
+    id_base: usize,
+    cx: &Context<AppShell>,
+) -> AnyElement {
+    h_flex()
+        .gap_2()
+        .flex_wrap()
+        .children(secrets.iter().enumerate().map(|(index, secret)| {
+            let target = ResourceKey::of_object("Secret", Some(namespace), &secret.name);
+            match target {
+                Some(target) if !secret.is_missing => {
+                    link_text(id_base + index, &secret.name.clone().into(), target, cx)
+                }
+                _ if secret.is_missing => div()
+                    .child(format!("{} (missing)", secret.name))
+                    .into_any_element(),
+                _ => div().child(secret.name.clone()).into_any_element(),
+            }
+        }))
+        .into_any_element()
+}
+
+/// The links under the WHY box of a failed pull.
+fn why_pull_links(
+    diagnosis: &PodDiagnosis,
+    secrets: &[PullSecret],
+    namespace: &str,
+    cx: &Context<AppShell>,
+) -> Option<AnyElement> {
+    if !diagnosis.is_pull_failure() || secrets.is_empty() {
+        return None;
+    }
+    Some(
+        h_flex()
+            .gap_2()
+            .flex_wrap()
+            .text_sm()
+            .child(
+                div()
+                    .text_color(cx.theme().muted_foreground)
+                    .child("Open pull secret:"),
+            )
+            .child(pull_secret_links(secrets, namespace, 20, cx))
+            .into_any_element(),
+    )
+}
+
 /// The WHY box. `Alert` has no children, so the link that opens the container is a sibling
 /// right under it.
-fn why_box(diagnosis: &PodDiagnosis, cx: &Context<AppShell>) -> AnyElement {
+fn why_box(
+    diagnosis: &PodDiagnosis,
+    pull_links: Option<AnyElement>,
+    cx: &Context<AppShell>,
+) -> AnyElement {
     let title = match &diagnosis.container {
         Some(name) => format!("WHY · CONTAINER {name}"),
         None => "WHY · POD".to_owned(),
@@ -332,6 +414,7 @@ fn why_box(diagnosis: &PodDiagnosis, cx: &Context<AppShell>) -> AnyElement {
     v_flex()
         .gap_1()
         .child(alert.title(title))
+        .children(pull_links)
         .children(diagnosis.container.clone().map(|name| {
             let label = format!("Open container {name} →");
             div()

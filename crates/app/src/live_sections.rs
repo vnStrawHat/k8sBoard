@@ -1126,11 +1126,17 @@ fn used_by_rows(
         return vec![note(&format!("Not used by any pod in {scope}"), cx)];
     }
     let hidden = users.len().saturating_sub(MAX_LISTED_USERS);
-    users
-        .iter()
-        .take(MAX_LISTED_USERS)
-        .enumerate()
-        .map(|(ix, used_by)| used_by_element(ix, used_by, restart_button(used_by, gate), cx))
+    restart_all_row(users.iter().copied(), gate, cx)
+        .into_iter()
+        .chain(
+            users
+                .iter()
+                .take(MAX_LISTED_USERS)
+                .enumerate()
+                .map(|(ix, used_by)| {
+                    used_by_element(ix, used_by, restart_button(used_by, gate), cx)
+                }),
+        )
         .chain((hidden > 0).then(|| note(&format!("+{hidden} more"), cx)))
         .chain(restart_hint(&users).map(|hint| note(&hint, cx)))
         .chain(std::iter::once(note(&format!("From pods in {scope}"), cx)))
@@ -1251,6 +1257,63 @@ fn used_by_element(
             ),
         })
         .into_any_element()
+}
+
+/// The workloads that read the value through env: what `Restart all` restarts, one per owner.
+fn env_workloads<'a>(
+    users: impl IntoIterator<Item = &'a UsedBy>,
+) -> Vec<(ObjectKind, ResourceKey)> {
+    users
+        .into_iter()
+        .filter_map(restart_target)
+        .map(|(kind, key)| (kind, key.clone()))
+        .collect()
+}
+
+fn restart_all_label(count: usize) -> String {
+    format!("Restart all {count}")
+}
+
+/// The `Restart all N` button above the Used by rows when more than one workload reads the value
+/// through env. It opens the same per-kind Restart rollout batches as the Edit values notice, each
+/// with its own confirm. Off with the first reason when a kind of the set is not allowed.
+fn restart_all_row<'a>(
+    users: impl IntoIterator<Item = &'a UsedBy>,
+    gate: Option<&DrawerWriteGate>,
+    cx: &Context<AppShell>,
+) -> Option<AnyElement> {
+    let consumers = env_workloads(users);
+    if consumers.len() < 2 {
+        return None;
+    }
+    let button = Button::new("used-by-restart-all")
+        .label(restart_all_label(consumers.len()))
+        .xsmall()
+        .ghost();
+    let reason = match gate {
+        None => Some(SharedString::from("Not connected")),
+        Some(gate) => consumers.iter().find_map(|(kind, _)| {
+            match gate.restart.iter().find(|(allowed, _)| allowed == kind) {
+                Some((_, ActionAvailability::Enabled)) => None,
+                Some((_, ActionAvailability::Disabled { reason })) => Some(reason.clone()),
+                None => Some(SharedString::from("Not connected")),
+            }
+        }),
+    };
+    let button = match (gate, reason) {
+        (Some(gate), None) => {
+            let cluster = gate.subject.cluster.clone();
+            button
+                .tooltip("Restart rollout of every workload that reads this value through env")
+                .on_click(cx.listener(move |shell, _, window, cx| {
+                    shell.restart_consumers(&cluster, &consumers, window, cx);
+                }))
+        }
+        (_, reason) => button
+            .disabled(true)
+            .tooltip(with_next_step(&reason.unwrap_or_default())),
+    };
+    Some(h_flex().justify_end().child(button).into_any_element())
 }
 
 // ---- Custom objects ----
@@ -1395,11 +1458,17 @@ fn secret_used_by_rows(
             .collect();
     }
     let hidden = users.len().saturating_sub(MAX_LISTED_USERS);
-    users
-        .iter()
-        .take(MAX_LISTED_USERS)
-        .enumerate()
-        .map(|(ix, used_by)| used_by_element(ix, used_by, restart_button(used_by, gate), cx))
+    restart_all_row(users.iter(), gate, cx)
+        .into_iter()
+        .chain(
+            users
+                .iter()
+                .take(MAX_LISTED_USERS)
+                .enumerate()
+                .map(|(ix, used_by)| {
+                    used_by_element(ix, used_by, restart_button(used_by, gate), cx)
+                }),
+        )
         .chain((hidden > 0).then(|| note(&format!("+{hidden} more"), cx)))
         .collect()
 }

@@ -809,3 +809,65 @@ fn unschedulable_cause_carries_condition_time() {
         }
     );
 }
+
+fn pulling_pod(reason: StatusReason, secrets: &[&str]) -> PodSummary {
+    let mut failing = pod(
+        PodStatus::Reason(reason.clone()),
+        vec![main_container("app", waiting(reason, None))],
+    );
+    failing.image_pull_secrets = secrets.iter().map(|name| (*name).to_owned()).collect();
+    failing
+}
+
+#[test]
+fn failed_pull_names_the_pull_secrets_and_marks_the_missing_one() {
+    let failing = pulling_pod(StatusReason::ImagePullBackOff, &["gone", "registry"]);
+    let existing = ["registry", "other"];
+    let secrets = pull_secrets(&failing, Some(&existing));
+    assert_eq!(
+        secrets,
+        [
+            PullSecret {
+                name: "gone".to_owned(),
+                is_missing: true
+            },
+            PullSecret {
+                name: "registry".to_owned(),
+                is_missing: false
+            },
+        ]
+    );
+    let text = diagnose(&failing)
+        .expect("a diagnosis")
+        .with_pull_secrets(&secrets)
+        .text;
+    assert!(
+        text.ends_with("\nPull secrets: gone (missing), registry"),
+        "{text}"
+    );
+}
+
+#[test]
+fn nothing_is_called_missing_while_the_secret_list_is_not_loaded() {
+    let failing = pulling_pod(StatusReason::ErrImagePull, &["registry"]);
+    let secrets = pull_secrets(&failing, None);
+    let text = diagnose(&failing)
+        .expect("a diagnosis")
+        .with_pull_secrets(&secrets)
+        .text;
+    assert!(text.ends_with("\nPull secrets: registry"), "{text}");
+}
+
+#[test]
+fn only_a_refused_pull_gets_the_pull_secrets_line() {
+    let invalid = pulling_pod(StatusReason::InvalidImageName, &["registry"]);
+    let secrets = pull_secrets(&invalid, None);
+    let plain = diagnose(&invalid).expect("a diagnosis");
+    assert_eq!(plain.clone().with_pull_secrets(&secrets), plain);
+    let none = pulling_pod(StatusReason::ImagePullBackOff, &[]);
+    let plain = diagnose(&none).expect("a diagnosis");
+    assert_eq!(
+        plain.clone().with_pull_secrets(&pull_secrets(&none, None)),
+        plain
+    );
+}
