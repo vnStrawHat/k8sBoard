@@ -17,8 +17,8 @@ use cluster::{
 };
 use gpui_kit::component::input::{EditorState, InputEvent};
 use gpui_kit::{
-    AppContext as _, Context, Entity, FocusHandle, Focusable, KeyDownEvent, SharedString,
-    Subscription, Task, UniformListScrollHandle, WeakEntity, Window,
+    AppContext as _, Context, Entity, FocusHandle, Focusable, KeyDownEvent, ListAlignment,
+    ListState, SharedString, Subscription, Task, WeakEntity, Window, px,
 };
 
 use crate::app_shell::AppShell;
@@ -213,7 +213,8 @@ pub(crate) struct YamlEditView {
     overwritten: Vec<SharedString>,
     /// A held Ctrl S was seen in this key event (see `apply_from_key`).
     is_apply_key_held: bool,
-    diff_scroll: UniformListScrollHandle,
+    /// The Diff tab rows; its count follows `PassedPreview::rows`, and its rows wrap.
+    diff_list: ListState,
     /// The Revision history tab, created on its first show and dropped with the view.
     history: Option<Entity<RevisionHistory>>,
     focus_handle: FocusHandle,
@@ -292,7 +293,7 @@ impl YamlEditView {
             server_changed: Vec::new(),
             overwritten: Vec::new(),
             is_apply_key_held: false,
-            diff_scroll: UniformListScrollHandle::new(),
+            diff_list: ListState::new(0, ListAlignment::Top, px(200.)),
             history: None,
             focus_handle: cx.focus_handle(),
             #[cfg(feature = "screenshot")]
@@ -737,6 +738,7 @@ impl YamlEditView {
                     .map(|check| check_text(check, &text).into())
                     .collect();
                 let quota = self.quota_line_of(&preview, cx);
+                self.diff_list.reset(rows.len());
                 self.preview = PreviewState::Passed(Box::new(PassedPreview {
                     for_text: text,
                     request: Some(request),
@@ -1000,6 +1002,8 @@ impl YamlEditView {
         if tab == EditTab::History {
             view.history = Some(history_fixture(&view.target.key, cx));
         }
+        let rows = diff_rows(before, &after);
+        view.diff_list.reset(rows.len());
         view.preview = PreviewState::Passed(Box::new(PassedPreview {
             for_text: after.clone().into(),
             request: None,
@@ -1026,7 +1030,7 @@ impl YamlEditView {
                 .into(),
             ],
             quota: crate::edit_quota::fixture_line(),
-            rows: diff_rows(before, &after),
+            rows,
             elapsed: Duration::from_millis(412),
         }));
         view

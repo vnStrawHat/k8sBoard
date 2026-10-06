@@ -1,6 +1,7 @@
 //! The line diff of Edit YAML (spec 0031): the object as it is now against the server's dry-run
 //! answer, both masked and without the edit header, as rows for the Diff tab. Pure.
 
+use std::ops::Range;
 use std::time::Duration;
 
 use gpui_kit::SharedString;
@@ -29,6 +30,9 @@ pub(crate) struct DiffRow {
     pub(crate) old_line: Option<usize>,
     pub(crate) new_line: Option<usize>,
     pub(crate) text: SharedString,
+    /// Byte range of `text` that differs from the paired line of a 1:1 `−`/`+` change; `None` for
+    /// every other row.
+    pub(crate) changed: Option<Range<usize>>,
 }
 
 impl DiffRow {
@@ -38,6 +42,7 @@ impl DiffRow {
             old_line: None,
             new_line: None,
             text: SharedString::default(),
+            changed: None,
         }
     }
 }
@@ -77,6 +82,7 @@ pub(crate) fn diff_rows(before: &str, after: &str) -> Vec<DiffRow> {
                         .trim_end_matches(['\n', '\r'])
                         .to_owned()
                         .into(),
+                    changed: None,
                 });
             }
         }
@@ -85,7 +91,53 @@ pub(crate) fn diff_rows(before: &str, after: &str) -> Vec<DiffRow> {
     if total > covered {
         rows.push(DiffRow::folded(total - covered));
     }
+    mark_changed_spans(&mut rows);
     rows
+}
+
+/// Sets `changed` on both rows of every `−` line directly followed by one `+` line. A block of
+/// several removed or added lines has no certain pairing, so it gets no span.
+fn mark_changed_spans(rows: &mut [DiffRow]) {
+    let mut at = 0;
+    while at < rows.len() {
+        if rows[at].kind != DiffRowKind::Removed {
+            at += 1;
+            continue;
+        }
+        let removed = rows[at..]
+            .iter()
+            .take_while(|row| row.kind == DiffRowKind::Removed)
+            .count();
+        let added = rows[at + removed..]
+            .iter()
+            .take_while(|row| row.kind == DiffRowKind::Added)
+            .count();
+        if removed == 1 && added == 1 {
+            let (old, new) = changed_spans(&rows[at].text, &rows[at + 1].text);
+            rows[at].changed = Some(old).filter(|span| !span.is_empty());
+            rows[at + 1].changed = Some(new).filter(|span| !span.is_empty());
+        }
+        at += removed + added;
+    }
+}
+
+/// The byte ranges of `old` and `new` left after cutting their common prefix and common suffix;
+/// the two never overlap, so `image: a:1` against `image: a:2` marks only the last character.
+fn changed_spans(old: &str, new: &str) -> (Range<usize>, Range<usize>) {
+    let prefix: usize = old
+        .chars()
+        .zip(new.chars())
+        .take_while(|(a, b)| a == b)
+        .map(|(a, _)| a.len_utf8())
+        .sum();
+    let suffix: usize = old[prefix..]
+        .chars()
+        .rev()
+        .zip(new[prefix..].chars().rev())
+        .take_while(|(a, b)| a == b)
+        .map(|(a, _)| a.len_utf8())
+        .sum();
+    (prefix..old.len() - suffix, prefix..new.len() - suffix)
 }
 
 #[cfg(test)]

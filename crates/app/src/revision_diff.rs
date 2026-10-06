@@ -3,7 +3,6 @@
 //! YAML tab, so env literals stay hidden until the toggle asks for them, and nothing here logs or
 //! keeps the text beyond the diff rows it draws.
 
-use std::ops::Range;
 use std::rc::Rc;
 
 use cluster::{ClusterConnection, EnvValues, ObjectKind, ObjectRef, ReplicaSetSummary};
@@ -12,9 +11,9 @@ use gpui_kit::component::button::Button;
 use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::{ActiveTheme as _, Disableable as _, Sizable as _, h_flex, v_flex};
 use gpui_kit::{
-    AnyElement, App, Context, Div, Entity, IntoElement, ParentElement as _, Render, SharedString,
-    Styled as _, Task, UniformListScrollHandle, WeakEntity, Window, div,
-    prelude::FluentBuilder as _, uniform_list,
+    AnyElement, App, Context, Div, Entity, IntoElement, ListAlignment, ListState,
+    ParentElement as _, Render, SharedString, Styled as _, Task, WeakEntity, Window, div, list,
+    prelude::FluentBuilder as _, px,
 };
 
 use crate::app_shell::AppShell;
@@ -242,7 +241,8 @@ pub(crate) struct RevisionDiffView {
     connection: Option<ClusterConnection>,
     env: EnvValues,
     state: DiffState,
-    scroll: UniformListScrollHandle,
+    /// Follows the count of the Ready rows; the rows wrap, so their heights differ.
+    diff_list: ListState,
     /// The Deployment the footer button reveals; `None` where the dialog is already on it.
     go_to: Option<GoTo>,
 }
@@ -260,7 +260,7 @@ impl RevisionDiffView {
             state: DiffState::Loading {
                 _task: Task::ready(()),
             },
-            scroll: UniformListScrollHandle::new(),
+            diff_list: ListState::new(0, ListAlignment::Top, px(200.)),
             go_to: None,
         };
         view.load(EnvValues::Hidden, cx);
@@ -305,15 +305,16 @@ impl RevisionDiffView {
         newer: &str,
         hidden_env_values: usize,
     ) -> Self {
+        let rows: Rc<[DiffRow]> = diff_rows(older, newer).into();
         Self {
             request,
             connection: None,
             env: EnvValues::Hidden,
+            diff_list: ListState::new(rows.len(), ListAlignment::Top, px(200.)),
             state: DiffState::Ready {
-                rows: diff_rows(older, newer).into(),
+                rows,
                 hidden_env_values,
             },
-            scroll: UniformListScrollHandle::new(),
             go_to: None,
         }
     }
@@ -370,6 +371,11 @@ impl RevisionDiffView {
                 Err(_) => DiffState::Failed("The request stopped before it finished".into()),
             };
             let _ = this.update(cx, |view, cx| {
+                let count = match &state {
+                    DiffState::Ready { rows, .. } => rows.len(),
+                    DiffState::Loading { .. } | DiffState::Failed(_) => 0,
+                };
+                view.diff_list.reset(count);
                 view.state = state;
                 cx.notify();
             });
@@ -479,29 +485,20 @@ impl RevisionDiffView {
                 Some(note) => centered(div().text_sm().text_color(muted).child(note)),
                 None => {
                     let rows = Rc::clone(rows);
-                    uniform_list(
-                        "revision-diff-rows",
-                        rows.len(),
-                        move |range: Range<usize>, _: &mut Window, cx: &mut App| {
-                            rows_in(&rows, range, cx)
+                    list(
+                        self.diff_list.clone(),
+                        move |ix, _: &mut Window, cx: &mut App| {
+                            rows.get(ix)
+                                .map_or_else(div, |row| diff_row_element(row, cx))
+                                .into_any_element()
                         },
                     )
-                    .track_scroll(&self.scroll)
                     .size_full()
                     .into_any_element()
                 }
             },
         }
     }
-}
-
-/// The rows `range` of the diff, drawn on demand by the list.
-fn rows_in(rows: &[DiffRow], range: Range<usize>, cx: &App) -> Vec<Div> {
-    rows.get(range)
-        .unwrap_or_default()
-        .iter()
-        .map(|row| diff_row_element(row, cx))
-        .collect()
 }
 
 fn centered(content: impl IntoElement) -> AnyElement {

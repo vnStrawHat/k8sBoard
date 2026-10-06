@@ -87,3 +87,28 @@ fn an_empty_side_adds_every_line() {
     let rows = diff_rows("", "a\nb\n");
     assert_eq!(kinds(&rows), [DiffRowKind::Added, DiffRowKind::Added]);
 }
+
+#[test]
+fn a_one_to_one_change_marks_only_the_differing_span() {
+    let rows = diff_rows("image: app:1.2\n", "image: app:1.3\n");
+    assert_eq!(rows[0].changed, Some(13..14));
+    assert_eq!(rows[1].changed, Some(13..14));
+}
+
+#[test]
+fn a_pure_insertion_marks_only_the_added_side() {
+    assert_eq!(changed_spans("name: a", "name: ab"), (7..7, 7..8));
+}
+
+#[test]
+fn the_span_split_never_overlaps_and_respects_characters() {
+    // The prefix and the suffix share the repeated `a`: the spans stay inside the shorter line.
+    assert_eq!(changed_spans("aa", "aaa"), (2..2, 2..3));
+    assert_eq!(changed_spans("héllo", "hállo"), (1..3, 1..3));
+}
+
+#[test]
+fn several_removed_or_added_lines_get_no_span() {
+    let rows = diff_rows("a: 1\nb: 2\n", "a: 9\nb: 8\nc: 7\n");
+    assert!(rows.iter().all(|row| row.changed.is_none()));
+}

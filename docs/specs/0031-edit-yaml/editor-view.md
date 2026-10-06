@@ -33,7 +33,7 @@ enum PreviewFailure { Local(EditError), Invalid { message: SharedString, fields:
 | Header | the STG/PROD pill of the cluster (the one of the confirm dialogs), kind short name, `{namespace}/{name}` mono, muted `resourceVersion {rv}` and the cluster name; right: `Env values` (disabled while dirty, tooltip `Discard your changes to show env values`), `Format` |
 | Tabs | kit `TabBar`: `Editor`, `Diff vs cluster` (`· {n}` after a passed preview) |
 | Editor tab | `Editor::new(&editor).bordered(false).text_xs()` |
-| Diff tab | `uniform_list` of `DiffRow`: old and new line numbers, sign, mono text. Removed rows use the danger token tint, added rows the success token, folded rows muted `··· {n} unchanged lines`. Otherwise a spinner (`Running`), the failure, or `Press Ctrl S to check the change with the server` |
+| Diff tab | gpui `list` (wrapping rows, `ListState` reset when the rows change) of `DiffRow`: old and new line numbers, sign, mono text; a long line wraps in its own column so continuation lines hang under the text, past the gutter. In a 1:1 `−`/`+` pair the changed span (after the common prefix and suffix) gets a stronger tint. Removed rows use the danger token tint, added rows the success token, folded rows muted `··· {n} unchanged lines`. Otherwise a spinner (`Running`), the failure, or `Press Ctrl S to check the change with the server` |
 | Side panel (280 px) | `{n} changes` (path mono with ellipsis and tooltip, `old → new`, `—` when absent, `and {more} more`). `Checks`: the dry-run line, then each `EditCheck` text (edit-preview.md, warning tone). `Changed on the server since you opened it`: the `server_changed` paths. `The change is invalid` + each field **verbatim** (danger) |
 | Banner | Conflict: `The object changed since you opened it.` + `Reload and keep my changes` / `Discard my changes`. After a rebase with `unreachable`: one line `{path}: no longer exists on the server` each. Deleted / OutcomeUnknown: as in [write-path.md](write-path.md) |
 | Footer | `Not checked yet`, `Server dry-run…`, `Dry-run OK · {ms} ms · unchanged since you opened it`, `Changed since the last check`, or the failure. Right: `Cancel`, `Apply…` primary with `Kbd` Ctrl S (disabled while clean: `No changes`; while `Running`: `Waiting for the dry-run…`) |
@@ -44,7 +44,7 @@ Theme tokens only. There is no Revision history tab, snapshot line, or managedFi
 
 ```rust
 pub(crate) enum DiffRowKind { Same, Removed, Added, Folded { lines: usize } }
-pub(crate) struct DiffRow { pub(crate) kind: DiffRowKind, pub(crate) old_line: Option<usize>, pub(crate) new_line: Option<usize>, pub(crate) text: SharedString }
+pub(crate) struct DiffRow { pub(crate) kind: DiffRowKind, pub(crate) old_line: Option<usize>, pub(crate) new_line: Option<usize>, pub(crate) text: SharedString, pub(crate) changed: Option<Range<usize>> /* span of a 1:1 change */ }
 pub(crate) fn diff_rows(before: &str, after: &str) -> Vec<DiffRow>; // similar::TextDiff::from_lines, grouped_ops(3); one Folded per gap
 ```
 

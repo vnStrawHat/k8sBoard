@@ -2,8 +2,6 @@
 //! side panel of changes and checks, and the footer. A child of `yaml_edit` because it reads the
 //! view's state; it changes none of it except through the buttons' handlers.
 
-use std::ops::Range;
-
 use cluster::ObjectKind;
 use gpui_kit::component::alert::Alert;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
@@ -16,9 +14,9 @@ use gpui_kit::component::{
     v_flex,
 };
 use gpui_kit::{
-    AnyElement, App, Context, Div, InteractiveElement as _, IntoElement, KeyDownEvent,
-    ParentElement as _, Render, SharedString, StatefulInteractiveElement as _, Styled as _, Window,
-    div, px, uniform_list,
+    AnyElement, App, Context, Div, HighlightStyle, InteractiveElement as _, IntoElement,
+    KeyDownEvent, ParentElement as _, Render, SharedString, StatefulInteractiveElement as _,
+    Styled as _, StyledText, Window, div, list, px,
 };
 
 use super::{
@@ -36,11 +34,15 @@ const SIDE_PANEL_WIDTH: f32 = 280.;
 /// How many characters of a path fit the side panel in the mono font; a longer one is cut in the
 /// middle (the tooltip has all of it), so the field that changed stays visible.
 const PATH_CHARS: usize = 34;
+/// A diff row is at least this high; a wrapped line makes it taller.
 const DIFF_ROW_HEIGHT: f32 = 20.;
+const DIFF_ROW_PADDING: f32 = 2.;
 /// The width of a line-number column of the diff.
 const LINE_NUMBER_WIDTH: f32 = 44.;
 /// How strongly a removed or added row is tinted by its theme token.
 const ROW_TINT: f32 = 0.14;
+/// The stronger tint of the changed span inside a changed row.
+const SPAN_TINT: f32 = 0.4;
 
 /// The tabs of the edit of a `kind`, in order: the Revision history is for Deployments only.
 pub(crate) fn edit_tabs(kind: ObjectKind) -> &'static [EditTab] {
@@ -301,17 +303,12 @@ impl YamlEditView {
         let theme = cx.theme();
         match &self.preview {
             PreviewState::Running { .. } => busy("Server dry-run…", cx),
-            PreviewState::Passed(passed) => {
-                let count = passed.rows.len();
-                uniform_list(
-                    "edit-diff",
-                    count,
-                    cx.processor(|view, range: Range<usize>, _, cx| view.diff_rows_in(range, cx)),
-                )
-                .track_scroll(&self.diff_scroll)
-                .size_full()
-                .into_any_element()
-            }
+            PreviewState::Passed(_) => list(
+                self.diff_list.clone(),
+                cx.processor(|view, row: usize, _, cx| view.diff_row_at(row, cx)),
+            )
+            .size_full()
+            .into_any_element(),
             PreviewState::NotChecked => muted_center(
                 "Press Ctrl S to check the change with the server",
                 theme.muted_foreground,
@@ -327,18 +324,16 @@ impl YamlEditView {
         }
     }
 
-    /// The rows `range` of the passed preview, drawn on demand by the list.
-    fn diff_rows_in(&self, range: Range<usize>, cx: &App) -> Vec<Div> {
-        let PreviewState::Passed(passed) = &self.preview else {
-            return Vec::new();
-        };
-        passed
-            .rows
-            .get(range)
-            .unwrap_or_default()
-            .iter()
-            .map(|row| diff_row_element(row, cx))
-            .collect()
+    /// Row `row` of the passed preview, drawn on demand by the list.
+    fn diff_row_at(&self, row: usize, cx: &App) -> AnyElement {
+        match &self.preview {
+            PreviewState::Passed(passed) => passed
+                .rows
+                .get(row)
+                .map_or_else(div, |row| diff_row_element(row, cx))
+                .into_any_element(),
+            _ => div().into_any_element(),
+        }
     }
 
     fn render_side(&self, text: &str, cx: &Context<Self>) -> AnyElement {
@@ -588,7 +583,8 @@ pub(crate) fn muted_center(text: impl Into<SharedString>, color: gpui_kit::Hsla)
 }
 
 /// One row of a line diff: line numbers, sign, and a tint from the theme's danger and success
-/// tokens. Shared by the Edit YAML Diff tab and the revision diff dialog.
+/// tokens. Shared by the Edit YAML Diff tab and the revision diff dialog. A long line wraps in its
+/// own column, so the continuation lines hang under the text, past the gutter.
 pub(crate) fn diff_row_element(row: &DiffRow, cx: &App) -> Div {
     let theme = cx.theme();
     let (danger, success, muted) = (
@@ -598,8 +594,9 @@ pub(crate) fn diff_row_element(row: &DiffRow, cx: &App) -> Div {
     );
     let base = h_flex()
         .w_full()
-        .h(px(DIFF_ROW_HEIGHT))
-        .items_center()
+        .min_h(px(DIFF_ROW_HEIGHT))
+        .py(px(DIFF_ROW_PADDING))
+        .items_start()
         .font_family(theme.mono_font_family.clone())
         .text_xs();
     let number = |line: Option<usize>| {
@@ -620,19 +617,19 @@ pub(crate) fn diff_row_element(row: &DiffRow, cx: &App) -> Div {
             .child(number(row.old_line))
             .child(number(row.new_line))
             .child(sign("", muted))
-            .child(line_text(row)),
+            .child(line_text(row, None)),
         DiffRowKind::Removed => base
             .bg(danger.opacity(ROW_TINT))
             .child(number(row.old_line))
             .child(number(row.new_line))
             .child(sign("−", danger))
-            .child(line_text(row)),
+            .child(line_text(row, Some(danger))),
         DiffRowKind::Added => base
             .bg(success.opacity(ROW_TINT))
             .child(number(row.old_line))
             .child(number(row.new_line))
             .child(sign("+", success))
-            .child(line_text(row)),
+            .child(line_text(row, Some(success))),
     }
 }
 
@@ -644,13 +641,17 @@ fn sign(text: &'static str, color: gpui_kit::Hsla) -> Div {
         .child(text)
 }
 
-fn line_text(row: &DiffRow) -> Div {
-    div()
-        .flex_1()
-        .min_w_0()
-        .whitespace_nowrap()
-        .overflow_hidden()
-        .child(row.text.clone())
+/// The line text; the changed span of a 1:1 change is tinted with the row's `tone` more strongly.
+fn line_text(row: &DiffRow, tone: Option<gpui_kit::Hsla>) -> Div {
+    let text = div().flex_1().min_w_0();
+    let (Some(span), Some(tone)) = (row.changed.clone(), tone) else {
+        return text.child(row.text.clone());
+    };
+    let highlight = HighlightStyle {
+        background_color: Some(tone.opacity(SPAN_TINT)),
+        ..HighlightStyle::default()
+    };
+    text.child(StyledText::new(row.text.clone()).with_highlights([(span, highlight)]))
 }
 
 /// `2 changes`, or `1 change`.

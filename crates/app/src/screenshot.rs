@@ -441,7 +441,7 @@ spec:
         configMapKeyRef:
           key: url
           name: ledger
-    image: registry.example.com/payments/api:2.13.0
+    image: registry.example.com/payments/api:2.13.0@sha256:3f1c0a9d5b7e2a4c6d8f0b1a3c5e7d9f1b3a5c7e9d0f2a4b6c8e0d1f3a5b7c9d
     name: api
     resources:
       limits:
@@ -467,7 +467,7 @@ spec:
         configMapKeyRef:
           key: url
           name: ledger
-    image: registry.example.com/payments/api:2.14.0
+    image: registry.example.com/payments/api:2.14.0@sha256:8a2e4c6f0b1d3a5c7e9f1b3d5a7c9e0f2b4d6a8c0e1f3b5d7a9c1e3f5b7d9a0c
     name: api
     readinessProbe:
       httpGet:

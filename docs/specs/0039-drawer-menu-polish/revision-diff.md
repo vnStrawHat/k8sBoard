@@ -51,7 +51,7 @@ The current side comes from `revision_rows` (`is_current`); with no current row 
 | Title | `Revision diff · deployment/{name}` |
 | Subtitle | `rev {old} · {tag} → rev {new} · {tag}` (`(current)` after the current side) |
 | Toolbar | `Show env values` / `Hide env values` toggle, shown only when either side hid some (`hidden_env_values > 0`), like the YAML tab (`shows_env_toggle`) |
-| Body | Loading: spinner `Loading revisions…`; Failed: `Could not load rev {n}: {error text}` (`error_text` as the YAML tab); Same (equal texts, nothing hidden): `The pod templates of the two revisions are the same.`; Same with `hidden_env_values > 0` on either side: `No visible difference; env values are hidden`, shown next to the `Show env values` toggle (hidden values may differ); Diff: `uniform_list` of `diff_row_element(row)` |
+| Body | Loading: spinner `Loading revisions…`; Failed: `Could not load rev {n}: {error text}` (`error_text` as the YAML tab); Same (equal texts, nothing hidden): `The pod templates of the two revisions are the same.`; Same with `hidden_env_values > 0` on either side: `No visible difference; env values are hidden`, shown next to the `Show env values` toggle (hidden values may differ); Diff: wrapping `list` of `diff_row_element(row)` |
 
 ```rust
 enum DiffState { Loading { _task: Task<()> }, Failed(SharedString), Ready(Rc<[DiffRow]>) }
