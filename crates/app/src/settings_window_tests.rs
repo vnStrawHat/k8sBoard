@@ -488,6 +488,27 @@ fn every_page_renders_with_non_default_values(cx: &mut TestAppContext) {
     }
 }
 
+/// The Reset of a page puts the default value back through the dropdown label, so every default
+/// has to be an option of its table; a default outside the table would show as `unlisted`.
+#[test]
+fn every_default_of_a_dropdown_is_listed_in_its_table() {
+    use crate::settings::{
+        DENSITY_OPTIONS, FONT_SIZE_OPTIONS, SCROLLBACK_OPTIONS, SHELL_OPTIONS, TAIL_OPTIONS,
+    };
+    let defaults = Settings::default();
+    let unlisted = || "unlisted".to_owned();
+    for label in [
+        TAIL_OPTIONS.label(defaults.logs.tail_lines, unlisted),
+        SCROLLBACK_OPTIONS.label(defaults.terminal.scrollback_lines, unlisted),
+        FONT_SIZE_OPTIONS.label(defaults.terminal.font_size, unlisted),
+        SHELL_OPTIONS.label(defaults.terminal.default_shell, unlisted),
+        DENSITY_OPTIONS.label(defaults.appearance.density, unlisted),
+        COLOR_THEME_OPTIONS.label(defaults.appearance.color_theme, unlisted),
+    ] {
+        assert_ne!(label.as_ref(), "unlisted");
+    }
+}
+
 #[test]
 fn settings_page_icons_are_distinct() {
     let mut seen = std::collections::HashSet::new();

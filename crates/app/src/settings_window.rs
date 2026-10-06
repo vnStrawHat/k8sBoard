@@ -403,13 +403,16 @@ fn metrics_page(page: &Entity<MetricsPage>) -> SettingPage {
 
 /// The General page: where exports start, and what the Issues engine watches.
 fn general_page() -> SettingPage {
-    let folder = SettingField::render(|_, _, cx| export_folder_field(cx));
+    let folder = SettingField::render(|_, _, cx| export_folder_field(cx)).on_reset(
+        |cx| AppSettings::get(cx).general.export_dir.is_some(),
+        |_, cx| AppSettings::update(cx, |settings| settings.general.export_dir = None),
+    );
     let tls = SettingField::switch(
         |cx| AppSettings::get(cx).general.watch_tls_secrets,
         |value, cx| AppSettings::update(cx, |settings| settings.general.watch_tls_secrets = value),
-    );
+    )
+    .default_value(SettingsData::default().general.watch_tls_secrets);
     SettingPage::new(SettingsPage::General.title())
-        .resettable(false)
         .group(
             SettingGroup::new().title("Files").item(
                 SettingItem::new("Export folder", folder)
@@ -486,13 +489,15 @@ fn choose_export_folder(cx: &mut App) {
 }
 
 /// A dropdown over an option table: `get` reads the stored value, `set` stores the picked one.
-/// A stored value outside the table shows as `unlisted` says.
+/// A stored value outside the table shows as `unlisted` says. The page's Reset puts back the
+/// value of `SettingsData::default()`.
 fn table_dropdown<T: Copy + PartialEq + 'static>(
     table: &'static OptionTable<T>,
     get: fn(&SettingsData) -> T,
     set: fn(&mut SettingsData, T),
     unlisted: fn(T) -> String,
 ) -> SettingField<SharedString> {
+    let default = get(&SettingsData::default());
     SettingField::dropdown(
         table.choices(),
         move |cx| {
@@ -504,6 +509,7 @@ fn table_dropdown<T: Copy + PartialEq + 'static>(
             AppSettings::update(cx, |settings| set(settings, value));
         },
     )
+    .default_value(table.label(default, || unlisted(default)))
 }
 
 /// Defaults for new log tabs; a tab can still change them from its toolbar.
@@ -517,26 +523,27 @@ fn logs_page() -> SettingPage {
     let timestamps = SettingField::switch(
         |cx| AppSettings::get(cx).logs.show_timestamps,
         |value, cx| AppSettings::update(cx, |settings| settings.logs.show_timestamps = value),
-    );
+    )
+    .default_value(SettingsData::default().logs.show_timestamps);
     let wrap = SettingField::switch(
         |cx| AppSettings::get(cx).logs.wrap_lines,
         |value, cx| AppSettings::update(cx, |settings| settings.logs.wrap_lines = value),
-    );
+    )
+    .default_value(SettingsData::default().logs.wrap_lines);
     let json = SettingField::switch(
         |cx| AppSettings::get(cx).logs.show_json,
         |value, cx| AppSettings::update(cx, |settings| settings.logs.show_json = value),
-    );
-    SettingPage::new(SettingsPage::Logs.title())
-        .resettable(false)
-        .group(
-            SettingGroup::new()
-                .title("New log tabs")
-                .description("Each tab can still change these from its toolbar.")
-                .item(SettingItem::new("Lines loaded at open", tail))
-                .item(SettingItem::new("Timestamps", timestamps))
-                .item(SettingItem::new("Wrap long lines", wrap))
-                .item(SettingItem::new("Show JSON as message and fields", json)),
-        )
+    )
+    .default_value(SettingsData::default().logs.show_json);
+    SettingPage::new(SettingsPage::Logs.title()).group(
+        SettingGroup::new()
+            .title("New log tabs")
+            .description("Each tab can still change these from its toolbar.")
+            .item(SettingItem::new("Lines loaded at open", tail))
+            .item(SettingItem::new("Timestamps", timestamps))
+            .item(SettingItem::new("Wrap long lines", wrap))
+            .item(SettingItem::new("Show JSON as message and fields", json)),
+    )
 }
 
 /// The shell a new tab runs, and how the terminal keeps and draws its text.
@@ -560,11 +567,10 @@ fn terminal_page() -> SettingPage {
         |size| size.map_or_else(|| "Theme size".to_owned(), |size| format!("{size} px")),
     );
     SettingPage::new(SettingsPage::TerminalAndShell.title())
-        .resettable(false)
         .group(
             SettingGroup::new()
                 .title("Shell")
-                .description("Applies to new shell tabs; font size applies at once.")
+                .description("Applies to new shell tabs.")
                 .item(
                     SettingItem::new("Default shell", shell)
                         .description("Used by Open shell. The tab can still pick another."),
@@ -573,6 +579,7 @@ fn terminal_page() -> SettingPage {
         .group(
             SettingGroup::new()
                 .title("Terminal")
+                .description("Font size applies at once.")
                 .item(SettingItem::new("Scrollback", scrollback))
                 .item(SettingItem::new("Font size", font)),
         )
@@ -600,12 +607,18 @@ fn appearance_page() -> SettingPage {
             COLOR_THEME_OPTIONS.label(colors, || "Default".to_owned())
         },
         |label, cx| change_color_theme(&label, cx),
+    )
+    .default_value(
+        COLOR_THEME_OPTIONS.label(SettingsData::default().appearance.color_theme, || {
+            "Default".to_owned()
+        }),
     );
     let mode = SettingField::dropdown(
         theme_choices(),
         |cx| theme_label(AppSettings::get(cx).theme).into(),
         |label, cx| change_theme(&label, cx),
-    );
+    )
+    .default_value(theme_label(SettingsData::default().theme));
     let density = table_dropdown(
         &DENSITY_OPTIONS,
         |settings| settings.appearance.density,
@@ -613,10 +626,9 @@ fn appearance_page() -> SettingPage {
         |_| "Compact (28 px)".to_owned(),
     );
     SettingPage::new(SettingsPage::Appearance.title())
-        .resettable(false)
         .group(
             SettingGroup::new()
-                .title("Theme")
+                .title("Colours")
                 .description("Applies to every window at once.")
                 .item(
                     SettingItem::new("Theme", colors)
