@@ -31,8 +31,8 @@ Status: **draft 2026-10-05, revised after advisor review**, from the task-based 
 ## Acceptance checklist (details in acceptance.md)
 
 - [x] A1 history core and keys (AC 1-9; as built: `Back` takes an `is_served` predicate, the shell lives in `app_shell_history.rs`, and the terminal `NoAction` list is not needed because the workspace context already excludes `Terminal`)
-- [ ] A2 header Back, Prev / Next (AC 10, 14)
-- [ ] A3 `follow_link`: denied, out of scope (AC 12, 13)
+- [x] A2 header Back, Prev / Next (AC 10, 14)
+- [x] A3 `follow_link`: denied, out of scope (AC 12, 13)
 - [x] B1 one link style, `open_link`, endpoint pod links (AC 11, 17; as built: list rows keep their row click and draw the name with `link_name`; the Revisions row links its `rev N` title)
 - [x] B2 Pod Overview without new watches (AC 19-21; as built: `Volumes` is always shown, with a note when no container mounts a volume; Env / Mounts links open through `open_link`, A3 adds the denied refusal)
 - [x] B3a Pod Services (AC 20, 22); as built: `key_related_subject` (related_objects.rs) gives the Pod subject from the key, `services_selecting` lives in `kind_join.rs`, and the section is capped at 20 rows
@@ -41,7 +41,7 @@ Status: **draft 2026-10-05, revised after advisor review**, from the task-based 
 - [x] C1 palette searches the live condition feeds in scope (AC 23)
 - [x] C2 `list_object_names` (AC 24; AC 27 for the cluster half)
 - [x] C3 name index in the palette (AC 25-30); as built: `NameListState::Denied` / `Failed` carry no payload (the error is logged per kind), a run waits while the access review is `Checking`, a ready list stays searchable while the next run loads, and the footer shows `Searching …` in place of the syntax hints
-- [ ] General (AC 31-33)
+- [x] General (AC 31-33)
 
 ## Cost summary
 
