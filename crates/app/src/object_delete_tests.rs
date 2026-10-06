@@ -343,7 +343,7 @@ fn uncontrolled_pod_warns() {
     let mixed = [pod("a", false), pod("b", true), pod("c", false)];
     assert_eq!(
         lines(kind_warnings(ObjectKind::Pod, &mixed)),
-        ["2 pods are not managed by a controller"]
+        ["2 pods are not managed by a controller and will not come back: payments/a, payments/c"]
     );
 }
 
@@ -784,4 +784,32 @@ fn a_propagation_change_keeps_the_removal() {
         rebuilt.plan.items[0].request.operation(),
         WriteOperation::EvictPod { .. }
     ));
+}
+
+#[test]
+fn the_warning_of_a_bulk_delete_names_the_pods_that_will_not_come_back() {
+    let names = ["a", "b", "c", "d", "e", "f", "g"];
+    let targets: Vec<DeleteTarget> = names.iter().map(|name| pod(name, false)).collect();
+    assert_eq!(
+        lines(kind_warnings(ObjectKind::Pod, &targets)),
+        [
+            "7 pods are not managed by a controller and will not come back: \
+          payments/a, payments/b, payments/c, payments/d, payments/e, +2"
+        ]
+    );
+}
+
+#[test]
+fn only_the_pods_of_a_bulk_delete_without_a_controller_get_the_tag() {
+    let mixed = vec![pod("a", false), pod("b", true), pod("c", false)];
+    let batch = batch_of(ObjectKind::Pod, mixed);
+    assert_eq!(
+        pods_without_controller(&batch),
+        ["payments/a", "payments/c"]
+    );
+    // A lone pod is told by its warning line, a controller-owned set has nothing to tag.
+    let single = batch_of(ObjectKind::Pod, vec![pod("a", false)]);
+    assert!(pods_without_controller(&single).is_empty());
+    let owned = batch_of(ObjectKind::Pod, vec![pod("a", true), pod("b", true)]);
+    assert!(pods_without_controller(&owned).is_empty());
 }

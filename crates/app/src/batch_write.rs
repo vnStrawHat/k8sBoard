@@ -509,11 +509,20 @@ pub(crate) fn batch_notice(verb: &str, results: &[ItemProgress]) -> String {
     text
 }
 
-/// How many objects the notice names before it counts the rest.
-const NOT_DONE_NAMED: usize = 5;
+/// How many objects a line of a dialog or a notice names before it counts the rest.
+const NAMES_SHOWN: usize = 5;
 
-/// `a, b, c, d, e, +2`: the objects that failed, were not sent, or have an unknown outcome. `None`
-/// when every item went through.
+/// `a, b, c, d, e, +2`: the names, then how many more there are.
+pub(crate) fn named_list(names: &[&str]) -> String {
+    let mut text = names[..names.len().min(NAMES_SHOWN)].join(", ");
+    if names.len() > NAMES_SHOWN {
+        text.push_str(&format!(", +{}", names.len() - NAMES_SHOWN));
+    }
+    text
+}
+
+/// The objects that failed, were not sent, or have an unknown outcome, as `named_list` reads them.
+/// `None` when every item went through.
 fn not_done_names(items: &[BatchItem], results: &[ItemProgress]) -> Option<String> {
     let names: Vec<&str> = items
         .iter()
@@ -529,11 +538,7 @@ fn not_done_names(items: &[BatchItem], results: &[ItemProgress]) -> Option<Strin
     if names.is_empty() {
         return None;
     }
-    let mut text = names[..names.len().min(NOT_DONE_NAMED)].join(", ");
-    if names.len() > NOT_DONE_NAMED {
-        text.push_str(&format!(", +{}", names.len() - NOT_DONE_NAMED));
-    }
-    Some(text)
+    Some(named_list(&names))
 }
 
 impl AppShell {

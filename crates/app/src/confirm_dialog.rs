@@ -31,7 +31,7 @@ use crate::app_shell::batch_write::{
 };
 use crate::app_shell::node_editor::{CHANGED_NOTICE, NodeEditKind};
 use crate::app_shell::object_delete::{
-    delete_dry_run_progress, propagation_choices, with_propagation,
+    delete_dry_run_progress, pods_without_controller, propagation_choices, with_propagation,
 };
 use crate::app_shell::write_flow::{
     CheckedWriteError, CommitMode, ConnectCommit, ConnectIntent, DryRunState, TypedMatch,
@@ -59,10 +59,20 @@ fn eviction_line(grace: &str) -> String {
         None => format!("Eviction request · {grace}"),
     }
 }
-/// The object list of a batch scrolls past this height.
-const ITEMS_MAX_HEIGHT: f32 = 240.;
-/// The rows of the list that always fit inside `ITEMS_MAX_HEIGHT`; more than that scroll.
-const ITEMS_VISIBLE: usize = 8;
+/// One row of the object list of a batch, and the gap between two rows. Fixed, so the height of
+/// the list below is exactly `ITEMS_VISIBLE` rows.
+const ITEM_ROW_HEIGHT: f32 = 23.;
+const ITEM_ROW_GAP: f32 = 4.;
+/// The rows of the list that are in view; more than that scroll.
+const ITEMS_VISIBLE: usize = 9;
+/// The object list of a batch scrolls past this height: `ITEMS_VISIBLE` rows and the gaps between.
+const ITEMS_MAX_HEIGHT: f32 =
+    ITEMS_VISIBLE as f32 * ITEM_ROW_HEIGHT + (ITEMS_VISIBLE - 1) as f32 * ITEM_ROW_GAP;
+
+/// How many rows of a list of `rows` are out of view, which the `+N more` line counts.
+fn hidden_rows(rows: usize) -> usize {
+    rows.saturating_sub(ITEMS_VISIBLE)
+}
 
 /// Destructive and privileged actions confirm with the danger button.
 fn has_danger_button(risk: ActionRisk) -> bool {
@@ -788,6 +798,7 @@ impl ConfirmDialog {
             | ItemProgress::Gone => theme.muted_foreground,
         };
         let is_single = batch.plan.items.len() == 1;
+        let loose = pods_without_controller(batch);
         let rows = batch
             .plan
             .items
@@ -799,15 +810,29 @@ impl ConfirmDialog {
                     ItemProgress::Rejected(_) if is_single => "failed".to_owned(),
                     other => other.text(),
                 };
+                let is_loose = loose.contains(&item.object);
                 h_flex()
+                    .h(px(ITEM_ROW_HEIGHT))
                     .gap_2()
+                    .items_center()
                     .justify_between()
                     .child(
-                        div()
+                        h_flex()
                             .flex_shrink_0()
-                            .text_sm()
-                            .font_family(mono.clone())
-                            .child(item.object.clone()),
+                            .gap_2()
+                            .items_center()
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .font_family(mono.clone())
+                                    .child(item.object.clone()),
+                            )
+                            .children(is_loose.then(|| {
+                                div()
+                                    .text_xs()
+                                    .text_color(tone_color(StatusTone::Warn, cx))
+                                    .child("no controller")
+                            })),
                     )
                     .child(
                         div()
@@ -820,7 +845,9 @@ impl ConfirmDialog {
             });
         let skipped = batch.plan.skipped.iter().map(|skip| {
             h_flex()
+                .h(px(ITEM_ROW_HEIGHT))
                 .gap_2()
+                .items_center()
                 .justify_between()
                 .text_color(theme.muted_foreground)
                 .child(
@@ -845,14 +872,14 @@ impl ConfirmDialog {
         };
         let list = v_flex()
             .id("batch-items")
-            .gap_1()
+            .gap(px(ITEM_ROW_GAP))
             .max_h(px(ITEMS_MAX_HEIGHT))
             .overflow_y_scroll()
             .children(rows)
             .children(skipped)
             .children(gone);
         // The list scrolls inside the dialog; without a hint the rows below the fold look absent.
-        let hidden = batch.plan.items.len().saturating_sub(ITEMS_VISIBLE);
+        let hidden = hidden_rows(batch.plan.items.len() + batch.plan.skipped.len());
         let more = (hidden > 0).then(|| {
             div()
                 .text_xs()
@@ -1432,6 +1459,29 @@ mod typed_prompt_tests {
         assert_eq!(
             typed_prompt_text("uat-monitor"),
             "Type uat-monitor to confirm"
+        );
+    }
+}
+
+#[cfg(test)]
+mod item_list_tests {
+    use super::{ITEM_ROW_GAP, ITEM_ROW_HEIGHT, ITEMS_MAX_HEIGHT, ITEMS_VISIBLE, hidden_rows};
+
+    #[test]
+    fn the_more_line_counts_the_rows_that_are_out_of_view() {
+        assert_eq!(ITEMS_VISIBLE, 9);
+        assert_eq!(hidden_rows(12), 3);
+        assert_eq!(hidden_rows(10), 1);
+        assert_eq!(hidden_rows(ITEMS_VISIBLE), 0);
+        assert_eq!(hidden_rows(2), 0);
+    }
+
+    #[test]
+    fn the_list_is_exactly_as_tall_as_the_rows_in_view() {
+        let rows = ITEMS_VISIBLE as f32;
+        assert_eq!(
+            ITEMS_MAX_HEIGHT,
+            rows * ITEM_ROW_HEIGHT + (rows - 1.) * ITEM_ROW_GAP
         );
     }
 }

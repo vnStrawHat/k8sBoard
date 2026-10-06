@@ -60,7 +60,7 @@ fn delete_warnings(kind: ObjectKind, targets: &[DeleteTarget], live: &LiveCluste
 | PersistentVolume | from `reclaim_policy`: `Delete` → `Reclaim policy Delete: the storage asset is deleted too`; `Retain` → none |
 | PersistentVolumeClaim | its bound PV in the session's PV list (0014): `Delete` → `The bound volume {pv} has reclaim policy Delete: its data is deleted too`; PV not loaded → `If the bound volume's reclaim policy is Delete, its data is deleted too` |
 | StatefulSet | `Volume claims stay unless the retention policy deletes them` |
-| Pod without `controller` | `Not managed by a controller; it will not come back` (bulk: `{k} pods are not managed by a controller`) |
+| Pod without `controller` | `Not managed by a controller; it will not come back` (bulk: `{k} pods are not managed by a controller and will not come back: {names}`, up to 5 then `+N`, and each such row of the list carries a `no controller` tag) |
 
 ## Finalizer hints (no polling)
 
@@ -83,4 +83,4 @@ One line per committed object: `{"action":"Delete","object":{…},"fields":[{"pa
 | Screen | Fixture |
 |---|---|
 | `delete-confirm` | first Deployment, PROD TypeName tier (object name), propagation radio, one row `passed · 98 ms`, `Has finalizers: foregroundDeletion` |
-| `delete-bulk-confirm` | Pods, 12 checked, STG Click tier, the list with `passed` rows, `2 pods are not managed by a controller`, the list with `+N more · scroll the list` when it has more than 8 rows, danger `Delete 12 pods` |
+| `delete-bulk-confirm` | Pods, 12 checked, STG Click tier, the list with `passed` rows, `2 pods are not managed by a controller and will not come back: {names}` with the two rows tagged `no controller`, the list (exactly 9 rows tall) with `+N more · scroll the list` when it has more than 9 rows, danger `Delete 12 pods` |

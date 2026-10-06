@@ -19,7 +19,7 @@ use gpui_kit::{App, Context, SharedString, Window};
 use super::AppShell;
 use super::batch_write::{
     BatchExtras, BatchFailure, BatchIntent, BatchItem, BatchPlan, ItemProgress, MAX_BATCH_ITEMS,
-    SkippedItem,
+    SkippedItem, named_list,
 };
 use super::write_flow::{CheckedWriteError, write_error_text};
 use crate::age::format_age;
@@ -342,20 +342,47 @@ pub(crate) fn kind_warnings(kind: ObjectKind, targets: &[DeleteTarget]) -> Vec<S
         }
         ObjectKind::PersistentVolumeClaim => lines.extend(claim_lines(targets)),
         ObjectKind::Pod => {
-            let loose = count_of(targets, |facts| {
-                matches!(facts, TargetFacts::Pod { controller: None })
-            });
-            match (loose, is_single) {
+            let loose = loose_pods(targets);
+            match (loose.len(), is_single) {
                 (0, _) => {}
                 (_, true) => {
                     lines.push("Not managed by a controller; it will not come back".to_owned());
                 }
-                (k, false) => lines.push(format!("{k} pods are not managed by a controller")),
+                (k, false) => {
+                    let names: Vec<&str> = loose.iter().map(AsRef::as_ref).collect();
+                    lines.push(format!(
+                        "{k} pods are not managed by a controller and will not come back: {}",
+                        named_list(&names)
+                    ));
+                }
             }
         }
         _ => {}
     }
     lines.into_iter().map(Into::into).collect()
+}
+
+/// The pods among `targets` that no controller owns, as `namespace/name`: nothing recreates them.
+fn loose_pods(targets: &[DeleteTarget]) -> Vec<SharedString> {
+    targets
+        .iter()
+        .filter(|target| matches!(target.facts, TargetFacts::Pod { controller: None }))
+        .map(DeleteTarget::text)
+        .collect()
+}
+
+/// The objects of a bulk pod delete that get the `no controller` tag in the dialog list, as
+/// `namespace/name`. Empty for any other batch, and for a batch of one, whose warning already
+/// says it.
+pub(crate) fn pods_without_controller(batch: &BatchIntent) -> Vec<SharedString> {
+    match &batch.plan.extras {
+        BatchExtras::Delete(extras)
+            if extras.removal == Removal::Delete && extras.targets.len() > 1 =>
+        {
+            loose_pods(&extras.targets)
+        }
+        BatchExtras::Delete(_) | BatchExtras::None | BatchExtras::DefaultClass(_) => Vec::new(),
+    }
 }
 
 /// The lines of a restart or an eviction of one pod (spec 0040), by what owns it. A delete has none:
