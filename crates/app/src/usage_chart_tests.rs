@@ -42,12 +42,15 @@ fn nice_max_steps_and_floors() {
     assert_eq!(cpu(0.003), 0.01);
     assert_eq!(cpu(0.011), 0.02);
     // No 2.5 step: its midline would read 13m for 12.5m.
-    assert_eq!(cpu(0.021), 0.05);
-    assert_eq!(cpu(0.31), 0.5);
+    assert_eq!(cpu(0.021), 0.03);
+    assert_eq!(cpu(0.31), 0.4);
     assert_eq!(cpu(1.0), 1.0);
     assert_eq!(cpu(1.3), 2.0);
-    assert_eq!(cpu(2.6), 5.0);
-    assert_eq!(cpu(7.0), 10.0);
+    assert_eq!(cpu(2.6), 3.0);
+    assert_eq!(cpu(7.0), 8.0);
+    assert_eq!(cpu(9.0), 10.0);
+    // A 26-core node: not 50 cores, and the midline stays a whole 15.
+    assert_eq!(cpu(26.0), 30.0);
     let bytes = |value| nice_max(value, Measure::Bytes);
     assert_eq!(bytes(0.0), MI);
     // Powers of two (and three quarters of them from 6 up) in the value's own binary unit: the
@@ -75,11 +78,48 @@ fn nice_max_steps_and_floors() {
 #[test]
 fn y_max_includes_reference_lines() {
     let without = model(&[Some(0.1), Some(0.2)], &[], Measure::Cpu);
-    assert_eq!(y_max(&without), 0.5);
+    assert_eq!(y_max(&without), 0.3);
     let with_limit = model(&[Some(0.1), Some(0.2)], &[1.0], Measure::Cpu);
-    assert_eq!(y_max(&with_limit), 2.0);
+    // A reference line takes no headroom: a 1-core limit puts the top at 1 core.
+    assert_eq!(y_max(&with_limit), 1.0);
     let empty = model(&[], &[], Measure::Bytes);
     assert_eq!(y_max(&empty), MI);
+}
+
+#[test]
+fn y_max_follows_the_node_capacity_not_a_power_step() {
+    // 26 cores allocatable, 5 requested, 3 used: the axis is allocatable rounded up.
+    let node = model(&[Some(3.)], &[26., 5.], Measure::Cpu);
+    assert_eq!(y_max(&node), 30.);
+    // 7.6Gi allocatable: 8Gi, not the 12Gi the 6% headroom used to push it to.
+    let memory = model(
+        &[Some(4. * 1024. * MI)],
+        &[7.6 * 1024. * MI],
+        Measure::Bytes,
+    );
+    assert_eq!(y_max(&memory), 8. * 1024. * MI);
+    // Usage above the capacity still gets its headroom.
+    let busy = model(&[Some(4.)], &[4.], Measure::Cpu);
+    assert_eq!(y_max(&busy), 5.);
+}
+
+#[test]
+fn axis_ticks_share_one_unit() {
+    let ticks =
+        |unit, top: f64| [0., 0.5, 1.].map(|fraction| axis_label(unit, top * fraction, top));
+    assert_eq!(
+        ticks(Measure::Cpu, 30.),
+        ["0 cores", "15 cores", "30 cores"]
+    );
+    assert_eq!(ticks(Measure::Cpu, 5.), ["0 cores", "2.5 cores", "5 cores"]);
+    assert_eq!(ticks(Measure::Cpu, 1.), ["0 cores", "0.5 cores", "1 core"]);
+    // Below a core every tick is millicores, 0 included.
+    assert_eq!(ticks(Measure::Cpu, 0.4), ["0m", "200m", "400m"]);
+    assert_eq!(ticks(Measure::Cpu, 0.01), ["0m", "5m", "10m"]);
+    assert_eq!(
+        ticks(Measure::Bytes, 12. * 1024. * MI),
+        ["0", "6Gi", "12Gi"]
+    );
 }
 
 #[test]

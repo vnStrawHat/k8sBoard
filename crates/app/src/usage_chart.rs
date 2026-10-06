@@ -36,9 +36,10 @@ const MIN_CPU_MAX: f64 = 0.01;
 const MIN_BYTES_MAX: f64 = (1u64 << 20) as f64;
 /// 1 KB/s: a quiet line is not stretched to the top of the chart.
 const MIN_RATE_MAX: f64 = 1_000.;
-/// Decimal steps whose halves stay whole at every power of ten: 2.5 would put a `12.5m` midline
-/// that reads as `13m`.
-const NICE_STEPS: [f64; 4] = [1., 2., 5., 10.];
+/// CPU steps whose halves keep at most one decimal at every power of ten, so a 26-core node gets a
+/// 30-core axis with a 15 midline, not 50. 2.5 is left out: it would put a `12.5m` midline that
+/// reads as `13m`.
+const CPU_STEPS: [f64; 8] = [1., 2., 3., 4., 5., 6., 8., 10.];
 /// Rates use 1, 2, 4, and 10 instead: the midline of a 5 KB/s top would read `3 KB/s` in whole
 /// units, while the halves of these are whole at every power of ten.
 const RATE_STEPS: [f64; 4] = [1., 2., 4., 10.];
@@ -95,14 +96,14 @@ pub(crate) struct UsageChart {
 // ---- pure geometry ----
 
 /// The top of a y axis that holds `value`, at least the floor of the unit (10m for CPU, 1Mi for
-/// memory), chosen so that the midline is a round number too. CPU takes 1, 2, or 5 times a power
-/// of ten. Memory takes a power of two of its own binary unit, or three quarters of one from 6
+/// memory), chosen so that the midline is a round number too. CPU takes 1, 2, 3, 4, 5, 6, or 8
+/// times a power of ten. Memory takes a power of two of its own binary unit, or three quarters of one from 6
 /// up (6Gi, not 8Gi, for 4.8Gi), so 900Mi gives a 1Gi top and a
 /// 512Mi midline. A rate takes 1, 2, 4, or 10 times a power of ten, so its midline is whole in
 /// its unit.
 pub(crate) fn nice_max(value: f64, unit: Measure) -> f64 {
     match unit {
-        Measure::Cpu => nice_decimal(value.max(MIN_CPU_MAX), &NICE_STEPS),
+        Measure::Cpu => nice_decimal(value.max(MIN_CPU_MAX), &CPU_STEPS),
         Measure::Rate => nice_decimal(value.max(MIN_RATE_MAX), &RATE_STEPS),
         Measure::Bytes => {
             let value = value.max(MIN_BYTES_MAX);
@@ -126,25 +127,57 @@ pub(crate) fn nice_max(value: f64, unit: Measure) -> f64 {
 }
 
 fn nice_decimal(value: f64, steps: &[f64]) -> f64 {
-    let power = 10f64.powf(value.log10().floor());
-    let mantissa = value / power;
+    let exponent = value.log10().floor() as i32;
+    // Dividing by the power of ten, not multiplying by a fraction, keeps 3 / 10 as the double 0.3
+    // that `0.3` is, not 0.30000000000000004.
+    let scale = 10f64.powi(exponent.abs());
+    let mantissa = if exponent >= 0 {
+        value / scale
+    } else {
+        value * scale
+    };
     let step = steps
         .iter()
         .copied()
         .find(|step| mantissa <= *step * (1. + 1e-9))
         .unwrap_or(10.);
-    step * power
+    if exponent >= 0 {
+        step * scale
+    } else {
+        step / scale
+    }
 }
 
-/// The top of the y axis: the highest value or reference line, with headroom, rounded up.
+/// The top of the y axis: the highest of the series (with headroom) and the reference lines
+/// (allocatable, requests, limits; a line may sit on the top, its label then goes below it),
+/// rounded up to a clean step.
 fn y_max(model: &UsageChartModel) -> f64 {
     let values = model
         .series
         .iter()
         .flat_map(|series| series.points.iter().filter_map(|(_, value)| *value));
     let references = model.references.iter().map(|reference| reference.value);
-    let highest = values.chain(references).fold(0., f64::max);
-    nice_max(highest * Y_HEADROOM, model.unit)
+    let highest_value = values.fold(0., f64::max) * Y_HEADROOM;
+    nice_max(references.fold(highest_value, f64::max), model.unit)
+}
+
+/// The text of a y axis tick, with one unit on every tick: cores (one decimal) once the axis
+/// reaches a core, else millicores; a byte axis writes its zero bare.
+fn axis_label(unit: Measure, value: f64, top: f64) -> String {
+    match unit {
+        Measure::Cpu if top < 1. => format!("{:.0}m", value * 1000.),
+        Measure::Cpu => {
+            let tenths = (value * 10.).round() / 10.;
+            let text = if tenths.fract() == 0. {
+                format!("{tenths:.0}")
+            } else {
+                format!("{tenths:.1}")
+            };
+            format!("{text} {}", if tenths == 1. { "core" } else { "cores" })
+        }
+        Measure::Bytes if value == 0. => "0".to_owned(),
+        Measure::Bytes | Measure::Rate => unit.format(value),
+    }
 }
 
 /// Where `at` falls on a `width` wide axis from `start` to `end`, clamped to the axis.
@@ -341,7 +374,7 @@ impl Plot for UsageChart {
             let y = plane.y(value) - LABEL_SIZE / 2. - 1.;
             labels.push(
                 Text::new(
-                    model.unit.format(value),
+                    axis_label(model.unit, value, plane.y_max),
                     point(px(GUTTER_LEFT - 6.), px(y)),
                     muted,
                 )

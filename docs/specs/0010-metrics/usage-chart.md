@@ -41,8 +41,9 @@ pub(crate) fn usage_chart_card(model: Rc<UsageChartModel>, height: Pixels, cx: &
 ## Pure geometry (unit-tested)
 
 ```rust
-pub(crate) fn nice_max(value: f64, unit: Measure) -> f64;    // CPU 1, 2, 5 × 10^k (halves stay whole); bytes a power of two of the value's binary unit, or three quarters of one from 6 up (900Mi → 1Gi, 4.8Gi → 6Gi); floor 10m CPU, 1 Mi bytes
-fn y_max(model: &UsageChartModel) -> f64;                     // nice_max(max(values, references) × 1.06)
+pub(crate) fn nice_max(value: f64, unit: Measure) -> f64;    // CPU 1, 2, 3, 4, 5, 6, 8 × 10^k (halves keep one decimal; a 26-core node gets 30, not 50); bytes a power of two of the value's binary unit, or three quarters of one from 6 up (900Mi → 1Gi, 4.8Gi → 6Gi); floor 10m CPU, 1 Mi bytes
+fn y_max(model: &UsageChartModel) -> f64;                     // nice_max(max(values × 1.06, references)): a reference line (allocatable, request, limit) takes no headroom
+fn axis_label(unit: Measure, value: f64, top: f64) -> String; // one unit on every tick: cores with one decimal from a 1-core axis, else millicores (`0m`, `200m`); bytes write 0 bare (UX walk G13)
 fn x_at(at: jiff::Timestamp, start: jiff::Timestamp, end: jiff::Timestamp, width: f32) -> f32;
 fn segments(points: &[(jiff::Timestamp, Option<f64>)], start: jiff::Timestamp, max_gap: Duration)
     -> Vec<Vec<(jiff::Timestamp, f64)>>;                      // split at None and at gaps > max_gap
