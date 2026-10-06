@@ -86,6 +86,6 @@ Consequences, as in the controller: a spring-forward skips the missing hour (`30
 |---|---|
 | Next run cell | `KindCell::NextRun(schedule)`; paint `in {format_age(Some(now), next)}` (`in 11m`, `in 15h`, `in 3d`); no next → "—"; suspended or `Err` → `Absent` |
 | Next run sort | `CellValue::Number(next.timestamp().as_second())`: ascending = soonest; no next → `Absent` |
-| Next runs section | 3 rows of `next_runs(now, 3)`: label `%H:%M %Z` (`10:45 UTC`) on today's date in the zone, else `%b %-d %H:%M %Z` (`Oct 6 02:30 UTC`; jiff supports the `-` flag); value `in 11m` |
+| Next runs section | 3 rows of `next_runs(now, 3)`: label `%H:%M %Z` in the system zone (`17:45 +07`; the schedule still runs in its own zone) on today's date in the zone, else `%b %-d %H:%M %Z` (`Oct 6 02:30 UTC`; jiff supports the `-` flag); value `in 11m` |
 | Notes | suspended: "Suspended: no runs are scheduled"; `Err(e)`: "Cannot compute next runs: {e}"; no run and `CronSchedule::is_every()`: "Next run is known after the first run"; no run otherwise (past the 5-year limit): "No run within the next 5 years" |
 | Time zone field | the name, or "Cluster default (UTC assumed)" |

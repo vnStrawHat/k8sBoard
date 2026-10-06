@@ -935,3 +935,38 @@ fn a_probe_that_failed_without_output_does_not_end_in_a_colon() {
         "Running but not ready. Readiness probe failed (no output) (×705, 5m ago)"
     );
 }
+
+#[test]
+fn a_scheduler_message_lists_one_reason_per_line() {
+    let mut pod = pod(PodStatus::Reason(StatusReason::Pending), Vec::new());
+    pod.conditions = vec![PodCondition {
+        name: "PodScheduled".to_owned(),
+        is_true: false,
+        reason: Some("Unschedulable".to_owned()),
+        message: Some(
+            "0/3 nodes are available: 1 Insufficient cpu, 2 node(s) had untolerated taint \
+             {node-role.kubernetes.io/control-plane: }. preemption: 0/3 nodes are available: \
+             3 Preemption is not helpful for scheduling."
+                .to_owned(),
+        ),
+        changed_at: None,
+    }];
+    let diagnosis = diagnose(&pod).expect("a diagnosis");
+    assert_eq!(
+        diagnosis.display_text(),
+        "Cannot be scheduled: 0/3 nodes are available:\n\
+         • 1 Insufficient cpu\n\
+         • 2 node(s) had untolerated taint {node-role.kubernetes.io/control-plane: }\n\
+         preemption: 0/3 nodes are available:\n\
+         • 3 Preemption is not helpful for scheduling."
+    );
+    // The issue rules keep reading the one-sentence text.
+    assert!(!diagnosis.text.contains('\n'));
+    // Other causes are shown as they are.
+    let crashing = running_pod(vec![main_container(
+        "api",
+        waiting(StatusReason::ErrImagePull, Some("x")),
+    )]);
+    let other = diagnose(&crashing).expect("a diagnosis");
+    assert_eq!(other.display_text(), other.text);
+}

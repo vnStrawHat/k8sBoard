@@ -414,6 +414,15 @@ pub(crate) fn zone_label(zone: &TimeZone) -> String {
     format!("UTC{sign}{:02}:{:02}", minutes / 60, minutes % 60)
 }
 
+/// The zone's short name now, such as `UTC` or `+07`: the toolbar shows it so the clock column
+/// is not read as UTC.
+pub(crate) fn zone_abbreviation(zone: &TimeZone) -> String {
+    jiff::Timestamp::now()
+        .to_zoned(zone.clone())
+        .strftime("%Z")
+        .to_string()
+}
+
 #[cfg(test)]
 #[path = "log_buffer_tests.rs"]
 mod log_buffer_tests;

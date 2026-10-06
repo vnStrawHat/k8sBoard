@@ -517,7 +517,12 @@ enum NextRunsContent {
     Runs(Vec<(String, String)>),
 }
 
-fn next_runs_content(cron_job: &CronJobSummary, now: jiff::Timestamp) -> NextRunsContent {
+/// `zone` is the one the rest of the app shows times in, whatever zone the schedule runs in.
+fn next_runs_content(
+    cron_job: &CronJobSummary,
+    now: jiff::Timestamp,
+    zone: &TimeZone,
+) -> NextRunsContent {
     if cron_job.is_suspended {
         return NextRunsContent::Note("Suspended: no runs are scheduled".to_owned());
     }
@@ -541,7 +546,7 @@ fn next_runs_content(cron_job: &CronJobSummary, now: jiff::Timestamp) -> NextRun
     NextRunsContent::Runs(
         runs.iter()
             .map(|run| {
-                let label = run_label(run, now);
+                let label = run_label(&run.timestamp().to_zoned(zone.clone()), now);
                 let away = format!("in {}", format_age(Some(now), run.timestamp()));
                 (label, away)
             })
@@ -565,7 +570,7 @@ fn next_runs(
     now: jiff::Timestamp,
     cx: &Context<AppShell>,
 ) -> Vec<AnyElement> {
-    match next_runs_content(cron_job, now) {
+    match next_runs_content(cron_job, now, &TimeZone::system()) {
         NextRunsContent::Note(text) => vec![note(&text, cx)],
         NextRunsContent::Runs(runs) => runs
             .into_iter()

@@ -34,7 +34,7 @@ use crate::kind_row::PodOwner;
 use crate::line_matcher::{FilterMode, InvalidRegex, LineMatcher};
 use crate::log_buffer::{
     LineKind, LineTime, LineView, LogBuffer, SourceId, SourcedLine, TimeWindow, spans_other_day,
-    zone_label,
+    zone_abbreviation, zone_label,
 };
 use crate::log_legend::{LegendChip, legend_row, pod_color};
 use crate::log_level::{LevelSet, LogLevel};
@@ -1368,7 +1368,10 @@ impl LogTab {
             .child(
                 Toggle::new("log-timestamps")
                     .small()
-                    .label("Timestamps")
+                    .label(format!(
+                        "Timestamps ({})",
+                        zone_abbreviation(&self.time_zone)
+                    ))
                     .tooltip(SharedString::from(format!(
                         "Kubelet time, shown in your local time zone ({})",
                         zone_label(&self.time_zone)

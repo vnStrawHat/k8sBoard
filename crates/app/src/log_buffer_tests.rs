@@ -515,6 +515,15 @@ fn a_window_applies_to_a_marker() {
 }
 
 #[test]
+fn zone_abbreviation_is_the_short_name_the_toolbar_shows() {
+    assert_eq!(zone_abbreviation(&TimeZone::UTC), "UTC");
+    assert_eq!(
+        zone_abbreviation(&TimeZone::fixed(jiff::tz::offset(7))),
+        "+07"
+    );
+}
+
+#[test]
 fn zone_label_names_the_zone_or_its_offset() {
     assert_eq!(zone_label(&TimeZone::UTC), "UTC");
     assert_eq!(

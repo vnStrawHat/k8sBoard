@@ -342,7 +342,7 @@ fn run_label_today_and_later_day() {
 const NOW: &str = "2024-10-04T10:44:00Z";
 
 fn note_of(cron_job: &CronJobSummary) -> String {
-    match next_runs_content(cron_job, at(NOW)) {
+    match next_runs_content(cron_job, at(NOW), &TimeZone::UTC) {
         NextRunsContent::Note(text) => text,
         NextRunsContent::Runs(runs) => panic!("expected a note, got runs {runs:?}"),
     }
@@ -350,7 +350,8 @@ fn note_of(cron_job: &CronJobSummary) -> String {
 
 #[test]
 fn next_runs_content_lists_three_runs() {
-    let NextRunsContent::Runs(runs) = next_runs_content(&cron_job("45 10 * * *", false), at(NOW))
+    let NextRunsContent::Runs(runs) =
+        next_runs_content(&cron_job("45 10 * * *", false), at(NOW), &TimeZone::UTC)
     else {
         panic!("a daily schedule has runs");
     };
@@ -362,6 +363,19 @@ fn next_runs_content_lists_three_runs() {
             ("Oct 6 10:45 UTC".to_owned(), "in 2d".to_owned()),
         ]
     );
+}
+
+#[test]
+fn next_runs_are_shown_in_the_given_zone() {
+    let zone = TimeZone::fixed(jiff::tz::offset(7));
+    let NextRunsContent::Runs(runs) =
+        next_runs_content(&cron_job("45 10 * * *", false), at(NOW), &zone)
+    else {
+        panic!("a daily schedule has runs");
+    };
+    // 10:45 UTC is 17:45 at +07:00, still today there.
+    assert_eq!(runs[0].0, "17:45 +07");
+    assert_eq!(runs[1].0, "Oct 5 17:45 +07");
 }
 
 #[test]

@@ -20,6 +20,14 @@ pub(crate) fn format_age(created_at: Option<jiff::Timestamp>, now: jiff::Timesta
     }
 }
 
+/// `2026-10-06 17:26 +07` for a drawer field: the date and clock of `zone`, which the caller
+/// takes from the system so a drawer reads like the log tab and the tables.
+pub(crate) fn format_local_time(time: jiff::Timestamp, zone: &jiff::tz::TimeZone) -> String {
+    time.to_zoned(zone.clone())
+        .strftime("%Y-%m-%d %H:%M %Z")
+        .to_string()
+}
+
 /// A time left in Go duration style: `40s`, `3m20s`, `1h0m5s`. Negative values read as `0s`.
 pub(crate) fn format_countdown(seconds: i64) -> String {
     let seconds = seconds.max(0);
@@ -43,6 +51,15 @@ mod tests {
 
     fn at(seconds: i64) -> jiff::Timestamp {
         jiff::Timestamp::from_second(seconds).expect("valid timestamp")
+    }
+
+    #[test]
+    fn a_drawer_time_reads_in_the_given_zone_with_its_label() {
+        let time: jiff::Timestamp = "2026-10-06T10:26:00Z".parse().expect("a timestamp");
+        let utc = jiff::tz::TimeZone::UTC;
+        assert_eq!(format_local_time(time, &utc), "2026-10-06 10:26 UTC");
+        let plus_seven = jiff::tz::TimeZone::fixed(jiff::tz::offset(7));
+        assert_eq!(format_local_time(time, &plus_seven), "2026-10-06 17:26 +07");
     }
 
     #[test]

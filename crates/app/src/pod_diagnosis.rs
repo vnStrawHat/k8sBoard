@@ -162,6 +162,15 @@ pub(crate) fn pull_secrets(pod: &PodSummary, existing: Option<&[&str]>) -> Vec<P
 }
 
 impl PodDiagnosis {
+    /// The text for the WHY box: a scheduler message lists one reason per line. The issue rules
+    /// read `text`, which stays one sentence.
+    pub(crate) fn display_text(&self) -> String {
+        match self.cause {
+            DiagnosisCause::Unschedulable { .. } => scheduler_bullets(&self.text),
+            _ => self.text.clone(),
+        }
+    }
+
     /// C1 for a pull that was refused or retried, not for a bad image name or a never-pull policy.
     pub(crate) fn is_pull_failure(&self) -> bool {
         matches!(
@@ -188,6 +197,31 @@ impl PodDiagnosis {
         self
     }
 }
+/// `0/3 nodes are available: 1 Insufficient cpu, 2 node(s) had taint {a: b}. preemption: …` with a
+/// line for each sentence and a bullet for each counted reason. Text that does not look like a
+/// scheduler message stays as it is.
+fn scheduler_bullets(text: &str) -> String {
+    text.split(". ")
+        .map(|sentence| {
+            let Some((head, reasons)) = sentence.split_once(" are available: ") else {
+                return sentence.to_owned();
+            };
+            let mut lines = vec![format!("{head} are available:")];
+            let mut start = 0;
+            // A reason starts with its node count, so a comma inside a taint is not a split.
+            for (at, _) in reasons.match_indices(", ") {
+                if reasons[at + 2..].starts_with(|c: char| c.is_ascii_digit()) {
+                    lines.push(format!("• {}", &reasons[start..at]));
+                    start = at + 2;
+                }
+            }
+            lines.push(format!("• {}", &reasons[start..]));
+            lines.join("\n")
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 /// P0: a pod that is going away or is done has nothing to explain.
 pub(crate) fn is_diagnosis_skipped(pod: &PodSummary) -> bool {
     matches!(

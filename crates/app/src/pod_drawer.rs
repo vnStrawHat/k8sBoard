@@ -403,10 +403,10 @@ fn why_box(
     cx: &Context<AppShell>,
 ) -> AnyElement {
     let title = match &diagnosis.container {
-        Some(name) => format!("WHY · CONTAINER {name}"),
+        Some(name) => format!("WHY · CONTAINER \"{name}\""),
         None => "WHY · POD".to_owned(),
     };
-    let text = diagnosis.text.clone();
+    let text = diagnosis.display_text();
     let alert = match diagnosis.tone {
         StatusTone::Bad => Alert::error("why-box", text),
         _ => Alert::warning("why-box", text),
@@ -416,7 +416,7 @@ fn why_box(
         .child(alert.title(title))
         .children(pull_links)
         .children(diagnosis.container.clone().map(|name| {
-            let label = format!("Open container {name} →");
+            let label = format!("Open container \"{name}\" →");
             div()
                 .id("why-open-container")
                 .cursor_pointer()

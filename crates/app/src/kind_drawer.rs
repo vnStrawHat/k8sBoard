@@ -15,7 +15,7 @@ use gpui_kit::{
 };
 
 use crate::access_bindings::{BindingIndex, ready_binding_lists};
-use crate::age::format_age;
+use crate::age::{format_age, format_local_time};
 use crate::app_shell::AppShell;
 use crate::batch_rows::cron_state_at;
 use crate::certificate_expiry::expiry_detail_label;
@@ -916,9 +916,11 @@ fn field_value(value: &KindCell, id: usize, now: jiff::Timestamp, cx: &App) -> A
             .into_any_element(),
         KindCell::Age { at: None, .. } => absent_text(cx).into_any_element(),
         KindCell::Age { at: Some(at), tone } => {
-            let text = div()
-                .truncate()
-                .child(format!("{at} ({} ago)", format_age(Some(*at), now)));
+            let text = div().truncate().child(format!(
+                "{} ({} ago)",
+                format_local_time(*at, &jiff::tz::TimeZone::system()),
+                format_age(Some(*at), now)
+            ));
             match tone {
                 Some(tone) => text.text_color(tone_color(*tone, cx)),
                 None => text,
