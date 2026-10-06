@@ -227,7 +227,7 @@ fn fields_flatten_spec_and_status_to_depth_3() {
     assert_eq!(
         spec_entries(&fields),
         [
-            ("deep.one.two", &FieldValue::Fields(1)),
+            ("deep.one.two", &FieldValue::Text("three: x".to_owned())),
             ("enabled", &FieldValue::Text("true".to_owned())),
             ("issuerRef.group.a", &FieldValue::Text("1".to_owned())),
             ("issuerRef.group.b", &FieldValue::Text("2".to_owned())),
@@ -289,12 +289,24 @@ fn object_arrays_report_item_count() {
 #[test]
 fn deep_objects_report_field_count() {
     let fields = flatten(
-        json!({"spec": {"a": {"b": {"c": {"d": 1, "e": 2}, "f": "x"}}}}),
+        json!({"spec": {"a": {"b": {
+            "big": {"d": 1, "e": 2, "g": 3, "h": 4},
+            "nested": {"d": {"z": 1}},
+            "small": {"d": 1, "e": "two"},
+            "f": "x",
+        }}}}),
         "Widget",
     );
     let entries = spec_entries(&fields);
-    assert_eq!(entries[0], ("a.b.c", &FieldValue::Fields(2)));
+    // More than three members, or a member that is itself an object: only the count shows.
+    assert_eq!(entries[0], ("a.b.big", &FieldValue::Fields(4)));
     assert_eq!(entries[1], ("a.b.f", &FieldValue::Text("x".to_owned())));
+    assert_eq!(entries[2], ("a.b.nested", &FieldValue::Fields(1)));
+    // A small flat object reads inline, keys sorted.
+    assert_eq!(
+        entries[3],
+        ("a.b.small", &FieldValue::Text("d: 1, e: two".to_owned()))
+    );
 }
 
 #[test]

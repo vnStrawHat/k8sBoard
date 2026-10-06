@@ -302,7 +302,7 @@ fn no_status_without_conditions_or_phase() {
     let status = custom_status(&[], None);
     assert_eq!(
         (status.text.as_ref(), status.tone),
-        ("No status", StatusTone::Info)
+        ("No status", StatusTone::Done)
     );
     // A condition that is neither failing nor Ready/Available says nothing.
     let quiet = custom_status(&[condition("Synced", ConditionStatus::True, None)], None);
@@ -375,11 +375,11 @@ fn conditions_rows_tone_by_type_and_reason() {
         [
             DetailRow::field("Ready", toned("True", StatusTone::Ok)),
             DetailRow::field("Available", toned("False · Down", StatusTone::Bad)),
-            // A type other than Ready and Available is Info unless its reason names a failure.
-            DetailRow::field("Synced", toned("Unknown", StatusTone::Info)),
+            // A type other than Ready and Available is neutral (Done) unless its reason names a failure.
+            DetailRow::field("Synced", toned("Unknown", StatusTone::Done)),
             DetailRow::field("Issuing", toned("False · Failed", StatusTone::Bad)),
             DetailRow::Note("ACME challenge returned 404".into()),
-            DetailRow::field("Progressing", toned("True · Updated", StatusTone::Info)),
+            DetailRow::field("Progressing", toned("True · Updated", StatusTone::Done)),
         ]
     );
 }
@@ -633,5 +633,80 @@ fn status_named_string_columns_are_toned() {
             &ColumnValue::Number("1".to_owned())
         ),
         KindCell::Text("1".into())
+    );
+}
+
+/// Argo CD Applications: no Ready condition and no phase, state only in printer columns.
+fn application_kind() -> CustomKind {
+    let crd = CrdSummary {
+        name: "applications.argoproj.io".to_owned(),
+        group: "argoproj.io".to_owned(),
+        kind: "Application".to_owned(),
+        plural: "applications".to_owned(),
+        singular: "application".to_owned(),
+        scope: ResourceScope::Namespaced,
+        versions: vec![CrdVersion {
+            name: "v1alpha1".to_owned(),
+            is_served: true,
+            is_storage: true,
+            is_deprecated: false,
+            deprecation_warning: None,
+            printer_columns: vec![
+                column("Sync Status", ColumnType::String, ".status.sync.status"),
+                column("Health Status", ColumnType::String, ".status.health.status"),
+                column("Revision", ColumnType::String, ".status.sync.revision"),
+            ],
+            schema: SchemaOutline::default(),
+        }],
+        state: CrdState::Established,
+        created_at: None,
+    };
+    custom_kinds(&[crd], &mut CustomKindCache::default())[0]
+}
+
+#[test]
+fn status_comes_from_the_status_columns_when_nothing_else_reports_one() {
+    let kind = application_kind();
+    let row = |sync: &str, health: &str| {
+        custom_object_row(
+            kind,
+            &summary(vec![text(sync), text(health), text("a1b2c3")], Vec::new()),
+        )
+        .status
+    };
+    let synced = row("Synced", "Healthy");
+    assert_eq!(
+        (synced.text.as_ref(), synced.tone),
+        ("Synced · Healthy", StatusTone::Ok)
+    );
+    let drifted = row("OutOfSync", "Healthy");
+    assert_eq!(
+        (drifted.text.as_ref(), drifted.tone),
+        ("OutOfSync · Healthy", StatusTone::Warn)
+    );
+    let broken = row("Synced", "Degraded");
+    assert_eq!(broken.tone, StatusTone::Bad);
+    // A value the table does not know stays neutral.
+    assert_eq!(row("Odd", "Strange").tone, StatusTone::Done);
+}
+
+#[test]
+fn a_ready_condition_beats_the_status_columns() {
+    let row = custom_object_row(
+        application_kind(),
+        &summary(
+            vec![text("Synced"), text("Healthy"), text("a1b2c3")],
+            vec![condition("Ready", ConditionStatus::True, None)],
+        ),
+    );
+    assert_eq!(row.status.text.as_ref(), "Ready");
+}
+
+#[test]
+fn no_status_columns_and_no_signal_stays_no_status() {
+    let row = custom_object_row(application_kind(), &summary(vec![], Vec::new()));
+    assert_eq!(
+        (row.status.text.as_ref(), row.status.tone),
+        ("No status", StatusTone::Done)
     );
 }

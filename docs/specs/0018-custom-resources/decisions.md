@@ -43,10 +43,10 @@
 
 | # | Decision | Rationale |
 |---|---|---|
-| 22 | Row status: `Ready`, else `Available`; a failing condition raises Warn; else `status.phase` (Info); else Info `No status` | the common operator convention; W7 "Renewal failing" |
+| 22 | Row status: `Ready`, else `Available`; a failing condition raises Warn; else `status.phase` (Info); else the status-named string printer columns joined (`Synced · Healthy`, toned by the worst known word); else neutral (Done) `No status`. Non-failing conditions are neutral (Done), not Info blue | the common operator convention; W7 "Renewal failing" |
 | 23 | A string column whose path filters `conditions` and ends in `.status` is a toned cell | W7 `@ok True` |
 | 24 | Tabs Overview · YAML · Events; Overview built at render (C7): box, Conditions, Status, Spec, Labels | W7 Certificates drawer |
-| 25 | Fields: depth ≤ 3, scalar arrays joined (5, then `+n`), object arrays `n items`, deeper `n fields`, 60 per side, 200 chars | bounded; the YAML tab has the rest |
+| 25 | Fields: depth ≤ 3, scalar arrays joined (5, then `+n`), object arrays `n items`, deeper `n fields`, except an object of at most 3 scalar members, which reads inline (`key: value, key: value`), 60 per side, 200 chars | bounded; the YAML tab has the rest |
 | 26 | A string field whose key is `secretName` links to the Secrets row of the same namespace | generic W7 "Go to secret" |
 | 27 | The object drawer shows values, not schema descriptions; the outline lives in the CRD drawer | accepted deviation: values are what triage needs |
 | 28 | C1: custom objects are **non-secret like ConfigMaps** plus heuristics ([custom-object-safety.md](custom-object-safety.md)); no reveal | kubectl shows them; inline credentials are the exception |

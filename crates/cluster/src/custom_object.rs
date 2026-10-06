@@ -39,6 +39,8 @@ const MAX_FIELD_CHARS: usize = 200;
 /// Fields deeper than this read as a field count.
 const MAX_FIELD_DEPTH: usize = 3;
 const MAX_JOINED_ITEMS: usize = 5;
+/// An object below the depth cap with at most this many scalar members shows them inline.
+const MAX_INLINE_MEMBERS: usize = 3;
 
 /// One list row of a custom resource.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -355,7 +357,7 @@ fn flatten_object(
                 flatten_object(inner, &path, depth + 1, side, list);
             }
             Value::Object(inner) if !inner.is_empty() => {
-                push_entry(list, path, FieldValue::Fields(inner.len()));
+                push_entry(list, path, nested_value(inner));
             }
             Value::Array(items) if !items.is_empty() => {
                 push_entry(list, path, array_value(items));
@@ -367,6 +369,30 @@ fn flatten_object(
             _ => {}
         }
     }
+}
+
+/// An object below the depth cap. A few scalar members read inline as `key: value, key: value`,
+/// so a small object does not hide behind a bare count; anything bigger or deeper is its field
+/// count.
+fn nested_value(inner: &Map<String, Value>) -> FieldValue {
+    let is_small_and_flat = inner.len() <= MAX_INLINE_MEMBERS
+        && inner
+            .values()
+            .all(|value| matches!(value, Value::String(_) | Value::Number(_) | Value::Bool(_)));
+    if !is_small_and_flat {
+        return FieldValue::Fields(inner.len());
+    }
+    let mut members: Vec<_> = inner.iter().collect();
+    members.sort_by_key(|(key, _)| key.as_str());
+    let joined = members
+        .into_iter()
+        .map(|(key, value)| match value {
+            Value::String(text) => format!("{key}: {text}"),
+            other => format!("{key}: {other}"),
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    FieldValue::Text(cut_text(&joined, MAX_FIELD_CHARS))
 }
 
 fn push_entry(list: &mut FieldList, path: String, value: FieldValue) {

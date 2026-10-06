@@ -21,13 +21,14 @@ use crate::table_selection::ResourceKey;
 /// What a hidden column value reads as.
 const HIDDEN_TEXT: &str = "<hidden>";
 const AGE_COLUMN_NAME: &str = "Age";
+const NO_STATUS: &str = "No status";
 
 pub(crate) fn custom_object_row(kind: CustomKind, summary: &CustomObjectSummary) -> KindRow {
     KindRow {
         namespace: summary.namespace.clone(),
         name: summary.name.clone(),
         created_at: summary.created_at,
-        status: custom_status(&summary.conditions, summary.phase.as_deref()),
+        status: row_status(kind, summary),
         cells: custom_cells(kind, summary),
         // Read at paint time: the conditions from the row, the fields from the related watch.
         sections: vec![
@@ -40,6 +41,52 @@ pub(crate) fn custom_object_row(kind: CustomKind, summary: &CustomObjectSummary)
         labels: chips(&summary.labels),
         object: KindObject::Custom(summary.clone()),
     }
+}
+
+/// The row status. An operator that reports no Ready or phase signal often puts its state in
+/// printer columns (Argo CD's Sync and Health Status), so those fill in before `No status`.
+fn row_status(kind: CustomKind, summary: &CustomObjectSummary) -> StatusLabel {
+    let status = custom_status(&summary.conditions, summary.phase.as_deref());
+    if status.text != NO_STATUS {
+        return status;
+    }
+    column_status(kind, summary).unwrap_or(status)
+}
+
+/// The values of the status-named string columns, joined (`Synced · Healthy`), in the tone of the
+/// worst known one; `None` when the kind has none or the object has no value in them.
+fn column_status(kind: CustomKind, summary: &CustomObjectSummary) -> Option<StatusLabel> {
+    let values: Vec<&str> = kind
+        .printer_columns()
+        .iter()
+        .zip(&summary.columns)
+        .filter(|(column, _)| {
+            column.column_type == ColumnType::String && is_status_column(&column.name)
+        })
+        .filter_map(|(_, value)| match value {
+            ColumnValue::Text(text) if !text.is_empty() => Some(text.as_str()),
+            _ => None,
+        })
+        .collect();
+    if values.is_empty() {
+        return None;
+    }
+    let rank = |tone: Option<StatusTone>| match tone {
+        Some(StatusTone::Bad) => 3,
+        Some(StatusTone::Warn) => 2,
+        Some(StatusTone::Ok) => 1,
+        _ => 0,
+    };
+    let worst = values
+        .iter()
+        .map(|text| value_tone(text))
+        .max_by_key(|tone| rank(*tone))
+        .flatten()
+        .unwrap_or(StatusTone::Done);
+    Some(StatusLabel {
+        text: values.join(" · ").into(),
+        tone: worst,
+    })
 }
 
 fn live_section(title: &'static str, content: LiveContent) -> DetailSection {
@@ -197,7 +244,7 @@ pub(crate) fn custom_status(conditions: &[ObjectCondition], phase: Option<&str>)
             phase.to_owned(),
             value_tone(phase).unwrap_or(StatusTone::Info),
         ),
-        None => ("No status".to_owned(), StatusTone::Info),
+        None => (NO_STATUS.to_owned(), StatusTone::Done),
     };
     StatusLabel {
         text: text.into(),
@@ -296,8 +343,8 @@ pub(crate) fn conditions_rows(conditions: &[ObjectCondition]) -> Vec<DetailRow> 
     rows
 }
 
-/// Ready and Available are good when True; any other type is Info unless its reason names a
-/// failure.
+/// Ready and Available are good when True; any other type is neutral (Done: muted text, not the
+/// link-like Info blue) unless its reason names a failure.
 fn condition_tone(condition: &ObjectCondition) -> StatusTone {
     if matches!(condition.name.as_str(), "Ready" | "Available") {
         return match condition.status {
@@ -309,7 +356,7 @@ fn condition_tone(condition: &ObjectCondition) -> StatusTone {
     if is_failing(condition) {
         StatusTone::Bad
     } else {
-        StatusTone::Info
+        StatusTone::Done
     }
 }
 

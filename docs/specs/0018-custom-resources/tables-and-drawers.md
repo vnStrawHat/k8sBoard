@@ -60,7 +60,7 @@ Rules come from `kind.column_rules()`. No printer columns → one `Age` cell. `o
 
 1. A **failing** condition: a type other than `Ready`/`Available` whose reason contains `fail` or `error` (ASCII case-insensitive).
 2. `Ready`, else `Available`: True → Ok `Ready`/`Available` (Warn `{type}: {reason}` when a failing condition exists); False → Bad reason or `Not ready`/`Unavailable`; Unknown → Warn reason or `Unknown`.
-3. Neither: a failing condition → Warn `{type}: {reason}`; else `phase` → Info phase; else Info `No status`.
+3. Neither: a failing condition → Warn `{type}: {reason}`; else `phase` → Info phase; else the status-named string printer columns joined; else neutral `No status`.
 
 ## Custom object drawer (step 3)
 
