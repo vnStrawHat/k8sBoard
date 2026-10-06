@@ -1641,6 +1641,11 @@ fn the_reads_announce_themselves(cx: &mut TestAppContext) {
     assert!(t.notification_count(cx) > before, "Reading 1 object…");
     release.send(()).expect("the server waits for the release");
     t.wait_for_dialog(cx);
+    // The reads are over: the notice goes, so it does not stack under the next toast. A closing
+    // notice leaves the list after its exit animation.
+    cx.executor().advance_clock(Duration::from_secs(1));
+    cx.run_until_parked();
+    assert_eq!(t.notification_count(cx), before);
 }
 
 // ---- Restart pod and Evict (spec 0040) ----
@@ -1964,4 +1969,22 @@ fn a_held_enter_never_confirms_a_restart_or_an_evict(cx: &mut TestAppContext) {
         });
         t.t.wait_for("the commit", cx, |_| writes(&t.t.stg_api).len() == 2);
     }
+}
+
+#[gpui_kit::test]
+fn a_bulk_delete_unticks_the_rows_it_sent(cx: &mut TestAppContext) {
+    let t = delete_test("delete-unticks-sent", cx);
+    t.tick_staging_pods(&["api-0", "api-1", "api-2"], 2, cx);
+    t.cursor_on_first_ticked(cx);
+    t.open_dialog(cx);
+    t.t.confirm(cx);
+    let stg = t.t.stg.clone();
+    t.t.wait_for("the batch to finish", cx, |cx| {
+        t.shell()
+            .read_with(cx, |shell, _| !shell.running_batches.contains(&stg))
+    });
+    let left = t
+        .shell()
+        .read_with(cx, |shell, cx| shell.checked_objects(cx));
+    assert!(left.is_empty(), "sent rows stay ticked: {left:?}");
 }

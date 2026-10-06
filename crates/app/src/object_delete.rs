@@ -983,6 +983,8 @@ impl AppShell {
         if let Some(task) = self.delete_start.take() {
             task.detach();
         }
+        // The reads are over; whatever follows (the dialog, or a refusal) is the next thing to read.
+        window.remove_notification::<DeleteReadNotice>(cx);
         let DeletePlan {
             removal,
             cluster,
@@ -1074,21 +1076,41 @@ impl AppShell {
         self.start_batch(intent, window, cx);
     }
 
-    /// A delete of `object` was accepted: an Edit YAML view open on it learns it is gone, and its
-    /// text stays for the user to copy. The drawer and the cursor follow the watch, which drops the
-    /// row once the object is gone.
+    /// A delete of `object` was accepted: its row is unticked (it is Terminating, so the selection
+    /// bar must not keep offering Delete on it), and an Edit YAML view open on it learns it is gone,
+    /// and its text stays for the user to copy. The drawer and the cursor follow the watch, which
+    /// drops the row once the object is gone.
     pub(crate) fn object_deleted(
         &mut self,
         cluster: &ClusterRef,
         object: &ObjectRef,
         cx: &mut Context<Self>,
     ) {
+        self.untick_object(cluster, object, cx);
         let Some(edit) = self.edit.clone() else {
             return;
         };
         if edit.cluster(cx) == cluster && edit.object(cx) == Some(object) {
             edit.commit_failed(EditFailure::Deleted, cx);
         }
+    }
+
+    /// Unticks the shown row of `object` on `cluster`, if it is ticked.
+    fn untick_object(&mut self, cluster: &ClusterRef, object: &ObjectRef, cx: &mut Context<Self>) {
+        let ticked = self.checked_objects(cx).into_iter().find(|ticked| {
+            &ticked.cluster == cluster && object_ref(&ticked.key).as_ref() == Some(object)
+        });
+        let Some(ticked) = ticked else {
+            return;
+        };
+        let (namespace, name) = match ticked.key {
+            ResourceKey::Pod { namespace, name } => (Some(namespace), name),
+            ResourceKey::Node { name } => (None, name),
+            ResourceKey::Kind {
+                namespace, name, ..
+            } => (namespace, name),
+        };
+        self.update_view(cx, move |view| view.uncheck(namespace.as_deref(), &name));
     }
 }
 

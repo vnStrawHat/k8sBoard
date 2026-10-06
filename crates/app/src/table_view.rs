@@ -365,6 +365,14 @@ impl TableView {
         self.anchor = None;
     }
 
+    /// Unticks the row `(namespace, name)`, whether or not it is still shown.
+    pub(crate) fn uncheck(&mut self, namespace: Option<&str>, name: &str) {
+        self.checked.remove(&RowName {
+            namespace: namespace.map(str::to_owned),
+            name: name.to_owned(),
+        });
+    }
+
     /// The items that are shown and ticked, in display order: what a bulk action changes.
     pub(crate) fn checked_rows<T: TableRow>(&self, items: &[T]) -> Vec<usize> {
         self.rows
