@@ -27,6 +27,7 @@ use super::{
 };
 use crate::drawer::truncated_text_with_tooltip;
 use crate::edit_quota::QuotaLine;
+use crate::environment::{Environment, environment_badge};
 use crate::keymap::{ApplyEdit, YAML_EDIT};
 use crate::status_tone::{StatusTone, tone_color};
 use crate::yaml_diff::{DiffRow, DiffRowKind};
@@ -59,6 +60,18 @@ enum BannerAnswers {
 }
 
 impl YamlEditView {
+    /// The environment of the cluster the edit is on; `None` once that session is gone.
+    fn environment(&self, cx: &App) -> Option<Environment> {
+        // A fixture is drawn from fixed data, on a cluster that no session holds.
+        #[cfg(feature = "screenshot")]
+        if self.is_fixture {
+            return Some(Environment::PRODUCTION);
+        }
+        let shell = self.shell.upgrade()?;
+        let guard = shell.read(cx).guard_for(&self.target.cluster, cx)?;
+        Some(guard.profile.environment.clone())
+    }
+
     fn render_header(&self, cx: &Context<Self>) -> AnyElement {
         let theme = cx.theme();
         let name = match self.object.namespace() {
@@ -70,6 +83,7 @@ impl YamlEditView {
             .as_ref()
             .map(|version| format!("resourceVersion {version} · {}", self.cluster_name))
             .unwrap_or_else(|| self.cluster_name.to_string());
+        let environment = self.environment(cx);
         let is_shown = self.env == cluster::EnvValues::Shown;
         let env_tooltip = if self.is_dirty {
             "Discard your changes to show env values"
@@ -86,6 +100,12 @@ impl YamlEditView {
             .items_baseline()
             .border_b_1()
             .border_color(theme.border)
+            // The same pill as the confirm dialog, so the environment shows before Apply asks.
+            .children(
+                environment
+                    .as_ref()
+                    .map(|environment| environment_badge(environment, cx)),
+            )
             .child(
                 div()
                     .text_sm()
@@ -340,7 +360,10 @@ impl YamlEditView {
             .border_l_1()
             .border_color(theme.border)
             .overflow_y_scroll();
+        // The history tab compares revisions of the cluster, not the text of the editor: the editor's
+        // changes would read as the diff beside it.
         match &self.preview {
+            _ if self.tab == EditTab::History => {}
             PreviewState::Passed(passed) => {
                 side = side.child(heading(changes_heading(passed)));
                 for (index, change) in passed.changes.iter().enumerate() {

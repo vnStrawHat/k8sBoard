@@ -55,3 +55,5 @@ pub(crate) fn latest_pair(sides: &[RevisionSide]) -> Option<(RevisionSide, Revis
 ## Screenshot
 
 `--screen edit-yaml-history`: the 0031 fixture view on `History`, with a fixed `Ready` list (`rev 38 current`, `rev 37`, `rev 36`) and the `--screen revision-diff` fixture diff embedded. No connection call.
+
+On the History tab the side panel leaves out the editor's `N changes` list (it would read as the diff beside it); the Checks stay.

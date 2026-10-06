@@ -30,7 +30,7 @@ enum PreviewFailure { Local(EditError), Invalid { message: SharedString, fields:
 
 | Region | Content |
 |---|---|
-| Header | kind short name, `{namespace}/{name}` mono, muted `resourceVersion {rv}` and the cluster name; right: `Env values` (disabled while dirty, tooltip `Discard your changes to show env values`), `Format` |
+| Header | the STG/PROD pill of the cluster (the one of the confirm dialogs), kind short name, `{namespace}/{name}` mono, muted `resourceVersion {rv}` and the cluster name; right: `Env values` (disabled while dirty, tooltip `Discard your changes to show env values`), `Format` |
 | Tabs | kit `TabBar`: `Editor`, `Diff vs cluster` (`· {n}` after a passed preview) |
 | Editor tab | `Editor::new(&editor).bordered(false).text_xs()` |
 | Diff tab | `uniform_list` of `DiffRow`: old and new line numbers, sign, mono text. Removed rows use the danger token tint, added rows the success token, folded rows muted `··· {n} unchanged lines`. Otherwise a spinner (`Running`), the failure, or `Press Ctrl S to check the change with the server` |
