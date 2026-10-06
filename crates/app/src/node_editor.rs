@@ -17,9 +17,9 @@ use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{ActiveTheme as _, Disableable as _, Icon, IndexPath, Sizable as _};
 use gpui_kit::component::{h_flex, v_flex};
 use gpui_kit::{
-    AnyElement, App, AppContext as _, Context, Entity, InteractiveElement as _, IntoElement,
-    ParentElement as _, Render, SharedString, StatefulInteractiveElement as _, Styled as _,
-    Subscription, Task, WeakEntity, Window, div, px,
+    AnyElement, App, AppContext as _, Context, Entity, Focusable as _, InteractiveElement as _,
+    IntoElement, KeyDownEvent, ParentElement as _, Render, SharedString,
+    StatefulInteractiveElement as _, Styled as _, Subscription, Task, WeakEntity, Window, div, px,
 };
 
 use super::AppShell;
@@ -28,6 +28,7 @@ use super::batch_write::{BATCH_RUNNING_REASON, MAX_BATCH_ITEMS};
 use super::write_flow::{WriteIntent, notify};
 use crate::cluster_registry::ClusterRef;
 use crate::cluster_runtime::ClusterRuntime;
+use crate::fresh_enter::{confirms, is_enter};
 use crate::keymap::FORWARD_FORM;
 use crate::node_edits::{
     CordonMode, LabelRow, NO_EXECUTE_WARNING, NodeScope, TaintRow, TickedNode, cordon_batch,
@@ -367,6 +368,35 @@ impl NodeEditor {
         });
     }
 
+    /// Enter in a row's text field presses Review…, a fresh press only. A focused button or
+    /// select keeps its own Enter.
+    fn on_key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        if !is_enter(event) || !self.is_input_focused(window, cx) {
+            return;
+        }
+        window.prevent_default();
+        cx.stop_propagation();
+        if confirms(event) {
+            self.review(window, cx);
+        }
+    }
+
+    fn is_input_focused(&self, window: &Window, cx: &App) -> bool {
+        let EditorState::Ready { rows, .. } = &self.state else {
+            return false;
+        };
+        let is_focused =
+            |input: &Entity<InputState>| input.read(cx).focus_handle(cx).is_focused(window);
+        match rows {
+            Rows::Taints(rows) => rows
+                .iter()
+                .any(|row| is_focused(&row.key) || is_focused(&row.value)),
+            Rows::Labels(rows) => rows
+                .iter()
+                .any(|row| is_focused(&row.key) || is_focused(&row.value)),
+        }
+    }
+
     fn render_rows(&self, cx: &mut Context<Self>) -> AnyElement {
         let EditorState::Ready { rows, .. } = &self.state else {
             return div().into_any_element();
@@ -527,6 +557,7 @@ impl Render for NodeEditor {
         };
         v_flex()
             .key_context(FORWARD_FORM)
+            .on_key_down(cx.listener(Self::on_key_down))
             .w_full()
             .gap_3()
             .children(
@@ -984,6 +1015,23 @@ impl BulkLabelEditor {
         });
     }
 
+    /// Enter in a row's text field presses Review…, a fresh press only.
+    fn on_key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        let is_input_focused = self.rows.iter().any(|row| {
+            [&row.key, &row.value]
+                .into_iter()
+                .any(|input| input.read(cx).focus_handle(cx).is_focused(window))
+        });
+        if !is_enter(event) || !is_input_focused {
+            return;
+        }
+        window.prevent_default();
+        cx.stop_propagation();
+        if confirms(event) {
+            self.review(window, cx);
+        }
+    }
+
     fn render_rows(&self, cx: &mut Context<Self>) -> AnyElement {
         let list = self.rows.iter().enumerate().map(|(index, row)| {
             let value_cell = if row.is_remove(cx) {
@@ -1045,6 +1093,7 @@ impl Render for BulkLabelEditor {
             .on_click(cx.listener(|editor, _, window, cx| editor.add_row(window, cx)));
         v_flex()
             .key_context(FORWARD_FORM)
+            .on_key_down(cx.listener(Self::on_key_down))
             .w_full()
             .gap_3()
             .child(
@@ -1339,6 +1388,13 @@ impl BulkLabelEditor {
         self.rows.len()
     }
 
+    /// Puts the cursor in the key field of the last row, as a click would.
+    pub(crate) fn focus_last_key(&self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(row) = self.rows.last() {
+            row.key.update(cx, |input, cx| input.focus(window, cx));
+        }
+    }
+
     /// Fills the last row; `is_remove` picks Remove, whose value is ignored.
     pub(crate) fn fill_last_row(
         &mut self,
@@ -1457,6 +1513,20 @@ impl NodeEditor {
 
     pub(crate) fn press_review(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.review(window, cx);
+    }
+
+    /// Puts the cursor in the key field of the last row, as a click would.
+    pub(crate) fn focus_last_key(&self, window: &mut Window, cx: &mut Context<Self>) {
+        let EditorState::Ready { rows, .. } = &self.state else {
+            return;
+        };
+        let key = match rows {
+            Rows::Taints(rows) => rows.last().map(|row| row.key.clone()),
+            Rows::Labels(rows) => rows.last().map(|row| row.key.clone()),
+        };
+        if let Some(key) = key {
+            key.update(cx, |input, cx| input.focus(window, cx));
+        }
     }
 
     pub(crate) fn current_intent(&self, cx: &App) -> Result<WriteIntent, SharedString> {

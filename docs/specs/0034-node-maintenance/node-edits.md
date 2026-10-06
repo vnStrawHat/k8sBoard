@@ -23,7 +23,7 @@ The W5 header button `Edit labels` acts on the single ticked node; otherwise dis
 
 ## Shared editor dialog
 
-Both editors are a kit `Dialog` (width 560) that first calls `node_for_edit(name)` on the runtime (spinner `Loading node…`; failure → the error and `Close`). Rows are editable inputs; `+ Add` appends an empty row; `✕` removes a row. Footer: `Cancel` · `Review…` (primary). `Review…` closes the editor and calls `run_guarded(intent)`, so the 0030 confirm dialog (tier, dry-run, typed name, note) follows. No change → `Review…` disabled `No changes`.
+Both editors are a kit `Dialog` (width 560) that first calls `node_for_edit(name)` on the runtime (spinner `Loading node…`; failure → the error and `Close`). Rows are editable inputs; `+ Add` appends an empty row; `✕` removes a row. Footer: `Cancel` · `Review…` (primary). `Review…` closes the editor and calls `run_guarded(intent)`, so the 0030 confirm dialog (tier, dry-run, typed name, note) follows. No change → `Review…` disabled `No changes`. A fresh Enter in a row's key or value field presses `Review…` when it is enabled (a held Enter never does; a focused button or select keeps its own Enter), in the taint, label, and bulk label editors. The Drain dialog does the same on its own primary button, typed-name gate included.
 
 Client checks (everything else is the server dry-run's job, shown as 0030 `Invalid { fields }`): key not empty; no duplicate key (labels) or key + effect (taints).
 

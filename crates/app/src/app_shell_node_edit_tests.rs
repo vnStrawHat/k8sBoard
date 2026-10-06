@@ -915,3 +915,87 @@ fn removing_a_bulk_row_drops_its_subscriptions_and_refreshes_the_problem(cx: &mu
         assert_eq!(editor.current_problem(), None);
     });
 }
+
+fn enter(is_held: bool) -> gpui_kit::KeyDownEvent {
+    gpui_kit::KeyDownEvent {
+        keystroke: gpui_kit::Keystroke::parse("enter").expect("a valid keystroke"),
+        is_held,
+        prefer_character_input: false,
+    }
+}
+
+#[gpui_kit::test]
+fn a_fresh_enter_in_a_taint_field_presses_review_and_a_held_one_does_not(cx: &mut TestAppContext) {
+    use gpui_kit::InputEvent as _;
+    let t = node_test("node-edit-enter", cx);
+    t.open_editor(NodeEditKind::Taints, &t.t.stg, "node-b", cx);
+    let editor = t.wait_for_editor(cx);
+    t.add_row(&editor, ("gpu", "true", "NoSchedule"), cx);
+    t.t.fixture.with_window(cx, |window, cx| {
+        editor.update(cx, |editor, cx| editor.focus_last_key(window, cx));
+    });
+    t.t.fixture.draw_twice(cx);
+    t.t.fixture.with_window(cx, |window, cx| {
+        window.dispatch_event(enter(true).to_platform_input(), cx);
+    });
+    cx.run_until_parked();
+    assert!(
+        writes(&t.t.stg_api).is_empty(),
+        "a held Enter reviews nothing"
+    );
+    t.t.fixture.with_window(cx, |window, cx| {
+        window.dispatch_event(enter(false).to_platform_input(), cx);
+    });
+    t.t.wait_for_dry_run(cx);
+    assert_eq!(
+        writes(&t.t.stg_api).len(),
+        1,
+        "the review dry-ran the patch"
+    );
+}
+
+#[gpui_kit::test]
+fn enter_in_the_taint_editor_does_nothing_while_the_edit_has_no_changes(cx: &mut TestAppContext) {
+    use gpui_kit::InputEvent as _;
+    let t = node_test("node-edit-enter-empty", cx);
+    t.open_editor(NodeEditKind::Taints, &t.t.stg, "node-b", cx);
+    let editor = t.wait_for_editor(cx);
+    t.add_row(&editor, ("", "", "NoSchedule"), cx);
+    t.t.fixture.with_window(cx, |window, cx| {
+        editor.update(cx, |editor, cx| editor.focus_last_key(window, cx));
+    });
+    t.t.fixture.draw_twice(cx);
+    t.t.fixture.with_window(cx, |window, cx| {
+        window.dispatch_event(enter(false).to_platform_input(), cx);
+    });
+    cx.run_until_parked();
+    assert!(writes(&t.t.stg_api).is_empty());
+    assert!(t.editor(cx).is_some(), "the editor stays open");
+}
+
+#[gpui_kit::test]
+fn a_fresh_enter_in_a_bulk_label_field_presses_review(cx: &mut TestAppContext) {
+    use gpui_kit::InputEvent as _;
+    let t = node_test("bulk-labels-enter", cx);
+    let editor = t.bulk_over_three(cx);
+    t.t.fixture.with_window(cx, |window, cx| {
+        editor.update(cx, |editor, cx| editor.focus_last_key(window, cx));
+    });
+    t.t.fixture.draw_twice(cx);
+    t.t.fixture.with_window(cx, |window, cx| {
+        window.dispatch_event(enter(true).to_platform_input(), cx);
+    });
+    cx.run_until_parked();
+    assert!(
+        writes(&t.t.stg_api).is_empty(),
+        "a held Enter reviews nothing"
+    );
+    t.t.fixture.with_window(cx, |window, cx| {
+        window.dispatch_event(enter(false).to_platform_input(), cx);
+    });
+    t.t.wait_for_dry_run(cx);
+    assert!(
+        !writes(&t.t.stg_api).is_empty(),
+        "the review dry-ran the batch"
+    );
+}

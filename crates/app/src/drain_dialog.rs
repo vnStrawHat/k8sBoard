@@ -51,6 +51,7 @@ use crate::drain_plan::{
 use crate::drain_writes::{DrainScope, cordon_write, removal_write};
 use crate::drawer::truncated_text_with_tooltip;
 use crate::environment::{Environment, environment_badge};
+use crate::fresh_enter::{confirms, is_enter};
 use crate::keymap::FORWARD_FORM;
 use crate::resource_actions::{
     ActionAvailability, ResourceAction, action_availability, action_label, unavailable_text,
@@ -899,8 +900,7 @@ impl DrainDialog {
     /// Enter (the one that opened the dialog from a menu) repeats with `is_held` and is ignored.
     /// A focused button keeps its own Enter, so Cancel stays Cancel.
     fn on_key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
-        let key = &event.keystroke;
-        if key.key != "enter" || key.modifiers.modified() {
+        if !is_enter(event) {
             return;
         }
         let typed_focus = self.typed.read(cx).focus_handle(cx);
@@ -910,7 +910,7 @@ impl DrainDialog {
         // The kit also clicks a focused element on the Enter key-up unless the press was handled.
         window.prevent_default();
         cx.stop_propagation();
-        if !event.is_held && self.drain_block(cx).is_none() {
+        if confirms(event) && self.drain_block(cx).is_none() {
             self.drain(window, cx);
         }
     }
