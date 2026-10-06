@@ -1300,7 +1300,7 @@ impl DrainDialog {
                     div()
                         .text_xs()
                         .text_color(muted)
-                        .child("Not recorded: settings are not saved this session")
+                        .child("Audit file unavailable: this change won't be logged")
                 }))
                 .into_any_element(),
         )

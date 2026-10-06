@@ -764,7 +764,8 @@ fn about_page(cx: &App) -> SettingPage {
                 .child(ONETERM_NOTICE)
                 .into_any_element()
         }))
-        .item(about_row("Settings folder", settings_folder));
+        .item(about_row("Settings folder", settings_folder))
+        .item(about_row("Audit log", audit_file));
     if let Some(notice) = AppSettings::notice(cx) {
         let text = notice.to_string();
         group = group.item(about_row("Settings notice", move |_, cx| {
@@ -794,7 +795,7 @@ fn settings_folder(_: &mut Window, cx: &mut App) -> AnyElement {
 /// folder no line is written.
 fn audit_file(_: &mut Window, cx: &mut App) -> AnyElement {
     let Some(dir) = AppSettings::config_dir(cx).map(std::path::Path::to_path_buf) else {
-        return muted_note("Not recorded: settings are not saved this session", cx);
+        return muted_note("Audit file unavailable: changes are not logged", cx);
     };
     let shown = audit_path(&dir).display().to_string();
     path_with_reveal("reveal-audit-folder", shown, dir, cx)
