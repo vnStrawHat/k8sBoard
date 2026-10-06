@@ -314,7 +314,6 @@ impl Render for DebugBody {
 /// The body of the Open node shell dialog.
 struct NodeShellBody {
     shell: WeakEntity<AppShell>,
-    node: String,
     start: Rc<NodeShellStart>,
     namespace: Entity<InputState>,
     image: Entity<InputState>,
@@ -358,19 +357,13 @@ impl NodeShellBody {
 impl Render for NodeShellBody {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
-        let (danger, muted) = (theme.danger, theme.muted_foreground);
+        let muted = theme.muted_foreground;
         let weak = cx.weak_entity();
         v_flex()
             .key_context(FORWARD_FORM)
             .on_key_down(cx.listener(Self::on_key_down))
             .w_full()
             .gap_3()
-            .child(
-                div()
-                    .text_sm()
-                    .text_color(danger)
-                    .child(node_shell_warning(&self.node)),
-            )
             .child(field(
                 "Namespace",
                 Input::new(&self.namespace).small(),
@@ -484,7 +477,6 @@ impl AppShell {
             let _image_observer = cx.observe(&image, |_, _, cx| cx.notify());
             NodeShellBody {
                 shell,
-                node,
                 start: Rc::new(start),
                 namespace: text_input(namespace, "kube-system", cx),
                 image,

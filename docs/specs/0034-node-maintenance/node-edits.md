@@ -38,7 +38,7 @@ Client checks (everything else is the server dry-run's job, shown as 0030 `Inval
 - **Read-only rows**: keys starting with `node.kubernetes.io/` or `node.cloudprovider.kubernetes.io/` (node lifecycle, cordon, cloud init). Shown muted with `Managed by Kubernetes`; never removable; sent back unchanged with their `timeAdded`.
 - Intent: `SetNodeTaints { taints: <all rows in order>, resource_version: NodeEdit.resource_version }`. Label `Edit taints of node wk-04`.
 - Risk `Destructive` when a taint with effect `NoExecute` is **added** (pods without a toleration are evicted at once); `warnings`: `NoExecute evicts pods that do not tolerate it`. Otherwise `Change`.
-- 409 → 0030 Conflict surface; `Retry` re-reads the node and reopens the editor **fresh** (the user's rows are dropped) with the notice `The node changed; review the current taints and edit again`. Re-applying old rows over a changed list could resurrect a removed taint.
+- 409 → 0030 Conflict surface; `Retry` re-reads the node and reopens the editor with the user's rows kept and a notice of what changed on the node (see Walk follow-ups below). The node's managed taints are taken from the fresh read, so a stale copy cannot be sent again.
 
 ## Edit labels
 
@@ -58,3 +58,9 @@ pub(crate) fn is_kubelet_label(key: &str) -> bool;
 ```
 
 The node row and drawer update from the nodes watch; no optimistic UI.
+
+## Walk follow-ups (G9, G10, G11)
+
+- **Row problems (G9).** A key or value the write path refuses is named by row: `Row 4: key 'bad key!' is not a valid Kubernetes key` (or `value '…' is not valid`), the offending input gets a danger border, and the hint `optional prefix/ then name: letters, digits, - _ ., max 63` shows under the line. Each row is judged on its own by the same `WriteRequest` check (`taint_row_problem`, `label_row_problem`). A managed key cell cut with an ellipsis shows its full text in a tooltip.
+- **Conflict (G10).** Retry after a 409 on the taint change reopens the editor with the user's rows kept and the node's managed taints as they are now (`rows_after_conflict`). The notice lists what changed on the node since the editor read it (`The node changed (by someone else): added …, removed …, a became b`); the first read is held in `AppShell::taint_base` from Review until the retry.
+- **Node shell (G11).** The confirm lists `metadata.namespace → {namespace}` before the pod's own fields (also in the audit line). The red warning shows in the confirm only; the options dialog no longer repeats it.

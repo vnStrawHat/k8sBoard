@@ -131,6 +131,90 @@ pub(crate) fn label_rows(edit: &NodeEdit) -> Vec<LabelRow> {
         .collect()
 }
 
+/// The taints of a request that hit a conflict, as the editor rows the user had.
+pub(crate) fn taint_rows_of_request(operation: &WriteOperation) -> Option<Vec<TaintRow>> {
+    let WriteOperation::SetNodeTaints { taints, .. } = operation else {
+        return None;
+    };
+    Some(
+        taints
+            .iter()
+            .map(|taint| TaintRow {
+                key: taint.key.clone(),
+                value: taint.value.clone().unwrap_or_default(),
+                effect: taint.effect.clone(),
+                time_added: taint.time_added,
+            })
+            .collect(),
+    )
+}
+
+/// The rows of the editor reopened after a conflict: the node's own managed taints as it has them
+/// now (locked rows cannot be edited, and an old copy would be refused), then the user's rows.
+pub(crate) fn rows_after_conflict(current: &NodeEdit, kept: &[TaintRow]) -> Vec<TaintRow> {
+    taint_rows(current)
+        .into_iter()
+        .filter(TaintRow::is_read_only)
+        .chain(kept.iter().filter(|row| !row.is_read_only()).cloned())
+        .collect()
+}
+
+fn taint_text(key: &str, value: &str, effect: &str) -> String {
+    if value.is_empty() {
+        format!("{key}:{effect}")
+    } else {
+        format!("{key}={value}:{effect}")
+    }
+}
+
+/// The line a reopened editor starts with: the user's rows were kept, and what other hands did to
+/// the node's taints since the editor read it (`base`), or all of them now when that is unknown.
+pub(crate) fn conflict_notice(base: Option<&[NodeTaint]>, current: &NodeEdit) -> String {
+    let text = |taint: &NodeTaint| {
+        taint_text(
+            &taint.key,
+            taint.value.as_deref().unwrap_or_default(),
+            &taint.effect,
+        )
+    };
+    let Some(base) = base else {
+        let now: Vec<String> = current.taints.iter().map(text).collect();
+        let now = if now.is_empty() {
+            "none".to_owned()
+        } else {
+            now.join(", ")
+        };
+        return format!("The node changed; your rows are kept. Taints on the node now: {now}.");
+    };
+    let find = |list: &[NodeTaint], taint: &NodeTaint| {
+        list.iter()
+            .find(|other| taint_identity(other) == taint_identity(taint))
+            .cloned()
+    };
+    let mut changes = Vec::new();
+    for taint in &current.taints {
+        match find(base, taint) {
+            None => changes.push(format!("added {}", text(taint))),
+            Some(old) if old.value != taint.value => {
+                changes.push(format!("{} became {}", text(&old), text(taint)));
+            }
+            Some(_) => {}
+        }
+    }
+    for taint in base {
+        if find(&current.taints, taint).is_none() {
+            changes.push(format!("removed {}", text(taint)));
+        }
+    }
+    if changes.is_empty() {
+        return "The node changed; your rows are kept. Review before applying.".to_owned();
+    }
+    format!(
+        "The node changed (by someone else): {}. Your rows are kept; review before applying.",
+        changes.join(", ")
+    )
+}
+
 fn node_target(node: &str) -> Result<ObjectRef, SharedString> {
     ObjectRef::new(ObjectKind::Node, None, node.to_owned())
         .ok_or_else(|| "The node name is not valid".into())
@@ -149,6 +233,121 @@ fn node_taint(row: &TaintRow) -> NodeTaint {
 /// The identity of a taint: two taints with the same key and effect are one.
 fn taint_identity(taint: &NodeTaint) -> (&str, &str) {
     (taint.key.as_str(), taint.effect.as_str())
+}
+
+/// Which input of an editor row a problem is about.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RowField {
+    Key,
+    Value,
+}
+
+/// The first row Kubernetes would refuse, with the input to mark.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct RowProblem {
+    /// Position among all rows, from 0; the text counts from 1.
+    pub(crate) index: usize,
+    pub(crate) field: RowField,
+    pub(crate) text: SharedString,
+}
+
+/// What a key or value may look like, shown under the editor and in the tooltip of a bad row.
+pub(crate) const KEY_HINT: &str = "optional prefix/ then name: letters, digits, - _ ., max 63";
+/// Long input is cut so the line stays one line.
+const QUOTED_INPUT_MAX: usize = 40;
+
+fn quoted(text: &str) -> String {
+    match text.char_indices().nth(QUOTED_INPUT_MAX) {
+        Some((end, _)) => format!("'{}…'", &text[..end]),
+        None => format!("'{text}'"),
+    }
+}
+
+/// The write path is the one judge of a valid key and value; each row is asked on its own so the
+/// message can name it. An empty key is left to the checks that name no field.
+fn first_row_problem<'a>(
+    rows: impl Iterator<Item = (&'a str, &'a str)>,
+    is_accepted: impl Fn(&str, Option<&str>) -> bool,
+) -> Option<RowProblem> {
+    for (index, (key, value)) in rows.enumerate() {
+        let (key, value) = (key.trim(), value.trim());
+        if key.is_empty() {
+            continue;
+        }
+        let row = index + 1;
+        if !is_accepted(key, None) {
+            return Some(RowProblem {
+                index,
+                field: RowField::Key,
+                text: format!(
+                    "Row {row}: key {} is not a valid Kubernetes key",
+                    quoted(key)
+                )
+                .into(),
+            });
+        }
+        if !value.is_empty() && !is_accepted(key, Some(value)) {
+            return Some(RowProblem {
+                index,
+                field: RowField::Value,
+                text: format!(
+                    "Row {row}: value {} is not valid (letters, digits, - _ ., max 63)",
+                    quoted(value)
+                )
+                .into(),
+            });
+        }
+    }
+    None
+}
+
+/// The first taint row with a key or value the API would refuse.
+pub(crate) fn taint_row_problem(rows: &[TaintRow]) -> Option<RowProblem> {
+    first_row_problem(
+        rows.iter()
+            .map(|row| (row.key.as_str(), row.value.as_str())),
+        |key, value| {
+            let taint = NodeTaint {
+                key: key.to_owned(),
+                value: value.map(str::to_owned),
+                effect: EFFECTS[0].to_owned(),
+                time_added: None,
+            };
+            node_target("node").ok().is_some_and(|target| {
+                WriteRequest::new(
+                    target,
+                    WriteOperation::SetNodeTaints {
+                        taints: vec![taint],
+                        resource_version: "1".to_owned(),
+                    },
+                )
+                .is_some()
+            })
+        },
+    )
+}
+
+/// The first label row with a key or value the API would refuse.
+pub(crate) fn label_row_problem(rows: &[LabelRow]) -> Option<RowProblem> {
+    first_row_problem(
+        rows.iter()
+            .map(|row| (row.key.as_str(), row.value.as_str())),
+        |key, value| {
+            let change = LabelChange {
+                key: key.to_owned(),
+                value: Some(value.unwrap_or_default().to_owned()),
+            };
+            node_target("node").ok().is_some_and(|target| {
+                WriteRequest::new(
+                    target,
+                    WriteOperation::SetNodeLabels {
+                        changes: vec![change],
+                    },
+                )
+                .is_some()
+            })
+        },
+    )
 }
 
 /// Why `rows` cannot be sent, `None` when they can. The managed rows must come back as the node
@@ -193,6 +392,9 @@ pub(crate) fn taint_intent(
     let taints: Vec<NodeTaint> = rows.iter().map(node_taint).collect();
     if let Some(problem) = taint_problem(edit, &taints) {
         return Err(problem);
+    }
+    if let Some(problem) = taint_row_problem(rows) {
+        return Err(problem.text);
     }
     if taints == edit.taints {
         return Err(NO_CHANGES.into());
@@ -277,6 +479,9 @@ pub(crate) fn label_intent(
         if !seen.insert(key) {
             return Err(format!("{key} is listed twice").into());
         }
+    }
+    if let Some(problem) = label_row_problem(rows) {
+        return Err(problem.text);
     }
     let changes = label_changes(edit, rows);
     if let Some(change) = changes.iter().find(|change| is_kubelet_label(&change.key)) {

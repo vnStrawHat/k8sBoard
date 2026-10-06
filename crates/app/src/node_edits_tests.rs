@@ -262,10 +262,22 @@ fn a_taint_needs_a_key_a_known_effect_and_kubernetes_text() {
     );
     let mut rows = taint_rows(&node_edit());
     rows.push(row("bad key", "", "NoSchedule"));
-    assert!(error_text(taint_result(&rows)).contains("not valid for Kubernetes"));
+    assert_eq!(
+        error_text(taint_result(&rows)),
+        format!(
+            "Row {}: key 'bad key' is not a valid Kubernetes key",
+            rows.len()
+        )
+    );
     let mut rows = taint_rows(&node_edit());
     rows.push(row("gpu", "has space", "NoSchedule"));
-    assert!(error_text(taint_result(&rows)).contains("not valid for Kubernetes"));
+    assert_eq!(
+        error_text(taint_result(&rows)),
+        format!(
+            "Row {}: value 'has space' is not valid (letters, digits, - _ ., max 63)",
+            rows.len()
+        )
+    );
 }
 
 #[test]
@@ -349,7 +361,13 @@ fn a_label_needs_a_key_and_a_kubernetes_value() {
     );
     let mut rows = label_rows(&node_edit());
     rows.push(label("fine", "not valid!"));
-    assert!(error_text(label_result(&rows)).contains("not valid for Kubernetes"));
+    assert_eq!(
+        error_text(label_result(&rows)),
+        format!(
+            "Row {}: value 'not valid!' is not valid (letters, digits, - _ ., max 63)",
+            rows.len()
+        )
+    );
 }
 
 fn ticked(name: &str, scheduling: NodeScheduling) -> TickedNode {
@@ -589,4 +607,96 @@ fn the_target_names_stop_after_five_with_the_rest_counted() {
     assert_eq!(node_names_text(&names(2)), "n1, n2");
     assert_eq!(node_names_text(&names(5)), "n1, n2, n3, n4, n5");
     assert_eq!(node_names_text(&names(8)), "n1, n2, n3, n4, n5 +3");
+}
+
+#[test]
+fn a_row_problem_names_the_row_and_the_input_to_mark() {
+    let mut rows = taint_rows(&node_edit());
+    let before = rows.len();
+    rows.push(row("bad key!", "", "NoSchedule"));
+    let problem = taint_row_problem(&rows).expect("a problem");
+    assert_eq!(
+        (problem.index, problem.field),
+        (before, RowField::Key),
+        "the mark follows the row position"
+    );
+    assert_eq!(
+        problem.text.as_ref(),
+        format!(
+            "Row {}: key 'bad key!' is not a valid Kubernetes key",
+            before + 1
+        )
+    );
+    // A prefix with a slash is fine; a bad value marks the value input of that row.
+    let rows = [label("example.com/team", "ok"), label("team", "no good")];
+    let problem = label_row_problem(&rows).expect("a problem");
+    assert_eq!((problem.index, problem.field), (1, RowField::Value));
+    assert!(label_row_problem(&[label("example.com/team", "ok")]).is_none());
+}
+
+#[test]
+fn a_long_key_is_cut_in_the_row_message() {
+    let rows = [label(&format!("{} !", "k".repeat(60)), "x")];
+    let text = label_row_problem(&rows).expect("a problem").text;
+    assert!(
+        text.starts_with("Row 1: key '") && text.contains("…'"),
+        "{text}"
+    );
+}
+
+#[test]
+fn conflict_notice_lists_what_changed_on_the_server() {
+    let base = vec![
+        taint("dedicated", Some("ingress"), "NoSchedule"),
+        taint("maintenance", None, "NoExecute"),
+        taint("tier", Some("a"), "NoSchedule"),
+    ];
+    let now = edit_with(
+        vec![
+            taint("dedicated", Some("ingress"), "NoSchedule"),
+            taint("tier", Some("b"), "NoSchedule"),
+            taint("gpu", Some("true"), "NoSchedule"),
+        ],
+        &[],
+    );
+    assert_eq!(
+        conflict_notice(Some(&base), &now),
+        "The node changed (by someone else): tier=a:NoSchedule became tier=b:NoSchedule, \
+         added gpu=true:NoSchedule, removed maintenance:NoExecute. Your rows are kept; review before applying."
+    );
+    // Without the editor's first read, the current taints are the least it can say.
+    assert_eq!(
+        conflict_notice(None, &now),
+        "The node changed; your rows are kept. Taints on the node now: \
+         dedicated=ingress:NoSchedule, tier=b:NoSchedule, gpu=true:NoSchedule."
+    );
+    assert!(conflict_notice(Some(&now.taints), &now).starts_with("The node changed; your rows"));
+}
+
+#[test]
+fn a_reopened_editor_keeps_the_users_rows_and_the_nodes_managed_taints() {
+    let kept = vec![
+        TaintRow {
+            time_added: None,
+            ..row("node.kubernetes.io/unreachable", "", "NoExecute")
+        },
+        row("dedicated", "ingress", "NoSchedule"),
+        row("gpu", "true", "NoSchedule"),
+    ];
+    // The node lost the managed taint and gained another meanwhile.
+    let now = edit_with(
+        vec![
+            taint("node.kubernetes.io/unschedulable", None, "NoSchedule"),
+            taint("dedicated", Some("ingress"), "NoSchedule"),
+        ],
+        &[],
+    );
+    let keys: Vec<String> = rows_after_conflict(&now, &kept)
+        .into_iter()
+        .map(|row| row.key)
+        .collect();
+    assert_eq!(
+        keys,
+        ["node.kubernetes.io/unschedulable", "dedicated", "gpu"]
+    );
 }

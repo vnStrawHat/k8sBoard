@@ -445,6 +445,10 @@ pub(crate) struct AppShell {
     revision_lookup: Option<Task<()>>,
     /// The editor an Apply started a write from (`ValuesEditView::open_id`), until its commit ends.
     values_commit_open: Option<u64>,
+    /// The taints the taint editor read when it last sent a change to review: a conflict on that
+    /// change reopens the editor and tells what changed on the node since. Replaced by the next
+    /// review, taken by the retry.
+    taint_base: Option<node_editor::TaintBase>,
     /// The name in the discard prompt asked last, for the tests that drive it.
     #[cfg(test)]
     last_discard: Option<String>,
@@ -745,6 +749,7 @@ impl AppShell {
             edit: None,
             revision_lookup: None,
             values_commit_open: None,
+            taint_base: None,
             #[cfg(test)]
             last_discard: None,
             #[cfg(test)]

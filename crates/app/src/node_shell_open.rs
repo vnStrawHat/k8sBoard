@@ -34,6 +34,25 @@ const BUTTON: &str = "Open node shell";
 /// The audit line of the create names what it does, not the button.
 const CREATE_ACTION: &str = "Create node shell pod";
 
+/// The fields the node shell confirm lists: the namespace the pod is created in (the request's own
+/// diff leaves the pod's metadata out), then what the request sets.
+fn node_shell_fields(namespace: &str, request: &WriteRequest) -> Vec<AuditField> {
+    std::iter::once(AuditField {
+        path: "metadata.namespace".to_owned(),
+        value: Some(namespace.to_owned()),
+    })
+    .chain(
+        request
+            .changed_fields()
+            .into_iter()
+            .map(|field| AuditField {
+                path: field.path.into_owned(),
+                value: field.value,
+            }),
+    )
+    .collect()
+}
+
 impl AppShell {
     /// Opens the Open node shell dialog for a node: the one entry of S on a node, the node menu,
     /// and the palette. The node is read again from its own cluster, so the gate, the setting, the
@@ -152,14 +171,7 @@ impl AppShell {
             return;
         };
         let intent_label = format!("Open node shell for {node}");
-        let fields = request
-            .changed_fields()
-            .into_iter()
-            .map(|field| AuditField {
-                path: field.path.into_owned(),
-                value: field.value,
-            })
-            .collect();
+        let fields = node_shell_fields(&chosen.namespace, &request);
         let risk = action_risk(ResourceAction::OpenNodeShell);
         let create = Rc::new(WriteIntent {
             cluster: cluster.clone(),
@@ -269,14 +281,7 @@ impl AppShell {
         };
         let risk = action_risk(ResourceAction::OpenNodeShell);
         let label = format!("Open node shell for {NODE}");
-        let fields = request
-            .changed_fields()
-            .into_iter()
-            .map(|field| AuditField {
-                path: field.path.into_owned(),
-                value: field.value,
-            })
-            .collect();
+        let fields = node_shell_fields("kube-system", &request);
         let create = Rc::new(WriteIntent {
             cluster: cluster.clone(),
             cluster_name: fixture_cluster.into(),

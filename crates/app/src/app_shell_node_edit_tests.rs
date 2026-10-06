@@ -13,7 +13,7 @@ use serde_json::{Value, json};
 use super::app_shell_switch_tests::open_switch_fixture;
 use super::app_shell_write_tests::{Clusters, go_live_answering, switch_to, writes};
 use super::batch_write::BATCH_RUNNING_REASON;
-use super::node_editor::{BulkLabelEditor, CHANGED_NOTICE, LabelTarget, NodeEditKind, NodeEditor};
+use super::node_editor::{BulkLabelEditor, LabelTarget, NodeEditKind, NodeEditor};
 use super::write_flow::DryRunState;
 use super::*;
 use crate::resource_actions::ResourceAction;
@@ -348,9 +348,11 @@ fn taint_conflict_retry_reopens_fresh_with_notice(cx: &mut TestAppContext) {
     let reopened = t.wait_for_editor(cx);
     assert_eq!(reads_of(&t.t.stg_api, "/api/v1/nodes/node-b"), 2);
     reopened.read_with(cx, |editor, _| {
-        assert_eq!(editor.notice().as_deref(), Some(CHANGED_NOTICE));
-        // The user's row is gone: the rows are the node's own.
-        assert_eq!(editor.row_count(), 1);
+        let notice = editor.notice().expect("a notice");
+        assert!(notice.starts_with("The node changed"), "{notice}");
+        assert!(notice.contains("Your rows are kept") || notice.contains("your rows are kept"));
+        // The node's own row and the user's added one.
+        assert_eq!(editor.row_count(), 2);
     });
 }
 

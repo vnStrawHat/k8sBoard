@@ -23,7 +23,7 @@
 
 - Menu in W5 order; `Edit taints…` and `Edit labels…` are unbound key actions (`EditTaints`, `EditLabels`); `Uncordon` is a `ResourceAction` of the bulk button only (its key resolves to `Cordon`).
 - The editor reads the node fresh, keeps `timeAdded`, shows managed rows (system taints, kubelet labels) disabled with the reason under the row, and enables `Review…` only with a change. Adding a `NoExecute` taint (a new key and effect) is `Destructive` with the warning. The typed name of an edit is the node name.
-- A 409 on a taint edit offers Retry in the confirm dialog, which closes it and reopens the editor fresh with the notice (`ConfirmDialog::retry`). A label edit sends no `resourceVersion`.
+- A 409 on a taint edit offers Retry in the confirm dialog, which closes it and reopens the editor with the user's rows kept and the notice (`ConfirmDialog::retry`). A label edit sends no `resourceVersion`.
 - Bulk Cordon/Uncordon: `cordon_batch` over the ticked nodes of one cluster (at most 50); nodes already in the state go to `skipped`; all skipped reads `All selected nodes are already cordoned` (`schedulable`). The header `Edit labels` acts on one ticked node (`Tick one node` otherwise).
 - Screens `node-taints-editor` and `node-labels-editor`.
 

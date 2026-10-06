@@ -29,7 +29,6 @@ use crate::app_shell::batch_write::{
     BatchCommit, BatchExtras, BatchFailure, BatchIntent, ItemProgress, dry_run_progress,
     summarize_dry_runs,
 };
-use crate::app_shell::node_editor::{CHANGED_NOTICE, NodeEditKind};
 use crate::app_shell::object_delete::{
     delete_dry_run_progress, pods_without_controller, propagation_choices, with_propagation,
 };
@@ -40,6 +39,7 @@ use crate::app_shell::write_flow::{
 };
 use crate::cluster_registry::ClusterRef;
 use crate::environment::{Environment, environment_badge};
+use crate::node_edits::taint_rows_of_request;
 use crate::resource_actions::{ResourceAction, with_next_step};
 use crate::settings::AppSettings;
 use crate::status_tone::{StatusTone, tone_color};
@@ -750,35 +750,31 @@ impl ConfirmDialog {
 
     /// Retry runs the dry-run again. The taint editor after a 409 is the exception: its change
     /// carries the `resourceVersion` it was read at, which cannot pass a second time, so Retry
-    /// reads the node again and reopens the editor fresh (the old rows could resurrect a removed
-    /// taint). Any other failure keeps the user's rows and checks again.
+    /// reads the node again and reopens the editor with the user's rows kept and a notice of what
+    /// changed on the node. Any other failure keeps the user's rows and checks again.
     fn retry(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let reopen = match &self.kind {
             DialogKind::Write(intent)
                 if intent.action == ResourceAction::EditTaints && self.is_conflict =>
             {
-                Some((
-                    intent.cluster.clone(),
-                    intent.request.target().name().to_owned(),
-                ))
+                taint_rows_of_request(intent.request.operation()).map(|rows| {
+                    (
+                        intent.cluster.clone(),
+                        intent.request.target().name().to_owned(),
+                        rows,
+                    )
+                })
             }
             _ => None,
         };
-        let (Some((cluster, node)), Some(shell)) = (reopen, self.shell.upgrade()) else {
+        let (Some((cluster, node, rows)), Some(shell)) = (reopen, self.shell.upgrade()) else {
             self.start_dry_run(cx);
             return;
         };
         self.close(window, cx);
         window.defer(cx, move |window, cx| {
             shell.update(cx, |shell, cx| {
-                shell.open_node_editor(
-                    NodeEditKind::Taints,
-                    &cluster,
-                    &node,
-                    Some(CHANGED_NOTICE.into()),
-                    window,
-                    cx,
-                );
+                shell.reopen_taint_editor(&cluster, &node, rows, window, cx);
             });
         });
     }

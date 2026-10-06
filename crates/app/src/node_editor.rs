@@ -6,7 +6,7 @@
 //! A child of `app_shell`, like `node_shell_open`: every step names the cluster of the node and
 //! takes its guard, connection, and tier from that cluster's own slot, never from the primary.
 
-use cluster::{ClusterConnection, ClusterError, LabelChange, NodeEdit};
+use cluster::{ClusterConnection, ClusterError, LabelChange, NodeEdit, NodeTaint};
 use gpui_kit::assets::IconName;
 use gpui_kit::component::WindowExt as _;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
@@ -31,8 +31,9 @@ use crate::cluster_runtime::ClusterRuntime;
 use crate::fresh_enter::{confirms, is_enter};
 use crate::keymap::FORWARD_FORM;
 use crate::node_edits::{
-    CordonMode, LabelRow, NO_EXECUTE_WARNING, NodeScope, TaintRow, TickedNode, cordon_batch,
-    label_batch, label_intent, label_rows, node_names_text, taint_intent, taint_rows,
+    CordonMode, KEY_HINT, LabelRow, NO_EXECUTE_WARNING, NodeScope, RowField, RowProblem, TaintRow,
+    TickedNode, conflict_notice, cordon_batch, label_batch, label_intent, label_row_problem,
+    label_rows, node_names_text, rows_after_conflict, taint_intent, taint_row_problem, taint_rows,
 };
 use crate::resource_actions::{
     ActionAvailability, NOT_SHIPPED_REASON, ResourceAction, action_availability, action_label,
@@ -49,9 +50,19 @@ const MANAGED_BY_KUBERNETES: &str = "Managed by Kubernetes";
 const BULK_OPERATIONS: [&str; 2] = ["Set", "Remove"];
 const BULK_REMOVE: usize = 1;
 const SET_BY_KUBELET: &str = "Set by the kubelet";
-/// The line the editor opens with after a conflict.
-pub(crate) const CHANGED_NOTICE: &str =
-    "The node changed; review the current taints and edit again";
+/// The taints a taint editor read when it sent its change to review.
+pub(crate) struct TaintBase {
+    pub(crate) cluster: ClusterRef,
+    pub(crate) node: String,
+    pub(crate) taints: Vec<NodeTaint>,
+}
+
+/// What a taint editor reopened after a conflict carries over: the user's rows, and the taints
+/// the editor first read, when they are known.
+pub(crate) struct KeptEdit {
+    pub(crate) rows: Vec<TaintRow>,
+    pub(crate) base: Option<Vec<NodeTaint>>,
+}
 
 /// Which list the editor changes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -109,6 +120,8 @@ pub(crate) struct NodeEditor {
     node: String,
     kind: NodeEditKind,
     notice: Option<SharedString>,
+    /// The rows and base of the editor a conflict closed; used once, when the node is read.
+    kept: Option<KeptEdit>,
     state: EditorState,
     _load: Option<Task<()>>,
 }
@@ -176,6 +189,17 @@ fn with_note(line: gpui_kit::Div, note: Option<&'static str>, muted: gpui_kit::H
         .into_any_element()
 }
 
+/// An input cell; the danger border marks the input the validation line names. The border is
+/// always there (transparent when fine) so a row keeps its height.
+fn input_cell(input: Input, is_bad: bool, danger: gpui_kit::Hsla) -> gpui_kit::Div {
+    div()
+        .flex_1()
+        .rounded_md()
+        .border_1()
+        .border_color(if is_bad { danger } else { danger.opacity(0.) })
+        .child(input)
+}
+
 /// The key of a locked taint: a cell cut with an ellipsis, with the full key in a tooltip.
 fn locked_key(index: usize, key: SharedString, cx: &App) -> AnyElement {
     let theme = cx.theme();
@@ -198,10 +222,17 @@ fn locked_key(index: usize, key: SharedString, cx: &App) -> AnyElement {
 }
 
 /// The editor state for a node as it was read: one row per taint or label.
-fn ready(kind: NodeEditKind, edit: NodeEdit, window: &mut Window, cx: &mut App) -> EditorState {
+fn ready(
+    kind: NodeEditKind,
+    edit: NodeEdit,
+    kept_taints: Option<Vec<TaintRow>>,
+    window: &mut Window,
+    cx: &mut App,
+) -> EditorState {
     let rows = match kind {
         NodeEditKind::Taints => Rows::Taints(
-            taint_rows(&edit)
+            kept_taints
+                .unwrap_or_else(|| taint_rows(&edit))
                 .iter()
                 .map(|row| taint_inputs(row, window, cx))
                 .collect(),
@@ -220,7 +251,7 @@ impl NodeEditor {
     fn new(
         shell: WeakEntity<AppShell>,
         target: EditorTarget,
-        notice: Option<SharedString>,
+        kept: Option<KeptEdit>,
         connection: ClusterConnection,
         runtime: ClusterRuntime,
         window: &mut Window,
@@ -245,7 +276,8 @@ impl NodeEditor {
             cluster_name,
             node,
             kind,
-            notice,
+            notice: None,
+            kept,
             state: EditorState::Loading,
             _load: Some(load),
         }
@@ -258,7 +290,14 @@ impl NodeEditor {
         cx: &mut Context<Self>,
     ) {
         self.state = match read {
-            Ok(Ok(edit)) => ready(self.kind, edit, window, cx),
+            Ok(Ok(edit)) => {
+                let kept = self.kept.take();
+                if let Some(kept) = &kept {
+                    self.notice = Some(conflict_notice(kept.base.as_deref(), &edit).into());
+                }
+                let rows = kept.map(|kept| rows_after_conflict(&edit, &kept.rows));
+                ready(self.kind, edit, rows, window, cx)
+            }
             Ok(Err(error)) => {
                 EditorState::Failed(format!("Could not read node {}: {error}", self.node).into())
             }
@@ -313,6 +352,17 @@ impl NodeEditor {
         }
     }
 
+    /// The row and input that carry the validation line, to mark them.
+    fn row_problem(&self, cx: &App) -> Option<RowProblem> {
+        let EditorState::Ready { rows, .. } = &self.state else {
+            return None;
+        };
+        match rows {
+            Rows::Taints(inputs) => taint_row_problem(&Self::read_taints(inputs, cx)),
+            Rows::Labels(inputs) => label_row_problem(&Self::read_labels(inputs, cx)),
+        }
+    }
+
     fn add_row(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let EditorState::Ready { rows, .. } = &mut self.state else {
             return;
@@ -360,11 +410,24 @@ impl NodeEditor {
         let Ok(intent) = self.intent(cx) else {
             return;
         };
+        let base = match &self.state {
+            EditorState::Ready { edit, .. } if self.kind == NodeEditKind::Taints => {
+                Some(TaintBase {
+                    cluster: self.cluster.clone(),
+                    node: self.node.clone(),
+                    taints: edit.taints.clone(),
+                })
+            }
+            _ => None,
+        };
         let shell = self.shell.clone();
         window.close_dialog(cx);
         // After the close: the flow opens the confirm dialog, which the close must not pop.
         window.defer(cx, move |window, cx| {
-            let _ = shell.update(cx, |shell, cx| shell.start_write(intent, window, cx));
+            let _ = shell.update(cx, |shell, cx| {
+                shell.taint_base = base;
+                shell.start_write(intent, window, cx);
+            });
         });
     }
 
@@ -401,7 +464,13 @@ impl NodeEditor {
         let EditorState::Ready { rows, .. } = &self.state else {
             return div().into_any_element();
         };
-        let muted = cx.theme().muted_foreground;
+        let (muted, danger) = (cx.theme().muted_foreground, cx.theme().danger);
+        let problem = self.row_problem(cx);
+        let is_bad = |index: usize, field: RowField| {
+            problem
+                .as_ref()
+                .is_some_and(|problem| problem.index == index && problem.field == field)
+        };
         let remove = |index: usize, is_read_only: bool, cx: &mut Context<Self>| {
             if is_read_only {
                 return div().w_6().into_any_element();
@@ -423,10 +492,12 @@ impl NodeEditor {
                         let key_cell = if row.is_read_only {
                             locked_key(index, row.key.read(cx).value().clone(), cx)
                         } else {
-                            div()
-                                .flex_1()
-                                .child(Input::new(&row.key).small())
-                                .into_any_element()
+                            input_cell(
+                                Input::new(&row.key).small(),
+                                is_bad(index, RowField::Key),
+                                danger,
+                            )
+                            .into_any_element()
                         };
                         let has_no_execute = !row.is_read_only
                             && row
@@ -447,8 +518,10 @@ impl NodeEditor {
                                 .gap_2()
                                 .items_center()
                                 .child(key_cell)
-                                .child(div().flex_1().child(
+                                .child(input_cell(
                                     Input::new(&row.value).small().disabled(row.is_read_only),
+                                    is_bad(index, RowField::Value),
+                                    danger,
                                 ))
                                 .child(div().w(px(150.)).child(
                                     Select::new(&row.effect).small().disabled(row.is_read_only),
@@ -459,28 +532,30 @@ impl NodeEditor {
                         )
                     })
                     .collect::<Vec<_>>(),
-                Rows::Labels(inputs) => {
-                    inputs
-                        .iter()
-                        .enumerate()
-                        .map(|(index, row)| {
-                            with_note(
-                                h_flex()
-                                    .gap_2()
-                                    .items_center()
-                                    .child(div().flex_1().child(
-                                        Input::new(&row.key).small().disabled(row.is_read_only),
-                                    ))
-                                    .child(div().flex_1().child(
-                                        Input::new(&row.value).small().disabled(row.is_read_only),
-                                    ))
-                                    .child(remove(index, row.is_read_only, cx)),
-                                row.is_read_only.then_some(SET_BY_KUBELET),
-                                muted,
-                            )
-                        })
-                        .collect::<Vec<_>>()
-                }
+                Rows::Labels(inputs) => inputs
+                    .iter()
+                    .enumerate()
+                    .map(|(index, row)| {
+                        with_note(
+                            h_flex()
+                                .gap_2()
+                                .items_center()
+                                .child(input_cell(
+                                    Input::new(&row.key).small().disabled(row.is_read_only),
+                                    is_bad(index, RowField::Key),
+                                    danger,
+                                ))
+                                .child(input_cell(
+                                    Input::new(&row.value).small().disabled(row.is_read_only),
+                                    is_bad(index, RowField::Value),
+                                    danger,
+                                ))
+                                .child(remove(index, row.is_read_only, cx)),
+                            row.is_read_only.then_some(SET_BY_KUBELET),
+                            muted,
+                        )
+                    })
+                    .collect::<Vec<_>>(),
             };
         v_flex()
             .id("node-edit-rows")
@@ -547,11 +622,15 @@ impl Render for NodeEditor {
                     Err(reason) if reason.as_ref() != "No changes" => Some(reason),
                     _ => None,
                 };
+                let hint = self
+                    .row_problem(cx)
+                    .map(|_| div().text_xs().text_color(muted).child(KEY_HINT));
                 v_flex()
                     .gap_2()
                     .child(self.render_rows(cx))
                     .child(h_flex().child(add))
                     .children(problem.map(|text| div().text_sm().text_color(danger).child(text)))
+                    .children(hint)
                     .into_any_element()
             }
         };
@@ -579,16 +658,35 @@ struct EditorTarget {
 }
 
 impl AppShell {
+    /// Reopens the taint editor a conflict closed, with the user's rows and what changed on the
+    /// node since the editor first read it.
+    pub(crate) fn reopen_taint_editor(
+        &mut self,
+        cluster: &ClusterRef,
+        node: &str,
+        rows: Vec<TaintRow>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let base = self
+            .taint_base
+            .take()
+            .filter(|base| base.cluster == *cluster && base.node == node)
+            .map(|base| base.taints);
+        let kept = KeptEdit { rows, base };
+        self.open_node_editor(NodeEditKind::Taints, cluster, node, Some(kept), window, cx);
+    }
+
     /// Opens the taint or label editor of `node` of `cluster`, the row's or cursor's own cluster.
     /// The gate is checked here again (a stale menu or a key pressed in a gap cannot bypass it),
-    /// and the node is read from that cluster's own connection when the dialog opens. `notice` is
-    /// the line a reopened editor starts with.
+    /// and the node is read from that cluster's own connection when the dialog opens. `kept` is
+    /// what a taint editor that a conflict closed carries into its reopening.
     pub(crate) fn open_node_editor(
         &mut self,
         kind: NodeEditKind,
         cluster: &ClusterRef,
         node: &str,
-        notice: Option<SharedString>,
+        kept: Option<KeptEdit>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -638,7 +736,7 @@ impl AppShell {
         let runtime = cx.global::<ClusterRuntime>().clone();
         let (shell, title) = (cx.weak_entity(), kind.title(node));
         let editor =
-            cx.new(|cx| NodeEditor::new(shell, target, notice, connection, runtime, window, cx));
+            cx.new(|cx| NodeEditor::new(shell, target, kept, connection, runtime, window, cx));
         #[cfg(test)]
         {
             self.last_node_editor = Some(editor.downgrade());
@@ -1328,7 +1426,8 @@ impl AppShell {
             node: target.node,
             kind,
             notice: None,
-            state: ready(kind, edit, window, cx),
+            kept: None,
+            state: ready(kind, edit, None, window, cx),
             _load: None,
         });
         for (key, value, effect) in extra_taints {
