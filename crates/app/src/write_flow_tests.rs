@@ -330,12 +330,12 @@ fn a_create_names_what_it_made_in_the_notice() {
         success_notice(
             "Trigger cronjob reconcile now",
             Some("reconcile-manual-x7k2p"),
-            ResourceAction::TriggerCronJob
+            false
         ),
         "Trigger cronjob reconcile now: created reconcile-manual-x7k2p"
     );
     assert_eq!(
-        success_notice("Cordon node wk-04", None, ResourceAction::Cordon),
+        success_notice("Cordon node wk-04", None, false),
         "Cordoned node wk-04."
     );
 }
@@ -675,31 +675,72 @@ fn a_create_notice_names_the_kind_and_where_it_is() {
     );
 }
 
+fn deployment_intent(action: ResourceAction, operation: WriteOperation) -> WriteIntent {
+    job_intent(action, ObjectKind::Deployment, operation)
+}
+
 #[test]
-fn only_a_deployment_restart_and_a_roll_back_are_followed_to_their_end() {
-    assert!(watches_rollout(ResourceAction::RestartRollout(
-        ObjectKind::Deployment
-    )));
-    assert!(watches_rollout(ResourceAction::RollBack));
-    assert!(!watches_rollout(ResourceAction::RestartRollout(
-        ObjectKind::StatefulSet
-    )));
-    assert!(!watches_rollout(ResourceAction::Cordon));
+fn only_a_deployment_rollout_start_is_followed_to_its_end() {
+    let restart = |kind| {
+        job_intent(
+            ResourceAction::RestartRollout(kind),
+            kind,
+            WriteOperation::RestartRollout {
+                restarted_at: jiff::Timestamp::UNIX_EPOCH,
+            },
+        )
+    };
+    assert!(watches_rollout(&restart(ObjectKind::Deployment)));
+    assert!(!watches_rollout(&restart(ObjectKind::StatefulSet)));
+    let pause = |paused| {
+        deployment_intent(
+            ResourceAction::PauseRollout,
+            WriteOperation::SetRolloutPaused { paused },
+        )
+    };
+    assert!(watches_rollout(&pause(false)), "Resume starts the rollout");
+    assert!(!watches_rollout(&pause(true)), "Pause starts nothing");
+    let scale = deployment_intent(
+        ResourceAction::Scale(ObjectKind::Deployment),
+        WriteOperation::ScaleWorkload { replicas: 4 },
+    );
+    assert!(watches_rollout(&scale));
+    let mut edit = deployment_intent(
+        ResourceAction::Scale(ObjectKind::Deployment),
+        WriteOperation::ScaleWorkload { replicas: 4 },
+    );
+    let target = ObjectRef::new(
+        ObjectKind::Deployment,
+        Some("payments".to_owned()),
+        "api".to_owned(),
+    )
+    .expect("a deployment");
+    let replace =
+        WriteOperation::ReplaceObject(Box::new(crate::yaml_edit::yaml_edit_tests::sample_edit()));
+    edit.action = ResourceAction::EditYaml(ObjectKind::Deployment);
+    edit.request = WriteRequest::new(target, replace).expect("an editable kind");
+    assert!(watches_rollout(&edit), "an edit of spec.replicas rolls");
+    let rerun = job_intent(
+        ResourceAction::RerunJob,
+        ObjectKind::Job,
+        WriteOperation::RerunJob,
+    );
+    assert!(!watches_rollout(&rerun));
+}
+
+#[test]
+fn a_watched_commit_says_the_rollout_is_under_way() {
     assert_eq!(
-        success_notice(
-            "Restart rollout of statefulset db",
-            None,
-            ResourceAction::RestartRollout(ObjectKind::StatefulSet)
-        ),
+        success_notice("Restart rollout of statefulset db", None, false),
         "Restarted rollout of statefulset db."
     );
     assert_eq!(
-        success_notice(
-            "Restart rollout of deployment web",
-            None,
-            ResourceAction::RestartRollout(ObjectKind::Deployment)
-        ),
+        success_notice("Restart rollout of deployment web", None, true),
         "Restarted rollout of deployment web. Watching rollout…"
+    );
+    assert_eq!(
+        success_notice("Scale deployment web from 3 to 4", None, true),
+        "Scaled deployment web from 3 to 4. Watching rollout…"
     );
 }
 

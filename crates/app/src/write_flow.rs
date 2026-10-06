@@ -641,8 +641,8 @@ const PAST_TENSE: [(&str, &str); 14] = [
 ];
 
 /// The notice of a commit that went through: a create names what it made, a rollout action says
-/// the rollout is under way, and a label of an unknown verb keeps the plain `done`.
-fn success_notice(label: &str, created: Option<&str>, action: ResourceAction) -> String {
+/// the rollout is under way (`is_watched`), and a label of an unknown verb keeps the plain `done`.
+fn success_notice(label: &str, created: Option<&str>, is_watched: bool) -> String {
     if let Some(name) = created {
         return format!("{label}: created {name}");
     }
@@ -650,25 +650,56 @@ fn success_notice(label: &str, created: Option<&str>, action: ResourceAction) ->
         let rest = label.strip_prefix(verb)?.strip_prefix(' ')?;
         Some(format!("{past} {rest}"))
     });
-    match (past, watches_rollout(action)) {
-        (Some(past), true) => format!("{past}. Watching rollout…"),
+    match (past, is_watched) {
+        (Some(past), true) => format!("{past}. {WATCHING_ROLLOUT}"),
         (Some(past), false) => format!("{past}."),
         (None, _) => format!("{label}: done"),
     }
 }
 
-/// Whether the app follows the rollout of the action to its end (`rollout_watch`): only a
-/// Deployment reports the status it needs.
-pub(crate) fn watches_rollout(action: ResourceAction) -> bool {
-    matches!(
-        action,
-        ResourceAction::RestartRollout(ObjectKind::Deployment) | ResourceAction::RollBack
-    )
+const WATCHING_ROLLOUT: &str = "Watching rollout…";
+
+/// Whether the commit starts a Deployment rollout the app follows to its end (`rollout_watch`):
+/// only a Deployment reports the status it needs. A Restart, a Roll back, a Resume, a Scale, and
+/// an Edit YAML that changes the pod template or the replicas qualify.
+pub(crate) fn watches_rollout(intent: &WriteIntent) -> bool {
+    match (intent.action, intent.request.operation()) {
+        (ResourceAction::RestartRollout(ObjectKind::Deployment), _)
+        | (ResourceAction::RollBack, _)
+        | (ResourceAction::Scale(ObjectKind::Deployment), _) => true,
+        (ResourceAction::PauseRollout, WriteOperation::SetRolloutPaused { paused }) => !paused,
+        (ResourceAction::EditYaml(ObjectKind::Deployment), _) => {
+            intent.request.changed_fields().iter().any(|field| {
+                field.path.starts_with("spec.template") || field.path == "spec.replicas"
+            })
+        }
+        _ => false,
+    }
 }
 
-/// The Deployment (`namespace`, `name`) whose rollout the app follows after this action.
-fn watched_workload(intent: &WriteIntent) -> Option<(String, String)> {
-    if !watches_rollout(intent.action) {
+/// Whether the commit edited a Deployment that is paused: its pods change only after Resume, so
+/// there is no rollout to follow. Read from the lists the session holds.
+fn is_paused_edit(shell: &WeakEntity<AppShell>, intent: &WriteIntent, cx: &AsyncApp) -> bool {
+    if !matches!(intent.action, ResourceAction::EditYaml(_)) {
+        return false;
+    }
+    let target = intent.request.target();
+    let Some(namespace) = target.namespace() else {
+        return false;
+    };
+    shell
+        .read_with(cx, |shell, cx| {
+            let live = shell.live_of(&intent.cluster, cx)?;
+            Some(live.deployment_of(namespace, target.name())?.is_paused)
+        })
+        .ok()
+        .flatten()
+        .unwrap_or(false)
+}
+
+/// The Deployment (`namespace`, `name`) whose rollout the app follows after this commit.
+fn watched_workload(intent: &WriteIntent, is_watched: bool) -> Option<(String, String)> {
+    if !is_watched {
         return None;
     }
     let target = intent.request.target();
@@ -683,9 +714,9 @@ fn starts_rollout(action: ResourceAction) -> bool {
     )
 }
 
-/// The workload a rollout action started a rollout of, for the notice's View button.
-fn rollout_subject(intent: &WriteIntent) -> Option<ClusterObject> {
-    if !starts_rollout(intent.action) {
+/// The workload a rollout started, for the notice's View button.
+fn rollout_subject(intent: &WriteIntent, is_watched: bool) -> Option<ClusterObject> {
+    if !is_watched && !starts_rollout(intent.action) {
         return None;
     }
     let target = intent.request.target();
@@ -1273,6 +1304,8 @@ fn finish_commit(
     {
         return;
     }
+    let is_watched =
+        result.is_ok() && watches_rollout(intent) && !is_paused_edit(shell, intent, cx);
     let notice = match &result {
         Ok(()) if matches!(intent.action, ResourceAction::EditValues(_)) => {
             let target = intent.request.target();
@@ -1281,7 +1314,11 @@ fn finish_commit(
         }
         Ok(()) if matches!(intent.action, ResourceAction::EditYaml(_)) => {
             let target = intent.request.target();
-            yaml_success_notice(target.kind_name(), target.name())
+            let notice = yaml_success_notice(target.kind_name(), target.name());
+            match is_watched {
+                true => format!("{notice}. {WATCHING_ROLLOUT}"),
+                false => notice,
+            }
         }
         Ok(()) if matches!(intent.action, ResourceAction::CreateObject(_)) => {
             create_success_notice(&intent.request)
@@ -1289,7 +1326,7 @@ fn finish_commit(
         Ok(()) if intent.action == ResourceAction::RenewCertificate => {
             renewal_notice(intent.request.target())
         }
-        Ok(()) => success_notice(&label, created.as_deref(), intent.action),
+        Ok(()) => success_notice(&label, created.as_deref(), is_watched),
         Err(error) => failure_notice(&label, error),
     };
     let _ = cx.update_window(window, |_, window, cx| {
@@ -1302,9 +1339,9 @@ fn finish_commit(
         });
         let created_view =
             created_job_subject(intent, created.as_deref()).filter(|_| result.is_ok());
-        match rollout_subject(intent).filter(|_| result.is_ok()) {
+        match rollout_subject(intent, is_watched).filter(|_| result.is_ok()) {
             Some(subject) => {
-                let workload = watched_workload(intent);
+                let workload = watched_workload(intent, is_watched);
                 let toast = workload
                     .as_ref()
                     .map(|workload| rollout_toast_id(std::slice::from_ref(workload)));
@@ -1315,6 +1352,7 @@ fn finish_commit(
                         shell.watch_rollouts(cluster, vec![workload], handle, cx);
                     });
                 }
+                watch_hpa_after_scale(shell, intent, window.window_handle(), cx);
             }
             None => match created_view {
                 Some(subject) => notify_with_view(window, cx, notice, shell, subject, None),
