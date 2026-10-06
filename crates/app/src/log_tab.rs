@@ -78,6 +78,72 @@ pub(crate) enum LogLayout {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ToolbarAction {
+    Copy,
+    Export,
+    PopOut,
+    Reconnect,
+}
+
+impl ToolbarAction {
+    fn id(self) -> &'static str {
+        match self {
+            Self::Copy => "log-copy",
+            Self::Export => "log-export",
+            Self::PopOut => "log-pop-out",
+            Self::Reconnect => "log-reconnect",
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Copy => "Copy visible lines",
+            Self::Export => "Export visible lines…",
+            Self::PopOut => "Open in a new window",
+            Self::Reconnect => "Reconnect",
+        }
+    }
+
+    fn icon(self) -> IconName {
+        match self {
+            Self::Copy => IconName::Copy,
+            Self::Export => IconName::Download,
+            Self::PopOut => IconName::ExternalLink,
+            Self::Reconnect => IconName::RefreshCw,
+        }
+    }
+}
+
+/// Where each toolbar action sits.
+#[derive(Debug, PartialEq, Eq)]
+struct ToolbarActions {
+    inline: Vec<ToolbarAction>,
+    overflow: Vec<ToolbarAction>,
+}
+
+/// Pop out is for a docked tab and Reconnect for one that is not connecting. The docked (Compact)
+/// tab puts them all in the `⋯` menu so the toolbar stays on one row; the zoomed and popped-out
+/// tabs have the width for a button each.
+fn toolbar_actions(layout: LogLayout, is_popped_out: bool, is_connecting: bool) -> ToolbarActions {
+    let mut actions = vec![ToolbarAction::Copy, ToolbarAction::Export];
+    if !is_popped_out {
+        actions.push(ToolbarAction::PopOut);
+    }
+    if !is_connecting {
+        actions.push(ToolbarAction::Reconnect);
+    }
+    match layout {
+        LogLayout::Compact => ToolbarActions {
+            inline: Vec::new(),
+            overflow: actions,
+        },
+        LogLayout::Full => ToolbarActions {
+            inline: actions,
+            overflow: Vec::new(),
+        },
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum LogInstance {
     Current,
     Previous,
@@ -1028,6 +1094,90 @@ impl LogTab {
         pods.len()
     }
 
+    /// Copy, Export, Pop out, and Reconnect: a button each in the zoomed and popped-out tabs, one
+    /// `⋯` menu in the docked tab, where they would wrap the toolbar onto a second row.
+    fn render_toolbar_actions(&self, is_connecting: bool, cx: &Context<Self>) -> Vec<AnyElement> {
+        let placement = toolbar_actions(self.layout, self.is_popped_out, is_connecting);
+        let mut elements: Vec<AnyElement> = placement
+            .inline
+            .iter()
+            .map(|action| {
+                let action = *action;
+                Button::new(action.id())
+                    .ghost()
+                    .small()
+                    .icon(Icon::new(action.icon()))
+                    .when(action == ToolbarAction::PopOut, |button| {
+                        button.label("Pop out")
+                    })
+                    .tooltip(action.label())
+                    .disabled(action == ToolbarAction::Export && self.is_export_unavailable())
+                    .on_click(cx.listener(move |tab, _, _, cx| tab.run_toolbar_action(action, cx)))
+                    .into_any_element()
+            })
+            .collect();
+        if placement.overflow.is_empty() {
+            return elements;
+        }
+        let tab = cx.weak_entity();
+        let is_export_unavailable = self.is_export_unavailable();
+        elements.push(
+            Button::new("log-overflow")
+                .ghost()
+                .small()
+                .icon(Icon::new(IconName::Ellipsis))
+                .tooltip("More")
+                .dropdown_menu(move |menu, _, _| {
+                    placement.overflow.iter().fold(menu, |menu, action| {
+                        let action = *action;
+                        let tab = tab.clone();
+                        menu.item(
+                            PopupMenuItem::new(action.label())
+                                .icon(Icon::new(action.icon()))
+                                .disabled(action == ToolbarAction::Export && is_export_unavailable)
+                                .on_click(move |_, _, cx| {
+                                    let _ = tab.update(cx, |tab, cx| {
+                                        tab.run_toolbar_action(action, cx);
+                                    });
+                                }),
+                        )
+                    })
+                })
+                .into_any_element(),
+        );
+        elements
+    }
+
+    fn is_export_unavailable(&self) -> bool {
+        self.export_state.is_busy() || self.buffer.visible_len() == 0
+    }
+
+    fn run_toolbar_action(&mut self, action: ToolbarAction, cx: &mut Context<Self>) {
+        match action {
+            ToolbarAction::Copy => {
+                let time = if self.shows_timestamps {
+                    LineTime::Clock
+                } else {
+                    LineTime::Hidden
+                };
+                // A pod tab has one source and no prefix column.
+                let prefixes: Vec<SharedString> = if self.is_workload() {
+                    self.streams
+                        .iter()
+                        .map(|stream| stream.prefix.clone())
+                        .collect()
+                } else {
+                    Vec::new()
+                };
+                let text = self.buffer.visible_text(time, &self.time_zone, &prefixes);
+                cx.write_to_clipboard(ClipboardItem::new_string(text));
+            }
+            ToolbarAction::Export => self.export(cx),
+            ToolbarAction::PopOut => cx.emit(LogTabEvent::PopOut),
+            ToolbarAction::Reconnect => self.restart_stream(cx),
+        }
+    }
+
     fn render_toolbar(&self, cx: &Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
         let is_scrolled_up = self.scroller.read(cx).is_scrolled_up();
@@ -1124,63 +1274,7 @@ impl LogTab {
                         tab.remeasure(cx);
                     })),
             )
-            .child(
-                Button::new("log-copy")
-                    .ghost()
-                    .small()
-                    .icon(Icon::new(IconName::Copy))
-                    .tooltip("Copy visible lines")
-                    .on_click(cx.listener(|tab, _, _, cx| {
-                        let time = if tab.shows_timestamps {
-                            LineTime::Clock
-                        } else {
-                            LineTime::Hidden
-                        };
-                        // A pod tab has one source and no prefix column.
-                        let prefixes: Vec<SharedString> = if tab.is_workload() {
-                            tab.streams
-                                .iter()
-                                .map(|stream| stream.prefix.clone())
-                                .collect()
-                        } else {
-                            Vec::new()
-                        };
-                        let text = tab.buffer.visible_text(time, &tab.time_zone, &prefixes);
-                        cx.write_to_clipboard(ClipboardItem::new_string(text));
-                    })),
-            )
-            .child(
-                Button::new("log-export")
-                    .ghost()
-                    .small()
-                    .icon(Icon::new(IconName::Download))
-                    .tooltip("Export visible lines…")
-                    .disabled(self.export_state.is_busy() || self.buffer.visible_len() == 0)
-                    .on_click(cx.listener(|tab, _, _, cx| tab.export(cx))),
-            )
-            .when(!self.is_popped_out, |toolbar| {
-                toolbar.child(
-                    Button::new("log-pop-out")
-                        .ghost()
-                        .small()
-                        .icon(Icon::new(IconName::ExternalLink))
-                        .when(self.layout == LogLayout::Full, |button| {
-                            button.label("Pop out")
-                        })
-                        .tooltip("Open in a new window")
-                        .on_click(cx.listener(|_, _, _, cx| cx.emit(LogTabEvent::PopOut))),
-                )
-            })
-            .when(!is_connecting, |toolbar| {
-                toolbar.child(
-                    Button::new("log-reconnect")
-                        .ghost()
-                        .small()
-                        .icon(Icon::new(IconName::RefreshCw))
-                        .tooltip("Reconnect")
-                        .on_click(cx.listener(|tab, _, _, cx| tab.restart_stream(cx))),
-                )
-            })
+            .children(self.render_toolbar_actions(is_connecting, cx))
             .child(
                 h_flex()
                     .ml_auto()

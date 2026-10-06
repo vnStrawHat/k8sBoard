@@ -305,3 +305,33 @@ fn leaving_the_full_layout_drops_a_drag_in_progress(cx: &mut TestAppContext) {
         assert!(tab.brush.is_none());
     });
 }
+
+#[test]
+fn the_docked_toolbar_keeps_every_action_in_the_overflow_menu() {
+    let placement = toolbar_actions(LogLayout::Compact, false, false);
+    assert!(placement.inline.is_empty());
+    assert_eq!(
+        placement.overflow,
+        [
+            ToolbarAction::Copy,
+            ToolbarAction::Export,
+            ToolbarAction::PopOut,
+            ToolbarAction::Reconnect
+        ]
+    );
+}
+
+#[test]
+fn the_zoomed_toolbar_keeps_a_button_per_action() {
+    let placement = toolbar_actions(LogLayout::Full, false, false);
+    assert!(placement.overflow.is_empty());
+    assert_eq!(placement.inline.len(), 4);
+}
+
+#[test]
+fn a_popped_out_or_connecting_tab_offers_fewer_actions() {
+    let popped_out = toolbar_actions(LogLayout::Full, true, false);
+    assert!(!popped_out.inline.contains(&ToolbarAction::PopOut));
+    let connecting = toolbar_actions(LogLayout::Compact, false, true);
+    assert!(!connecting.overflow.contains(&ToolbarAction::Reconnect));
+}
