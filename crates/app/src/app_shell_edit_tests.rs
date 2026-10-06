@@ -1670,6 +1670,42 @@ fn history_roll_back_asks_for_the_row_revision_while_editing(cx: &mut TestAppCon
     assert!(puts_of(&t.t.stg_api).is_empty());
 }
 
+/// The Roll back of the Deployment `api` that the open edit shows, as the write flow built it.
+fn roll_back_of_api(t: &EditTest) -> super::write_flow::WriteIntent {
+    use crate::workload_actions::{RevisionTarget, WorkloadScope, roll_back_intent};
+    let target = RevisionTarget {
+        replica_set: "api-1".to_owned(),
+        revision: 1,
+        tag: None,
+    };
+    let scope = WorkloadScope {
+        cluster: &t.t.stg,
+        cluster_name: "stg-b",
+    };
+    roll_back_intent(&scope, &deployment("api"), &target).expect("a roll back intent")
+}
+
+#[gpui_kit::test]
+fn a_roll_back_closes_the_edit_that_holds_the_old_revision(cx: &mut TestAppContext) {
+    let t = edit_test("edit-roll-back-closes", cx);
+    t.open(cx);
+    let intent = roll_back_of_api(&t);
+    t.shell()
+        .update(cx, |shell, cx| shell.roll_back_finished(&intent, cx));
+    assert!(!t.has_edit(cx));
+}
+
+#[gpui_kit::test]
+fn a_roll_back_keeps_an_edit_with_unsaved_text(cx: &mut TestAppContext) {
+    let t = edit_test("edit-roll-back-dirty", cx);
+    t.open(cx);
+    t.change("replicas: 3", "replicas: 4", cx);
+    let intent = roll_back_of_api(&t);
+    t.shell()
+        .update(cx, |shell, cx| shell.roll_back_finished(&intent, cx));
+    assert!(t.has_edit(cx));
+}
+
 // ---- Spec 0041: the quota line ----
 
 fn quota_snapshot(hard: &str, used: &str) -> Vec<crate::kind_row::KindObject> {

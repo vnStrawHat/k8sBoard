@@ -61,3 +61,5 @@ On the History tab the side panel leaves out the editor's `N changes` list (it w
 ## Roll back where the comparison happens (UX fix H3)
 
 Each older row of the list has `Roll back…`, and the revision diff dialog has `Roll back to rev N…` in its footer (the side that is not current, only when exactly one side is). Both come from `AppShell::roll_back_offer`: the gate of the Deployment's cluster (permission, lock, paused rollout) decides, and a disabled button carries the reason as its tooltip. A click closes the diff dialog, then `begin_roll_back` opens the usual confirm dialog (`roll_back_intent`). The history tab calls `begin_roll_back` directly, so it works while the edit is open; the Deployment change then reaches the editor as a conflict.
+
+A Roll back that goes through closes the Edit YAML view of that Deployment (`roll_back_finished`), so its text, `resourceVersion`, and `current` pill never stay behind the new revision. An editor holding unsaved text stays open: the rollout notice still appears, and Apply reads the change as a conflict.

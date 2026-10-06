@@ -8,12 +8,13 @@ use std::time::{Duration, Instant};
 use cluster::{
     AccessCheck, AccessDecision, AccessReport, BindingSummary, ChangeEventKind, ClusterConnection,
     ClusterError, ConfigMapValues, ContextSummary, CrdSummary, CustomObjectFields,
-    EndpointSliceSummary, EventFilter, EventSummary, HelmRevision, IngressSummary, InvolvedObject,
-    JobSummary, Kubeconfig, KubeletTargets, LimitRangeSummary, MetricsError, MetricsSource,
-    MetricsSourceError, NamespaceAccess, NamespaceScope, NamespaceSummary, NodeSummary, ObjectKind,
-    PersistentVolumeSummary, PodSummary, ProxyChoice, ProxyUrlError, RbacSnapshot,
-    ReplicaSetSummary, ResourceQuotaSummary, SecretSummary, ServerVersion, ServiceSummary,
-    SourceCheck, StorageClassSummary, TrafficCounter, TrafficMetricSource, WatchUpdate,
+    DeploymentSummary, EndpointSliceSummary, EventFilter, EventSummary, HelmRevision,
+    IngressSummary, InvolvedObject, JobSummary, Kubeconfig, KubeletTargets, LimitRangeSummary,
+    MetricsError, MetricsSource, MetricsSourceError, NamespaceAccess, NamespaceScope,
+    NamespaceSummary, NodeSummary, ObjectKind, PersistentVolumeSummary, PodSummary, ProxyChoice,
+    ProxyUrlError, RbacSnapshot, ReplicaSetSummary, ResourceQuotaSummary, SecretSummary,
+    ServerVersion, ServiceSummary, SourceCheck, StorageClassSummary, TrafficCounter,
+    TrafficMetricSource, WatchUpdate,
 };
 use futures::StreamExt as _;
 use gpui_kit::{App, Context, Task};
@@ -3035,10 +3036,9 @@ impl LiveCluster {
             .filter(|explorer| explorer.kind == kind)
     }
 
-    /// The selector of a Deployment as this session lists it, `key=value` terms joined by `,` (the
-    /// syntax of a label selector query): the Deployments screen when it is shown, else the
+    /// The Deployment as this session lists it: the Deployments screen when it is shown, else the
     /// Deployments condition feed. `None` while neither has the Deployment.
-    pub(crate) fn deployment_selector(&self, namespace: &str, name: &str) -> Option<String> {
+    pub(crate) fn deployment_of(&self, namespace: &str, name: &str) -> Option<&DeploymentSummary> {
         let on_screen = self
             .kind_list(ResourceKind::Deployments)
             .and_then(|kind_list| kind_list.list.ready_items())
@@ -3055,10 +3055,16 @@ impl LiveCluster {
             KindObject::Deployment(deployment)
                 if deployment.namespace == namespace && deployment.name == name =>
             {
-                Some(deployment.selector.join(","))
+                Some(deployment)
             }
             _ => None,
         })
+    }
+
+    /// The selector of a Deployment as this session lists it, `key=value` terms joined by `,` (the
+    /// syntax of a label selector query).
+    pub(crate) fn deployment_selector(&self, namespace: &str, name: &str) -> Option<String> {
+        Some(self.deployment_of(namespace, name)?.selector.join(","))
     }
 
     fn start(

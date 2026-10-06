@@ -31,6 +31,8 @@ pub(crate) fn deployment(name: &str) -> DeploymentSummary {
         max_unavailable: None,
         progress_deadline_seconds: 600,
         is_paused: false,
+        generation: 1,
+        observed_generation: 1,
         revision: Some("7".to_owned()),
         selector: vec!["app=api".to_owned()],
         containers: Vec::new(),

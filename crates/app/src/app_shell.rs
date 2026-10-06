@@ -179,6 +179,8 @@ mod port_forward_page;
 mod resource_edit_flow;
 #[path = "revision_change_flow.rs"]
 mod revision_change_flow;
+#[path = "rollout_watch.rs"]
+mod rollout_watch;
 #[path = "shell_open.rs"]
 pub(crate) mod shell_open;
 #[path = "values_edit_flow.rs"]

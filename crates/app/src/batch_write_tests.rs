@@ -522,3 +522,41 @@ fn nothing_is_retried_when_nothing_failed_or_the_plan_is_ordered() {
     let ordered = ordered_batch();
     assert!(ordered.retry_batch(&[failed(), failed()]).is_none());
 }
+
+#[test]
+fn a_restart_batch_says_requested_and_only_the_sent_deployments_are_watched() {
+    let mut batch = plain_batch(3);
+    batch.action = ResourceAction::RestartRollout(ObjectKind::Deployment);
+    batch.verb = "Restart".into();
+    assert!(batch.is_restart());
+    let results = [ItemProgress::Done, failed(), ItemProgress::Done];
+    assert_eq!(
+        batch.notice(&[ItemProgress::Done, ItemProgress::Done, ItemProgress::Done]),
+        "Restart: 3 requested"
+    );
+    assert_eq!(
+        batch.watched_rollouts(&results),
+        [
+            ("team-a".to_owned(), "api-0".to_owned()),
+            ("team-a".to_owned(), "api-2".to_owned())
+        ]
+    );
+}
+
+#[test]
+fn other_batches_say_done_and_watch_nothing() {
+    let batch = plain_batch(2);
+    assert!(!batch.is_restart());
+    assert!(
+        batch
+            .watched_rollouts(&vec![ItemProgress::Done; 2])
+            .is_empty()
+    );
+    let mut stateful = plain_batch(2);
+    stateful.action = ResourceAction::RestartRollout(ObjectKind::StatefulSet);
+    assert!(
+        stateful
+            .watched_rollouts(&vec![ItemProgress::Done; 2])
+            .is_empty()
+    );
+}

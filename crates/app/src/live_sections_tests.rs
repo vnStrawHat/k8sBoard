@@ -149,6 +149,8 @@ fn deployment(revision: Option<&str>) -> DeploymentSummary {
         max_unavailable: None,
         progress_deadline_seconds: 600,
         is_paused: false,
+        generation: 1,
+        observed_generation: 1,
         revision: revision.map(str::to_owned),
         selector: vec!["app=api".to_owned()],
         containers: Vec::new(),

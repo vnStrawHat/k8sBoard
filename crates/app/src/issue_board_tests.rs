@@ -814,6 +814,8 @@ fn stalled_api() -> KindObject {
         max_unavailable: None,
         progress_deadline_seconds: 600,
         is_paused: false,
+        generation: 1,
+        observed_generation: 1,
         revision: None,
         selector: Vec::new(),
         containers: Vec::new(),

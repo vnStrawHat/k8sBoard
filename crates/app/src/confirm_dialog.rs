@@ -830,6 +830,7 @@ impl ConfirmDialog {
                 // A lone object's refusal is read in the dry-run line under the list, not cut here.
                 let state_text = match progress {
                     ItemProgress::Rejected(_) if is_single => "failed".to_owned(),
+                    ItemProgress::Done if batch.is_restart() => "requested".to_owned(),
                     other => other.text(),
                 };
                 let is_loose = loose.contains(&item.object);

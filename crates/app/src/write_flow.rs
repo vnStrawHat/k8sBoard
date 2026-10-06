@@ -25,6 +25,7 @@ use gpui_kit::{
 
 use super::AppShell;
 use super::certificate_renewal::renewal_notice;
+use super::rollout_watch::{RolloutToast, rollout_toast_id};
 use super::values_edit_flow::{env_consumers_after, notify_with_restart, values_success_notice};
 use crate::audit_log::{
     AuditEntry, AuditField, AuditObject, AuditOutcome, AuditReceipt, append_audit, audit_entry,
@@ -623,11 +624,29 @@ fn success_notice(label: &str, created: Option<&str>, action: ResourceAction) ->
         let rest = label.strip_prefix(verb)?.strip_prefix(' ')?;
         Some(format!("{past} {rest}"))
     });
-    match (past, starts_rollout(action)) {
+    match (past, watches_rollout(action)) {
         (Some(past), true) => format!("{past}. Watching rollout…"),
         (Some(past), false) => format!("{past}."),
         (None, _) => format!("{label}: done"),
     }
+}
+
+/// Whether the app follows the rollout of the action to its end (`rollout_watch`): only a
+/// Deployment reports the status it needs.
+pub(crate) fn watches_rollout(action: ResourceAction) -> bool {
+    matches!(
+        action,
+        ResourceAction::RestartRollout(ObjectKind::Deployment) | ResourceAction::RollBack
+    )
+}
+
+/// The Deployment (`namespace`, `name`) whose rollout the app follows after this action.
+fn watched_workload(intent: &WriteIntent) -> Option<(String, String)> {
+    if !watches_rollout(intent.action) {
+        return None;
+    }
+    let target = intent.request.target();
+    Some((target.namespace()?.to_owned(), target.name().to_owned()))
 }
 
 /// Whether the action starts a rollout the drawer can show progress for.
@@ -1138,6 +1157,9 @@ impl AppShell {
                     shell.edit_commit_finished(&intent, &result, cx)
                 });
             }
+            if intent.action == ResourceAction::RollBack && result.is_ok() {
+                let _ = shell.update(cx, |shell, cx| shell.roll_back_finished(&intent, cx));
+            }
             if matches!(intent.action, ResourceAction::EditValues(_)) {
                 let _ = shell.update(cx, |shell, cx| {
                     shell.values_commit_finished(&intent, &result, cx)
@@ -1219,7 +1241,19 @@ fn finish_commit(
             }
         });
         match rollout_subject(intent).filter(|_| result.is_ok()) {
-            Some(subject) => notify_with_view(window, cx, notice, shell, subject),
+            Some(subject) => {
+                let workload = watched_workload(intent);
+                let toast = workload
+                    .as_ref()
+                    .map(|workload| rollout_toast_id(std::slice::from_ref(workload)));
+                notify_with_view(window, cx, notice, shell, subject, toast);
+                if let Some(workload) = workload {
+                    let (cluster, handle) = (intent.cluster.clone(), window.window_handle());
+                    let _ = shell.update(cx, |shell, cx| {
+                        shell.watch_rollouts(cluster, vec![workload], handle, cx);
+                    });
+                }
+            }
             None => {
                 let consumers = env_consumers_after(shell, intent, result.is_ok(), cx);
                 if consumers.is_empty() {
@@ -1236,13 +1270,15 @@ pub(super) fn notify(window: &mut Window, cx: &mut App, text: String) {
     notify_with(window, cx, text, false);
 }
 
-/// A success notice with a View button that reveals `subject` (recorded for Back).
+/// A success notice with a View button that reveals `subject` (recorded for Back). `toast` is the
+/// id the end of the rollout watch replaces the notice under.
 fn notify_with_view(
     window: &mut Window,
     cx: &mut App,
     text: String,
     shell: &WeakEntity<AppShell>,
     subject: ClusterObject,
+    toast: Option<SharedString>,
 ) {
     let shell = shell.clone();
     let notification = Notification::success(text).action(move |_, _, cx| {
@@ -1257,6 +1293,10 @@ fn notify_with_view(
                 let _ = shell.update(cx, |shell, cx| shell.reveal_object(subject, cx));
             }))
     });
+    let notification = match toast {
+        Some(id) => notification.id1::<RolloutToast>(id),
+        None => notification,
+    };
     window.push_notification(notification, cx);
 }
 

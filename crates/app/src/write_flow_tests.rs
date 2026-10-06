@@ -667,3 +667,31 @@ fn a_create_notice_names_the_kind_and_where_it_is() {
         "Created Namespace team-a"
     );
 }
+
+#[test]
+fn only_a_deployment_restart_and_a_roll_back_are_followed_to_their_end() {
+    assert!(watches_rollout(ResourceAction::RestartRollout(
+        ObjectKind::Deployment
+    )));
+    assert!(watches_rollout(ResourceAction::RollBack));
+    assert!(!watches_rollout(ResourceAction::RestartRollout(
+        ObjectKind::StatefulSet
+    )));
+    assert!(!watches_rollout(ResourceAction::Cordon));
+    assert_eq!(
+        success_notice(
+            "Restart rollout of statefulset db",
+            None,
+            ResourceAction::RestartRollout(ObjectKind::StatefulSet)
+        ),
+        "Restarted rollout of statefulset db."
+    );
+    assert_eq!(
+        success_notice(
+            "Restart rollout of deployment web",
+            None,
+            ResourceAction::RestartRollout(ObjectKind::Deployment)
+        ),
+        "Restarted rollout of deployment web. Watching rollout…"
+    );
+}

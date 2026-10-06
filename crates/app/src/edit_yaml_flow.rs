@@ -516,6 +516,22 @@ impl AppShell {
         }
     }
 
+    /// A Roll back went through. The Edit YAML view of that Deployment (its Revision history tab
+    /// offers the button) holds the old text, resourceVersion and current revision, so it closes.
+    /// An editor with unsaved text stays: closing it would drop what the user typed.
+    pub(super) fn roll_back_finished(&mut self, intent: &WriteIntent, cx: &mut Context<Self>) {
+        let Some(OpenEdit::Yaml(edit)) = &self.edit else {
+            return;
+        };
+        let view = edit.read(cx);
+        let is_stale_copy = view.cluster() == &intent.cluster
+            && view.object() == intent.request.target()
+            && !view.is_dirty();
+        if is_stale_copy {
+            self.close_edit(cx);
+        }
+    }
+
     /// A commit of the New view finished (spec 0042): success closes the view and shows the kind's
     /// screen, where the watch adds the new row (no cursor move, decision 11); a failure is shown
     /// in the view. The success notice comes from the write flow's own arm, so nothing is pushed

@@ -224,3 +224,22 @@ fn template_writer_is_none_without_managed_fields() {
         None
     );
 }
+
+#[test]
+fn deployment_summary_reads_generation_and_observed_generation() {
+    let deployment = Deployment {
+        metadata: ObjectMeta {
+            generation: Some(7),
+            ..Default::default()
+        },
+        status: Some(DeploymentStatus {
+            observed_generation: Some(6),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let summary = deployment_summary(&deployment);
+    assert_eq!((summary.generation, summary.observed_generation), (7, 6));
+    let empty = deployment_summary(&Deployment::default());
+    assert_eq!((empty.generation, empty.observed_generation), (0, 0));
+}

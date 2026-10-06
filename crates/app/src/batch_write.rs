@@ -19,6 +19,7 @@ use gpui_kit::{AnyWindowHandle, App, AppContext as _, Context, SharedString, Wea
 use super::object_delete::{
     DeleteExtras, Removal, delete_commit_progress, delete_notice, with_targets,
 };
+use super::rollout_watch::{notify_rollout, rollout_toast_id};
 use super::write_flow::{
     CheckedWriteError, CommitMode, Confirmed, DryRunState, WriteIntent, WriteStep, checked_write,
     notify, notify_unavailable, notify_with, write_error_text,
@@ -226,6 +227,38 @@ impl BatchIntent {
         matches!(self.plan.extras, BatchExtras::Delete(_))
     }
 
+    /// A restart only asks for a rollout: the patch going through says nothing about the pods.
+    pub(crate) fn is_restart(&self) -> bool {
+        matches!(self.action, ResourceAction::RestartRollout(_))
+    }
+
+    /// What the settled items of a restart batch read in the dialog and in the notice.
+    fn settled_word(&self) -> &'static str {
+        if self.is_restart() {
+            "requested"
+        } else {
+            "done"
+        }
+    }
+
+    /// The Deployments (`namespace`, `name`) of the items that went through, when the batch is one
+    /// whose rollouts the app follows to their end.
+    fn watched_rollouts(&self, results: &[ItemProgress]) -> Vec<(String, String)> {
+        if self.action != ResourceAction::RestartRollout(ObjectKind::Deployment) {
+            return Vec::new();
+        }
+        self.plan
+            .items
+            .iter()
+            .zip(results)
+            .filter(|(_, state)| matches!(state, ItemProgress::Done))
+            .filter_map(|(item, _)| {
+                let target = item.request.target();
+                Some((target.namespace()?.to_owned(), target.name().to_owned()))
+            })
+            .collect()
+    }
+
     /// What one commit's result means for its item.
     fn commit_progress(
         &self,
@@ -254,7 +287,7 @@ impl BatchIntent {
         } else if let Some(text) = self.stop_notice(results) {
             return text;
         } else {
-            batch_notice(&self.verb, results)
+            batch_notice_worded(&self.verb, results, self.settled_word())
         };
         match not_done_names(&self.plan.items, results) {
             Some(names) if results.len() > 1 => format!("{text}. Not done: {names}"),
@@ -483,6 +516,11 @@ pub(crate) fn stop_notice(label: &str, results: &[ItemProgress]) -> Option<Strin
 /// The notice after the last commit: `Restart: 4 done`, or the counts that did not go through with
 /// the first reason.
 pub(crate) fn batch_notice(verb: &str, results: &[ItemProgress]) -> String {
+    batch_notice_worded(verb, results, "done")
+}
+
+/// `batch_notice` with the word for the items that went through: a restart says `requested`.
+fn batch_notice_worded(verb: &str, results: &[ItemProgress], settled: &str) -> String {
     let count = |wanted: fn(&ItemProgress) -> bool| results.iter().filter(|r| wanted(r)).count();
     let done = count(|state| matches!(state, ItemProgress::Done));
     let failed = count(|state| matches!(state, ItemProgress::Failed(_)));
@@ -492,7 +530,7 @@ pub(crate) fn batch_notice(verb: &str, results: &[ItemProgress]) -> String {
         ItemProgress::Failed(reason) | ItemProgress::NotSent(reason) => Some(reason.clone()),
         _ => None,
     });
-    let mut parts = vec![format!("{done} done")];
+    let mut parts = vec![format!("{done} {settled}")];
     if failed > 0 {
         parts.push(format!("{failed} failed"));
     }
@@ -691,6 +729,7 @@ impl AppShell {
             let is_kept = batch.plan.on_failure == BatchFailure::Continue
                 && !results.iter().all(ItemProgress::is_settled);
             let outcome = is_kept.then(|| (notice.clone(), batch.retry_batch(&results)));
+            let watched = batch.watched_rollouts(&results);
             let _ = cx.update_window(handle, |_, window, cx| {
                 // Only our own dialog is touched, and only while it is open. A clean run closes
                 // it; anything else keeps it as the per-object result, with Close and Retry.
@@ -706,6 +745,15 @@ impl AppShell {
                 match retry {
                     Some((subject, action)) => {
                         notify_with_retry(window, cx, notice, shell, subject, action);
+                    }
+                    // The patches going through is not the end: the toast follows the rollouts.
+                    None if !watched.is_empty() => {
+                        let id = rollout_toast_id(&watched);
+                        let text = format!("{notice} · watching…");
+                        notify_rollout(window, cx, text, is_success, id);
+                        let _ = shell.update(cx, |shell, cx| {
+                            shell.watch_rollouts(cluster, watched, handle, cx);
+                        });
                     }
                     None => notify_with(window, cx, notice, is_success),
                 }

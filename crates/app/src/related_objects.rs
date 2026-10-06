@@ -134,6 +134,8 @@ mod tests {
             max_unavailable: None,
             progress_deadline_seconds: 600,
             is_paused: false,
+            generation: 1,
+            observed_generation: 1,
             revision: Some("7".to_owned()),
             selector: selector.iter().map(|term| (*term).to_owned()).collect(),
             containers: Vec::new(),

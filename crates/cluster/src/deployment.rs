@@ -41,6 +41,11 @@ pub struct DeploymentSummary {
     /// `spec.progressDeadlineSeconds`.
     pub progress_deadline_seconds: u32,
     pub is_paused: bool,
+    /// `metadata.generation`: it grows with every change of the spec, a rollout's start included.
+    pub generation: i64,
+    /// `status.observedGeneration`: equals `generation` once the controller has seen the latest
+    /// change.
+    pub observed_generation: i64,
     /// The `deployment.kubernetes.io/revision` annotation.
     pub revision: Option<String>,
     pub selector: Vec<String>,
@@ -93,6 +98,10 @@ pub(crate) fn deployment_summary(deployment: &Deployment) -> DeploymentSummary {
             .and_then(|update| update.max_unavailable.as_ref())
             .map(int_or_string_text),
         is_paused: spec.and_then(|spec| spec.paused) == Some(true),
+        generation: deployment.metadata.generation.unwrap_or_default(),
+        observed_generation: status
+            .and_then(|status| status.observed_generation)
+            .unwrap_or_default(),
         progress_deadline_seconds: spec
             .and_then(|spec| spec.progress_deadline_seconds)
             .map_or(DEFAULT_PROGRESS_DEADLINE_SECONDS, non_negative),

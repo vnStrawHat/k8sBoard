@@ -23,6 +23,8 @@ fn deployment() -> DeploymentSummary {
         max_unavailable: Some("25%".to_owned()),
         progress_deadline_seconds: 600,
         is_paused: false,
+        generation: 1,
+        observed_generation: 1,
         revision: Some("7".to_owned()),
         selector: vec!["app=api".to_owned()],
         containers: vec![TemplateContainer {

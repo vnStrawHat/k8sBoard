@@ -125,6 +125,8 @@ fn deployment(containers: Vec<TemplateContainer>) -> DeploymentSummary {
         max_unavailable: None,
         progress_deadline_seconds: 600,
         is_paused: false,
+        generation: 1,
+        observed_generation: 1,
         revision: None,
         selector: vec!["app=web".to_owned()],
         containers,
