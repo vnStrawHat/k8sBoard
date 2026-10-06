@@ -101,6 +101,19 @@ pub(crate) enum BatchExtras {
     /// Set default storage class (0032b): which class becomes the default, and the text of the state
     /// a partial run leaves behind.
     DefaultClass(DefaultClassExtras),
+    /// Bulk Edit labels (0040): the confirm button and the notice name the keys and the node count.
+    Labels(LabelExtras),
+}
+
+/// The words of a bulk label edit that the generic `Edit labels 2` and `Edit labels: 2 done` would
+/// leave unsaid.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct LabelExtras {
+    /// `Apply to 2 nodes`.
+    pub(crate) confirm: SharedString,
+    /// `Set lab-batch on 2 nodes`, or `Removed lab-batch from 2 nodes`, for a batch that went
+    /// through whole.
+    pub(crate) done: SharedString,
 }
 
 /// What a popover asked for before a bulk batch can be built.
@@ -218,6 +231,7 @@ impl BatchIntent {
             (BatchExtras::Delete(_), _) => {
                 format!("{} {} of {total}", self.verb, total.saturating_sub(gone))
             }
+            (BatchExtras::Labels(extras), _) => extras.confirm.to_string(),
             (BatchExtras::None | BatchExtras::DefaultClass(_), _) => {
                 format!("{} {total}", self.verb)
             }
@@ -287,6 +301,12 @@ impl BatchIntent {
             delete_notice(self, results)
         } else if let Some(text) = self.stop_notice(results) {
             return text;
+        } else if let BatchExtras::Labels(extras) = &self.plan.extras
+            && results
+                .iter()
+                .all(|state| matches!(state, ItemProgress::Done))
+        {
+            extras.done.to_string()
         } else {
             batch_notice_worded(&self.verb, results, self.settled_word())
         };
@@ -322,7 +342,8 @@ impl BatchIntent {
                 with_targets(self, &objects, jiff::Timestamp::now())
             }
             BatchExtras::DefaultClass(_) => None,
-            BatchExtras::None => Some(BatchIntent {
+            // The retried part is a smaller batch: the words of the whole one would miscount it.
+            BatchExtras::None | BatchExtras::Labels(_) => Some(BatchIntent {
                 cluster: self.cluster.clone(),
                 cluster_name: self.cluster_name.clone(),
                 action: self.action,
@@ -334,6 +355,7 @@ impl BatchIntent {
                 plan: BatchPlan {
                     items,
                     skipped: Vec::new(),
+                    extras: BatchExtras::None,
                     ..self.plan.clone()
                 },
             }),
@@ -361,7 +383,7 @@ impl BatchIntent {
         self.stop_notice(results)?;
         match &self.plan.extras {
             BatchExtras::DefaultClass(extras) => Some(extras.subject(&self.cluster)),
-            BatchExtras::Delete(_) | BatchExtras::None => None,
+            BatchExtras::Delete(_) | BatchExtras::Labels(_) | BatchExtras::None => None,
         }
     }
 

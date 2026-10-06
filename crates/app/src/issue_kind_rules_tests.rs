@@ -75,6 +75,7 @@ fn daemon_set(desired: u32, current: u32, misscheduled: u32) -> DaemonSetSummary
         available: current,
         misscheduled,
         node_selector: Vec::new(),
+        node_affinity_keys: Vec::new(),
         update_strategy: String::new(),
         selector: Vec::new(),
         containers: Vec::new(),

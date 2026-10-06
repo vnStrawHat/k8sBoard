@@ -142,7 +142,15 @@ pub(crate) fn kind_drawer(
         }
     };
     let tab_bar = drawer_tab_bar(tab_titles(tabs, 0, events), shown, cx);
-    drawer_frame(header, tab_bar, body, state.width(DrawerSize::Standard), cx).into_any_element()
+    drawer_frame(
+        header,
+        tab_bar,
+        body,
+        state.width(DrawerSize::Standard),
+        &state.scroll,
+        cx,
+    )
+    .into_any_element()
 }
 
 /// The event title for events, else the object name.

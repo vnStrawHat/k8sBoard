@@ -17,7 +17,7 @@ use super::object_delete::Removal;
 use super::resource_edit_flow::RowCheck;
 use super::{AppShell, Screen, focus_table};
 use crate::dock::{DockMode, TabStep};
-use crate::drawer::{DrawerTab, drawer_tabs};
+use crate::drawer::{DrawerScroll, DrawerTab, drawer_tabs};
 use crate::keymap::{
     Attach, CloseDockTab, CopyName, Cordon, Delete, Dismiss, Drain, EditHpaRange, EditLabels,
     EditTaints, EditValues, EditYaml, EvictPod, ExpandClaim, ExtendTickDown, ExtendTickUp, GoBack,
@@ -58,6 +58,17 @@ pub(crate) enum RowStep {
     Last,
     NextPage,
     PreviousPage,
+}
+
+/// The scroll of a drawer body that a page key means, when the drawer has the keyboard.
+fn drawer_scroll_of(step: RowStep) -> Option<DrawerScroll> {
+    match step {
+        RowStep::First => Some(DrawerScroll::Top),
+        RowStep::Last => Some(DrawerScroll::Bottom),
+        RowStep::NextPage => Some(DrawerScroll::PageDown),
+        RowStep::PreviousPage => Some(DrawerScroll::PageUp),
+        RowStep::Next | RowStep::Previous => None,
+    }
 }
 
 /// The row the cursor moves to. `Next` and `Previous` wrap, like the kit table's own arrow keys
@@ -295,6 +306,15 @@ impl AppShell {
         if self.is_editing() {
             return;
         }
+        // A drawer that has the keyboard takes the page keys: its body is what the user is reading.
+        if self.drawer.is_open
+            && self.is_drawer_keyed
+            && let Some(scroll) = drawer_scroll_of(step)
+        {
+            self.drawer.scroll_body(scroll);
+            cx.notify();
+            return;
+        }
         match self.screen {
             Screen::Overview | Screen::Topology | Screen::PortForwarding => {}
             Screen::Pods => {
@@ -453,14 +473,24 @@ impl AppShell {
     ) {
         if self.selected.is_some() {
             self.set_drawer_open(true, cx);
+            self.is_drawer_keyed = self.drawer.is_open;
             focus_table(table, window, cx);
             return;
         }
         if table.read(cx).delegate().rows_count(cx) == 0 {
             return;
         }
+        self.opens_drawer_keyed = true;
         // No echo mark: the first row is selected as a click would, which opens the drawer.
         table.update(cx, |table, cx| table.set_selected_row(0, cx));
+    }
+
+    /// A left press in the open drawer: PageUp, PageDown, Home, and End scroll it from now on.
+    pub(super) fn give_drawer_the_keys(&mut self, cx: &mut Context<Self>) {
+        if self.drawer.is_open && !self.is_drawer_keyed {
+            self.is_drawer_keyed = true;
+            cx.notify();
+        }
     }
 
     /// Esc: undoes one step of the ladder.

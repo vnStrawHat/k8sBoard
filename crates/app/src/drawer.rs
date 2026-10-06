@@ -153,6 +153,40 @@ impl DrawerState {
     pub(crate) fn width(&self, size: DrawerSize) -> Pixels {
         drawer_width(size, self.workspace_width.get())
     }
+
+    /// Moves the body of the open drawer by a key: a page, or to the top or bottom.
+    pub(crate) fn scroll_body(&self, step: DrawerScroll) {
+        let offset = self.scroll.offset();
+        let y = scrolled_offset(
+            f32::from(offset.y),
+            f32::from(self.scroll.bounds().size.height),
+            f32::from(self.scroll.max_offset().y),
+            step,
+        );
+        self.scroll.set_offset(gpui_kit::point(offset.x, px(y)));
+    }
+}
+
+/// How a key moves the body of an open drawer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum DrawerScroll {
+    PageUp,
+    PageDown,
+    Top,
+    Bottom,
+}
+
+/// The scroll offset after `step`. An offset is 0 at the top and falls to `-max` at the bottom; a
+/// page is 90 % of the viewport, so the last line of the page before stays in view.
+pub(crate) fn scrolled_offset(offset: f32, viewport: f32, max: f32, step: DrawerScroll) -> f32 {
+    let max = max.max(0.);
+    let wanted = match step {
+        DrawerScroll::PageUp => offset + viewport * 0.9,
+        DrawerScroll::PageDown => offset - viewport * 0.9,
+        DrawerScroll::Top => 0.,
+        DrawerScroll::Bottom => -max,
+    };
+    wanted.clamp(-max, 0.)
 }
 
 /// What the Monitor tab shows: the range, which part of the subject, the Table view toggle, and
@@ -458,7 +492,12 @@ pub(crate) struct DrawerNavigation {
     pub(crate) back: Option<BackTarget>,
     /// `None` hides Previous / Next.
     pub(crate) rows: Option<RowControls>,
+    /// Runs on a left press anywhere in the drawer: the page keys then move the drawer, not the table.
+    pub(crate) on_press: Option<PressHandler>,
 }
+
+/// A left press in the drawer.
+pub(crate) type PressHandler = Rc<dyn Fn(&mut Window, &mut App)>;
 
 /// The Back button: the place it leads to, named.
 pub(crate) struct BackTarget {
@@ -510,9 +549,11 @@ pub(crate) fn drawer_frame(
     tabs: Option<AnyElement>,
     body: DrawerBody,
     width: Pixels,
+    scroll: &ScrollHandle,
     cx: &App,
 ) -> impl IntoElement {
     let theme = cx.theme();
+    let on_press = header.navigation.on_press.clone();
     v_flex()
         .key_context("Drawer")
         .absolute()
@@ -520,6 +561,11 @@ pub(crate) fn drawer_frame(
         .right_0()
         .bottom_0()
         .w(width)
+        .on_mouse_down(gpui_kit::MouseButton::Left, move |_, window, cx| {
+            if let Some(on_press) = &on_press {
+                on_press(window, cx);
+            }
+        })
         .bg(theme.background)
         .border_l_1()
         .border_color(theme.border)
@@ -536,6 +582,7 @@ pub(crate) fn drawer_frame(
                 .flex_1()
                 .min_h_0()
                 .overflow_y_scroll()
+                .track_scroll(scroll)
                 .child(div().p_4().child(body))
                 .into_any_element(),
             DrawerBody::Filling(body) => div()
@@ -564,7 +611,7 @@ pub(crate) fn drawer_frame(
 fn header_row(header: DrawerHeader, cx: &App) -> impl IntoElement {
     let theme = cx.theme();
     let on_close = header.on_close;
-    let DrawerNavigation { back, rows } = header.navigation;
+    let DrawerNavigation { back, rows, .. } = header.navigation;
     v_flex()
         .flex_shrink_0()
         .gap_1()
@@ -1199,6 +1246,38 @@ mod tests {
             assert_eq!(drawer_width(size, px(400.)), px(400.));
             assert_eq!(drawer_width(size, px(0.)), px(0.));
             assert_eq!(drawer_width(size, px(-50.)), px(0.));
+        }
+    }
+
+    #[test]
+    fn a_page_key_moves_the_drawer_by_nine_tenths_of_its_view_and_stops_at_the_ends() {
+        let (viewport, max) = (500., 1200.);
+        let down = scrolled_offset(0., viewport, max, DrawerScroll::PageDown);
+        assert_eq!(down, -450.);
+        assert_eq!(
+            scrolled_offset(down, viewport, max, DrawerScroll::PageUp),
+            0.
+        );
+        assert_eq!(
+            scrolled_offset(-1100., viewport, max, DrawerScroll::PageDown),
+            -1200.
+        );
+        assert_eq!(scrolled_offset(0., viewport, max, DrawerScroll::PageUp), 0.);
+        assert_eq!(scrolled_offset(-300., viewport, max, DrawerScroll::Top), 0.);
+        assert_eq!(
+            scrolled_offset(-300., viewport, max, DrawerScroll::Bottom),
+            -1200.
+        );
+    }
+
+    #[test]
+    fn a_drawer_that_fits_its_view_does_not_scroll() {
+        for step in [
+            DrawerScroll::PageDown,
+            DrawerScroll::Bottom,
+            DrawerScroll::PageUp,
+        ] {
+            assert_eq!(scrolled_offset(0., 500., 0., step), 0.);
         }
     }
 }

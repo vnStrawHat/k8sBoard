@@ -384,7 +384,10 @@ pub(crate) fn pods_without_controller(batch: &BatchIntent) -> Vec<SharedString> 
         {
             loose_pods(&extras.targets)
         }
-        BatchExtras::Delete(_) | BatchExtras::None | BatchExtras::DefaultClass(_) => Vec::new(),
+        BatchExtras::Delete(_)
+        | BatchExtras::None
+        | BatchExtras::DefaultClass(_)
+        | BatchExtras::Labels(_) => Vec::new(),
     }
 }
 
@@ -634,7 +637,9 @@ pub(crate) fn delete_commit_progress(
 pub(crate) fn delete_notice(batch: &BatchIntent, results: &[ItemProgress]) -> String {
     let removal = match &batch.plan.extras {
         BatchExtras::Delete(extras) => extras.removal,
-        BatchExtras::None | BatchExtras::DefaultClass(_) => Removal::Delete,
+        BatchExtras::None | BatchExtras::DefaultClass(_) | BatchExtras::Labels(_) => {
+            Removal::Delete
+        }
     };
     match (batch.plan.items.as_slice(), results) {
         ([item], [progress]) => single_notice(item, progress, removal),

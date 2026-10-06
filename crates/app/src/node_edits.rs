@@ -6,13 +6,13 @@
 use std::collections::{BTreeMap, HashSet};
 
 use cluster::{
-    LabelChange, NodeEdit, NodeScheduling, NodeTaint, ObjectKind, ObjectRef, WriteOperation,
-    WriteRequest,
+    DaemonSetSummary, LabelChange, NodeEdit, NodeScheduling, NodeTaint, ObjectKind, ObjectRef,
+    WriteOperation, WriteRequest,
 };
 use gpui_kit::SharedString;
 
 use crate::app_shell::batch_write::{
-    BatchExtras, BatchFailure, BatchIntent, BatchItem, BatchPlan, SkippedItem,
+    BatchExtras, BatchFailure, BatchIntent, BatchItem, BatchPlan, LabelExtras, SkippedItem,
 };
 use crate::app_shell::write_flow::WriteIntent;
 use crate::cluster_registry::ClusterRef;
@@ -34,8 +34,8 @@ const NO_EXECUTE: &str = "NoExecute";
 pub(crate) const NO_EXECUTE_WARNING: &str = "NoExecute evicts pods that do not tolerate it";
 const NO_CHANGES: &str = "No changes";
 const INVALID_LABEL: &str = "A key or value is not valid for Kubernetes (letters, digits, - _ .)";
-/// What a bulk label edit adds to its confirm when it removes a key: node labels drive where
-/// DaemonSets place their pods.
+/// What a bulk label edit adds to its confirm when it removes a key and the DaemonSets of the
+/// cluster are not known: node labels drive where DaemonSets place their pods.
 const REMOVED_LABEL_WARNING: &str =
     "Removing a label can make DaemonSets that select nodes by it delete their pods on these nodes";
 
@@ -616,13 +616,107 @@ impl TickedNode {
     }
 }
 
+/// The words of the confirm button and of the notice of a bulk label edit over `count` nodes.
+fn label_extras(changes: &[LabelChange], count: usize) -> LabelExtras {
+    let noun = if count == 1 { "node" } else { "nodes" };
+    let keys = |is_removal: bool| {
+        changes
+            .iter()
+            .filter(|change| change.value.is_none() == is_removal)
+            .map(|change| change.key.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let (set, removed) = (keys(false), keys(true));
+    let mut done = Vec::new();
+    if !set.is_empty() {
+        done.push(format!("Set {set} on {count} {noun}"));
+    }
+    if !removed.is_empty() {
+        done.push(format!("Removed {removed} from {count} {noun}"));
+    }
+    LabelExtras {
+        confirm: format!("Apply to {count} {noun}").into(),
+        done: done.join(". ").into(),
+    }
+}
+
+/// How many DaemonSet names a warning line spells out before it counts the rest.
+const DAEMON_SETS_NAMED: usize = 3;
+
+/// The warnings of a bulk label edit. A DaemonSet loses its pods on a node that stops matching its
+/// `nodeSelector` or required node affinity, so a key earns a line only when some DaemonSet selects
+/// by it and a change takes it from a node (a removal, or a new value over an old one); a key that
+/// is only added to nodes lacking it deletes nothing. Without the DaemonSets (`None`), a removal
+/// gets the generic line.
+fn daemon_set_warnings(
+    nodes: &[TickedNode],
+    changes: &[LabelChange],
+    daemon_sets: Option<&[&DaemonSetSummary]>,
+) -> Vec<SharedString> {
+    let Some(daemon_sets) = daemon_sets else {
+        return changes
+            .iter()
+            .any(|change| change.value.is_none())
+            .then(|| SharedString::from(REMOVED_LABEL_WARNING))
+            .into_iter()
+            .collect();
+    };
+    changes
+        .iter()
+        .filter(|change| {
+            nodes
+                .iter()
+                .any(|node| match (node.label(&change.key), &change.value) {
+                    (Some(_), None) => true,
+                    (Some(current), Some(wanted)) => current != wanted,
+                    (None, _) => false,
+                })
+        })
+        .filter_map(|change| {
+            let names: Vec<String> = daemon_sets
+                .iter()
+                .filter(|set| selects_by(set, &change.key))
+                .map(|set| format!("{}/{}", set.namespace, set.name))
+                .collect();
+            let (first, rest) = names.split_at(names.len().min(DAEMON_SETS_NAMED));
+            let mut listed = first.join(", ");
+            if !rest.is_empty() {
+                listed.push_str(&format!(" +{}", rest.len()));
+            }
+            match names.len() {
+                0 => None,
+                1 => Some(format!(
+                    "DaemonSet {listed} selects nodes by {}: its pods on these nodes are deleted",
+                    change.key
+                )),
+                _ => Some(format!(
+                    "DaemonSets {listed} select nodes by {}: their pods on these nodes are deleted",
+                    change.key
+                )),
+            }
+        })
+        .map(SharedString::from)
+        .collect()
+}
+
+/// Whether `set` places its pods by the node label `key`.
+fn selects_by(set: &DaemonSetSummary, key: &str) -> bool {
+    set.node_selector
+        .iter()
+        .any(|term| term.split_once('=').map_or(term.as_str(), |(name, _)| name) == key)
+        || set.node_affinity_keys.iter().any(|name| name == key)
+}
+
 /// Bulk Edit labels of the ticked nodes of one cluster: one 0032 batch with one item per node,
 /// each carrying only the changes that are not already true there. A node with nothing left is
-/// skipped. `Err` is why the batch cannot go (the first failing check wins).
+/// skipped. `Err` is why the batch cannot go (the first failing check wins). `daemon_sets` are the
+/// cluster's DaemonSets when they are known: only a key one of them selects by earns the warning.
 pub(crate) fn label_batch(
     scope: &NodeScope<'_>,
     nodes: &[TickedNode],
     changes: &[LabelChange],
+    daemon_sets: Option<&[&DaemonSetSummary]>,
 ) -> Result<BatchIntent, SharedString> {
     if changes.is_empty() {
         return Err(NO_CHANGES.into());
@@ -693,12 +787,8 @@ pub(crate) fn label_batch(
         1 => "Edit labels of 1 node".to_owned(),
         count => format!("Edit labels of {count} nodes"),
     };
-    let warnings = changes
-        .iter()
-        .any(|change| change.value.is_none())
-        .then(|| SharedString::from(REMOVED_LABEL_WARNING))
-        .into_iter()
-        .collect();
+    let warnings = daemon_set_warnings(nodes, &changes, daemon_sets);
+    let extras = BatchExtras::Labels(label_extras(&changes, items.len()));
     Ok(BatchIntent {
         cluster: scope.cluster.clone(),
         cluster_name: scope.cluster_name.to_owned().into(),
@@ -713,7 +803,7 @@ pub(crate) fn label_batch(
             cluster: scope.cluster.clone(),
             items,
             skipped,
-            extras: BatchExtras::None,
+            extras,
             on_failure: BatchFailure::Continue,
         },
     })

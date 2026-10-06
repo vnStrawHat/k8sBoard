@@ -1239,3 +1239,65 @@ fn the_bulk_editor_asks_before_losing_a_typed_change(cx: &mut TestAppContext) {
     );
     assert!(!t.close_top_dialog(cx));
 }
+
+// ---- L16: the page keys scroll a drawer that has the keyboard ----
+
+impl NodeTest {
+    fn node_cursor(&self, cx: &mut TestAppContext) -> Option<usize> {
+        self.t
+            .fixture
+            .shell
+            .read_with(cx, |shell, cx| shell.node_table.read(cx).selected_row())
+    }
+
+    fn is_drawer_keyed(&self, cx: &mut TestAppContext) -> bool {
+        self.t
+            .fixture
+            .shell
+            .read_with(cx, |shell, _| shell.is_drawer_keyed)
+    }
+}
+
+#[gpui_kit::test]
+fn page_keys_scroll_the_drawer_opened_with_enter_and_not_the_table(cx: &mut TestAppContext) {
+    let t = node_test("node-drawer-keys", cx);
+    three_nodes(&t, cx);
+    t.t.fixture.press("j", cx);
+    t.t.fixture.press("enter", cx);
+    t.t.fixture.draw_twice(cx);
+    assert!(
+        t.is_drawer_keyed(cx),
+        "Enter hands the keyboard to the drawer"
+    );
+    let cursor = t.node_cursor(cx);
+    assert!(cursor.is_some());
+    for key in ["pagedown", "end", "pageup", "home"] {
+        t.t.fixture.press(key, cx);
+        assert_eq!(
+            t.node_cursor(cx),
+            cursor,
+            "{key} left the table cursor alone"
+        );
+    }
+    // Closing the drawer gives the keys back to the table: End goes to the last row.
+    t.t.fixture.press("escape", cx);
+    assert!(!t.is_drawer_keyed(cx));
+    t.t.fixture.press("end", cx);
+    assert_eq!(t.node_cursor(cx), Some(2));
+}
+
+#[gpui_kit::test]
+fn page_keys_move_the_table_while_the_drawer_was_only_opened_by_a_click(cx: &mut TestAppContext) {
+    let t = node_test("node-drawer-keys-click", cx);
+    three_nodes(&t, cx);
+    t.t.fixture.shell.update(cx, |shell, cx| {
+        shell
+            .node_table
+            .update(cx, |table, cx| table.set_selected_row(0, cx));
+    });
+    cx.run_until_parked();
+    t.t.fixture.draw_twice(cx);
+    assert!(!t.is_drawer_keyed(cx));
+    t.t.fixture.press("end", cx);
+    assert_eq!(t.node_cursor(cx), Some(2));
+}

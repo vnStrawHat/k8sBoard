@@ -560,3 +560,38 @@ fn other_batches_say_done_and_watch_nothing() {
             .is_empty()
     );
 }
+
+#[test]
+fn a_bulk_label_edit_that_went_through_reads_as_what_it_did() {
+    let cluster = test_cluster();
+    let nodes: Vec<crate::node_edits::TickedNode> = ["wk-01", "wk-02"]
+        .iter()
+        .map(|name| crate::node_edits::TickedNode {
+            name: (*name).to_owned(),
+            scheduling: cluster::NodeScheduling::Enabled,
+            labels: vec!["lab-batch=1".to_owned()],
+        })
+        .collect();
+    let scope = crate::node_edits::NodeScope {
+        cluster: &cluster,
+        cluster_name: "lab",
+    };
+    let change = cluster::LabelChange {
+        key: "lab-batch".to_owned(),
+        value: None,
+    };
+    let batch = crate::node_edits::label_batch(&scope, &nodes, &[change], None).expect("a batch");
+    let done = [ItemProgress::Done, ItemProgress::Done];
+    assert_eq!(batch.notice(&done), "Removed lab-batch from 2 nodes");
+    // A failure falls back to the counts, which say what went wrong.
+    let partial = [ItemProgress::Done, ItemProgress::Failed("boom".into())];
+    assert!(
+        batch
+            .notice(&partial)
+            .starts_with("Edit labels: 1 done, 1 failed")
+    );
+    // The retry of the failed part is a smaller batch with the plain words.
+    let retry = batch.retry_batch(&partial).expect("a retry");
+    assert!(matches!(retry.plan.extras, BatchExtras::None));
+    assert_eq!(retry.confirm_label(0), "Edit labels 1");
+}

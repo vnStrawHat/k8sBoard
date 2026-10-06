@@ -979,7 +979,10 @@ impl ConfirmDialog {
                         .child(format!("already gone: {}", names.join(", "))),
                 )
             }
-            BatchExtras::Delete(_) | BatchExtras::None | BatchExtras::DefaultClass(_) => None,
+            BatchExtras::Delete(_)
+            | BatchExtras::None
+            | BatchExtras::DefaultClass(_)
+            | BatchExtras::Labels(_) => None,
         };
         let list = v_flex()
             .id("batch-items")

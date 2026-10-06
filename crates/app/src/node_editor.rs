@@ -6,7 +6,10 @@
 //! A child of `app_shell`, like `node_shell_open`: every step names the cluster of the node and
 //! takes its guard, connection, and tier from that cluster's own slot, never from the primary.
 
-use cluster::{ClusterConnection, ClusterError, LabelChange, NodeEdit, NodeTaint};
+use cluster::{
+    ClusterConnection, ClusterError, DaemonSetSummary, LabelChange, NamespaceScope, NodeEdit,
+    NodeTaint,
+};
 use gpui_kit::assets::IconName;
 use gpui_kit::component::WindowExt as _;
 use gpui_kit::component::button::{Button, ButtonVariant, ButtonVariants as _};
@@ -29,8 +32,10 @@ use super::batch_write::{BATCH_RUNNING_REASON, MAX_BATCH_ITEMS};
 use super::write_flow::{WriteIntent, notify};
 use crate::cluster_registry::ClusterRef;
 use crate::cluster_runtime::ClusterRuntime;
+use crate::cluster_session::LiveCluster;
 use crate::fresh_enter::{confirms, is_enter};
 use crate::keymap::FORWARD_FORM;
+use crate::kind_row::KindObject;
 use crate::node_edits::{
     CordonMode, KEY_HINT, LabelRow, NO_EXECUTE_WARNING, NodeScope, RowField, RowProblem, TaintRow,
     TickedNode, conflict_notice, cordon_batch, is_empty_key_problem, label_batch, label_intent,
@@ -41,6 +46,7 @@ use crate::resource_actions::{
     ActionAvailability, NOT_SHIPPED_REASON, ResourceAction, action_availability, action_label,
     unavailable_text,
 };
+use crate::resource_kind::ResourceKind;
 use crate::row_selection::{BulkButton, BulkState, bulk_actions};
 use crate::table_selection::{ClusterObject, ResourceKey};
 
@@ -1307,7 +1313,7 @@ impl BulkLabelEditor {
             cluster: &cluster,
             cluster_name: guard.display_name(),
         };
-        label_batch(&scope, &nodes, &changes).err()
+        label_batch(&scope, &nodes, &changes, None).err()
     }
 
     /// Review…: closes the editor and starts the guarded batch over the nodes ticked now, whose
@@ -1541,8 +1547,29 @@ impl AppShell {
             cluster: &found,
             cluster_name: guard.display_name(),
         };
-        label_batch(&scope, &nodes, changes)
+        let live = self.live_of(&found, cx);
+        let daemon_sets = live.and_then(known_daemon_sets);
+        label_batch(&scope, &nodes, changes, daemon_sets.as_deref())
     }
+}
+
+/// The DaemonSets of the cluster, when its feed has loaded them all: a feed of one or two
+/// namespaces lists only theirs, and a DaemonSet it does not list may still select by a label.
+fn known_daemon_sets(live: &LiveCluster) -> Option<Vec<&DaemonSetSummary>> {
+    if live.scope.namespaces().len() <= 2 && !matches!(live.scope, NamespaceScope::All) {
+        return None;
+    }
+    let feed = live.issue_feeds.condition(ResourceKind::DaemonSets)?;
+    Some(
+        feed.list
+            .ready_items()?
+            .iter()
+            .filter_map(|object| match object {
+                KindObject::DaemonSet(set) => Some(set),
+                _ => None,
+            })
+            .collect(),
+    )
 }
 
 /// `--screen node-taints-editor` and `node-labels-editor`: the editors over a fixed node, with no

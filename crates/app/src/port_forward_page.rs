@@ -410,6 +410,7 @@ impl AppShell {
                 None,
                 DrawerBody::Scrolling(body),
                 self.drawer.width(DrawerSize::Standard),
+                &self.drawer.scroll,
                 cx,
             )
             .into_any_element(),

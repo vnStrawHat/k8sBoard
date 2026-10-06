@@ -1,9 +1,10 @@
 use std::rc::Rc;
 
 use cluster::{CpuAmount, NodeCondition, NodeSummary, NodeSystemInfo, ResourceUsage};
+use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::menu::DropdownMenu as _;
 use gpui_kit::component::tooltip::Tooltip;
-use gpui_kit::component::{ActiveTheme as _, h_flex, v_flex};
+use gpui_kit::component::{ActiveTheme as _, Sizable as _, h_flex, v_flex};
 use gpui_kit::{
     AnyElement, App, Context, Entity, InteractiveElement as _, IntoElement, ParentElement as _,
     SharedString, StatefulInteractiveElement as _, Styled as _, WeakEntity, div,
@@ -49,11 +50,15 @@ pub(crate) fn node_drawer(
     cx: &Context<AppShell>,
 ) -> AnyElement {
     let now = jiff::Timestamp::now();
+    let pod_count = session
+        .read(cx)
+        .live()
+        .map(|live| node_pod_count(&node.name, live.pods.items()));
     let header = DrawerHeader {
         kind_icon: NODE_ICON,
         kind_name: "Node".into(),
         name: node.name.clone().into(),
-        subtitle: subtitle(node, now, cx),
+        subtitle: subtitle(node, pod_count, now, cx),
         menu: node_menu_button(node, session, row, cx.weak_entity()),
         on_close: Rc::new(cx.listener(|shell, _, _, cx| shell.close_drawer(cx))),
         navigation,
@@ -76,15 +81,41 @@ pub(crate) fn node_drawer(
         | DrawerTab::Values
         | DrawerTab::Manifest
         | DrawerTab::Notes => {
-            DrawerBody::Scrolling(overview(node, session.read(cx).live(), now, cx))
+            let Overview { items, pods_at } = overview(node, session.read(cx).live(), now, cx);
+            // The Pods link asked to see the section, once: the scroll handle moves the box on the
+            // paint this frame ends with.
+            let wanted = state.reveal_section.take();
+            if let (Some(PODS_SECTION), Some(at)) = (wanted, pods_at) {
+                state.scroll.scroll_to_top_of_item(at);
+            }
+            DrawerBody::Sections {
+                sections: items,
+                scroll: state.scroll.clone(),
+            }
         }
     };
     let tab_bar = drawer_tab_bar(tab_titles(tabs, 0, events), shown, cx);
-    drawer_frame(header, tab_bar, body, state.width(DrawerSize::Standard), cx).into_any_element()
+    drawer_frame(
+        header,
+        tab_bar,
+        body,
+        state.width(DrawerSize::Standard),
+        &state.scroll,
+        cx,
+    )
+    .into_any_element()
 }
 
-fn subtitle(node: &NodeSummary, now: jiff::Timestamp, cx: &App) -> AnyElement {
+/// The status, the age, and a `Pods (N)` link to the Pods section: the section sits far below the
+/// fold of a node with many conditions and resources.
+fn subtitle(
+    node: &NodeSummary,
+    pod_count: Option<usize>,
+    now: jiff::Timestamp,
+    cx: &Context<AppShell>,
+) -> AnyElement {
     h_flex()
+        .items_center()
         .gap_1()
         .text_sm()
         .child(toned_text(
@@ -96,6 +127,20 @@ fn subtitle(node: &NodeSummary, now: jiff::Timestamp, cx: &App) -> AnyElement {
                 .text_color(cx.theme().muted_foreground)
                 .children(created_text(node.created_at, now).map(|created| format!("· {created}"))),
         )
+        .children(pod_count.map(|count| pods_link(count, cx)))
+        .into_any_element()
+}
+
+/// `Pods (23)`: shows the Overview scrolled to the Pods section.
+fn pods_link(count: usize, cx: &Context<AppShell>) -> AnyElement {
+    Button::new("node-drawer-pods")
+        .ghost()
+        .xsmall()
+        .label(format!("Pods ({count})"))
+        .tooltip("Scroll to the pods on this node")
+        .on_click(cx.listener(|shell, _, _, cx| {
+            shell.scroll_drawer_to_section(PODS_SECTION, cx);
+        }))
         .into_any_element()
 }
 
@@ -127,12 +172,22 @@ fn node_menu_button(
         .into_any_element()
 }
 
+/// The title of the Pods section: the node drawer's Pods link scrolls to it.
+const PODS_SECTION: &str = "Pods";
+
+/// The Overview items, each a direct child of the scrolled box so the scroll handle can bring one to
+/// the top, and where the Pods section starts, if the node has one.
+struct Overview {
+    items: Vec<AnyElement>,
+    pods_at: Option<usize>,
+}
+
 fn overview(
     node: &NodeSummary,
     live: Option<&LiveCluster>,
     now: jiff::Timestamp,
     cx: &Context<AppShell>,
-) -> AnyElement {
+) -> Overview {
     let mono = cx.theme().mono_font_family.clone();
     let taints = if node.taints.is_empty() {
         absent_text(cx).into_any_element()
@@ -151,31 +206,25 @@ fn overview(
     let created = node
         .created_at
         .map(|created_at| format!("{created_at} ({} ago)", format_age(Some(created_at), now)));
-    let mut column = v_flex()
-        .child(first_section_title("Node", cx))
-        .child(wide_detail_row(
+    let mut items: Vec<AnyElement> = vec![
+        first_section_title("Node", cx).into_any_element(),
+        wide_detail_row(
             "Status",
             toned_text(node_status_label(node.status, &node.conditions), cx),
             cx,
-        ))
-        .child(wide_detail_row(
+        )
+        .into_any_element(),
+        wide_detail_row(
             "Scheduling",
             toned_text(scheduling_label(node.status.scheduling), cx),
             cx,
-        ))
-        .child(wide_detail_row(
-            "Roles",
-            value_or_absent(roles.as_deref(), cx),
-            cx,
-        ))
-        .child(wide_detail_row("Taints", taints, cx))
-        .child(wide_detail_row(
-            "Created",
-            value_or_absent(created.as_deref(), cx),
-            cx,
-        ))
-        .child(section_title("Labels", cx))
-        .child(chips(
+        )
+        .into_any_element(),
+        wide_detail_row("Roles", value_or_absent(roles.as_deref(), cx), cx).into_any_element(),
+        wide_detail_row("Taints", taints, cx).into_any_element(),
+        wide_detail_row("Created", value_or_absent(created.as_deref(), cx), cx).into_any_element(),
+        section_title("Labels", cx).into_any_element(),
+        chips(
             "node-labels",
             &node
                 .labels
@@ -183,22 +232,25 @@ fn overview(
                 .map(|label| SharedString::from(label.clone()))
                 .collect::<Vec<_>>(),
             cx,
-        ))
-        .child(section_title("Conditions", cx));
+        )
+        .into_any_element(),
+        section_title("Conditions", cx).into_any_element(),
+    ];
     if node.conditions.is_empty() {
-        column = column.child(absent_text(cx));
+        items.push(absent_text(cx).into_any_element());
     }
     for (index, condition) in node.conditions.iter().enumerate() {
-        column = column.child(condition_row(index, condition, now, cx));
+        items.push(condition_row(index, condition, now, cx));
     }
 
-    column = column
-        .child(section_title("Allocatable used", cx))
-        .child(allocatable_used(node, live, cx));
+    items.push(section_title("Allocatable used", cx).into_any_element());
+    items.push(allocatable_used(node, live, cx));
 
     // What runs here comes right after what it uses, before the node's addresses.
+    let mut pods_at = None;
     if let Some(live) = live {
-        column = column.child(pods_section(
+        pods_at = Some(items.len());
+        items.push(pods_section(
             &PodOwner::Node {
                 name: node.name.clone(),
             },
@@ -208,46 +260,49 @@ fn overview(
         ));
     }
 
-    column = column.child(section_title("Addresses", cx));
+    items.push(section_title("Addresses", cx).into_any_element());
     if node.addresses.is_empty() {
-        column = column.child(absent_text(cx));
+        items.push(absent_text(cx).into_any_element());
     }
     for (index, address) in node.addresses.iter().enumerate() {
-        column = column.child(wide_detail_row(
-            address.kind.clone(),
-            copyable_mono(("address", index), address.address.clone(), cx),
-            cx,
-        ));
+        items.push(
+            wide_detail_row(
+                address.kind.clone(),
+                copyable_mono(("address", index), address.address.clone(), cx),
+                cx,
+            )
+            .into_any_element(),
+        );
     }
 
     let os = os_text(&node.system);
-    column = column
-        .child(section_title("System", cx))
-        .child(wide_detail_row(
-            "OS",
-            value_or_absent(os.as_deref(), cx),
-            cx,
-        ))
-        .child(wide_detail_row(
+    items.extend([
+        section_title("System", cx).into_any_element(),
+        wide_detail_row("OS", value_or_absent(os.as_deref(), cx), cx).into_any_element(),
+        wide_detail_row(
             "Kernel",
             mono_or_absent(&node.system.kernel_version, "kernel", cx),
             cx,
-        ))
-        .child(wide_detail_row(
+        )
+        .into_any_element(),
+        wide_detail_row(
             "Container runtime",
             mono_or_absent(&node.system.container_runtime, "runtime", cx),
             cx,
-        ))
-        .child(wide_detail_row(
+        )
+        .into_any_element(),
+        wide_detail_row(
             "Kubelet",
             mono_or_absent(&node.kubelet_version, "kubelet", cx),
             cx,
-        ))
-        .child(section_title("Resources", cx));
+        )
+        .into_any_element(),
+        section_title("Resources", cx).into_any_element(),
+    ]);
     if node.resources.is_empty() {
-        column = column.child(absent_text(cx));
+        items.push(absent_text(cx).into_any_element());
     } else {
-        column = column.child(resource_row(
+        items.push(resource_row(
             ResourceRowKind::Header,
             ResourceCells {
                 name: "Resource",
@@ -263,7 +318,7 @@ fn overview(
             .map_or_else(|| "—".to_owned(), |text| node_quantity_text(name, text))
     };
     for resource in &node.resources {
-        column = column.child(resource_row(
+        items.push(resource_row(
             ResourceRowKind::Quantity,
             ResourceCells {
                 name: &resource_label(&resource.name),
@@ -274,7 +329,7 @@ fn overview(
         ));
     }
 
-    column.into_any_element()
+    Overview { items, pods_at }
 }
 
 /// What the pods on a node request and how many there are; only known for the All scope, since

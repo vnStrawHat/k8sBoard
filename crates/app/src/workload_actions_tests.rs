@@ -74,6 +74,7 @@ fn daemon_set(name: &str, update_strategy: &str) -> DaemonSetSummary {
         available: 4,
         misscheduled: 0,
         node_selector: Vec::new(),
+        node_affinity_keys: Vec::new(),
         update_strategy: update_strategy.to_owned(),
         selector: Vec::new(),
         containers: Vec::new(),

@@ -100,9 +100,13 @@ impl AppShell {
             tooltip: place.back_tooltip().into(),
             on_click: Rc::new(cx.listener(|shell, _, _, cx| shell.go_back(cx))),
         });
+        let shell = cx.weak_entity();
         DrawerNavigation {
             back,
             rows: self.row_controls(cx),
+            on_press: Some(Rc::new(move |_, cx| {
+                let _ = shell.update(cx, |shell, cx| shell.give_drawer_the_keys(cx));
+            })),
         }
     }
 

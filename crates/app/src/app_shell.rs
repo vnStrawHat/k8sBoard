@@ -539,6 +539,12 @@ pub(crate) struct AppShell {
     /// The table row the shell itself just selected. Its `SelectRow` echo moves the cursor but
     /// never opens the drawer, which only a click does (`take_row_echo`).
     row_echo: Option<usize>,
+    /// The drawer has the keyboard: it was opened with Enter or clicked. PageUp, PageDown, Home, and
+    /// End then scroll its body; a click on a table row or closing the drawer gives the keys back.
+    is_drawer_keyed: bool,
+    /// Enter asked for the drawer of a row with no cursor yet; the `SelectRow` that opens it hands
+    /// the keys to it.
+    opens_drawer_keyed: bool,
     drawer: DrawerState,
     /// The debounced start of the drawer watches (object events, related objects) that is waiting
     /// for the selection to rest. Replacing or dropping it cancels it.
@@ -807,6 +813,8 @@ impl AppShell {
             _table_subscriptions: table_subscriptions,
             selected: None,
             row_echo: None,
+            is_drawer_keyed: false,
+            opens_drawer_keyed: false,
             drawer,
             pending_subjects: None,
             pending_reveal: None,
@@ -2403,6 +2411,9 @@ impl AppShell {
     fn set_drawer_open(&mut self, is_open: bool, cx: &mut Context<Self>) {
         self.drawer.is_open = is_open && self.selected.is_some();
         if !self.drawer.is_open {
+            self.is_drawer_keyed = false;
+        }
+        if !self.drawer.is_open {
             self.drop_secret_values();
         }
         self.follow_drawer_subjects(cx);
@@ -2607,6 +2618,14 @@ impl AppShell {
             shell.drawer.reveal_section.set(Some(title));
             cx.notify();
         });
+    }
+
+    /// A link inside the open drawer (the node drawer's `Pods (N)`): shows its Overview scrolled to
+    /// the section titled `title`, on the next paint.
+    pub(crate) fn scroll_drawer_to_section(&mut self, title: &'static str, cx: &mut Context<Self>) {
+        self.drawer.tab = DrawerTab::Overview;
+        self.drawer.reveal_section.set(Some(title));
+        cx.notify();
     }
 
     /// Opens the drawer of `key` on the Values tab for `revision`, in `layout`. The key is revealed
@@ -3265,6 +3284,9 @@ impl AppShell {
         if is_echo {
             return;
         }
+        // A click on a row puts the keyboard back on the table; Enter on a row without a cursor
+        // opens the drawer with it.
+        self.is_drawer_keyed = std::mem::take(&mut self.opens_drawer_keyed);
         self.set_drawer_open(true, cx);
         focus_table(table, window, cx);
     }

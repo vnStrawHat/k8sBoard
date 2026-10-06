@@ -1,5 +1,6 @@
 use futures::Stream;
 use k8s_openapi::api::apps::v1::DaemonSet;
+use k8s_openapi::api::core::v1::PodSpec;
 
 use crate::connection::ClusterConnection;
 use crate::namespace::NamespaceScope;
@@ -27,6 +28,10 @@ pub struct DaemonSetSummary {
     pub misscheduled: u32,
     /// `spec.template.spec.nodeSelector` as `key=value` terms.
     pub node_selector: Vec<String>,
+    /// The label keys that `spec.template.spec.affinity.nodeAffinity` requires
+    /// (`requiredDuringSchedulingIgnoredDuringExecution` match expressions), in order, no repeats.
+    /// Preferred terms only rank nodes, so they are left out.
+    pub node_affinity_keys: Vec<String>,
     /// `spec.updateStrategy.type`, or empty when absent.
     pub update_strategy: String,
     pub selector: Vec<String>,
@@ -68,6 +73,7 @@ pub(crate) fn daemon_set_summary(daemon_set: &DaemonSet) -> DaemonSetSummary {
         available: optional_count(status.and_then(|status| status.number_available)),
         misscheduled: status.map_or(0, |status| non_negative(status.number_misscheduled)),
         node_selector: key_value_terms(pod_spec.and_then(|spec| spec.node_selector.as_ref())),
+        node_affinity_keys: required_affinity_keys(pod_spec),
         update_strategy: spec
             .and_then(|spec| spec.update_strategy.as_ref())
             .and_then(|strategy| strategy.type_.clone())
@@ -75,6 +81,31 @@ pub(crate) fn daemon_set_summary(daemon_set: &DaemonSet) -> DaemonSetSummary {
         selector: spec.map_or_else(Vec::new, |spec| selector_terms(&spec.selector)),
         containers: spec.map_or_else(Vec::new, |spec| template_containers(&spec.template)),
     }
+}
+
+/// The label keys the pod template must find on a node: every `matchExpressions` key of the required
+/// node affinity terms.
+fn required_affinity_keys(pod_spec: Option<&PodSpec>) -> Vec<String> {
+    let terms = pod_spec
+        .and_then(|spec| spec.affinity.as_ref())
+        .and_then(|affinity| affinity.node_affinity.as_ref())
+        .and_then(|affinity| {
+            affinity
+                .required_during_scheduling_ignored_during_execution
+                .as_ref()
+        })
+        .map(|selector| selector.node_selector_terms.as_slice())
+        .unwrap_or_default();
+    let mut keys: Vec<String> = Vec::new();
+    for expression in terms
+        .iter()
+        .flat_map(|term| term.match_expressions.iter().flatten())
+    {
+        if !keys.contains(&expression.key) {
+            keys.push(expression.key.clone());
+        }
+    }
+    keys
 }
 
 #[cfg(test)]
@@ -144,6 +175,67 @@ mod tests {
         assert_eq!(
             daemon_set_summary(&daemon_set).node_selector,
             ["disk=ssd", "kubernetes.io/os=linux"]
+        );
+    }
+
+    #[test]
+    fn daemon_set_reads_the_keys_of_its_required_node_affinity_only() {
+        use k8s_openapi::api::core::v1::{
+            Affinity, NodeAffinity, NodeSelector, NodeSelectorRequirement, NodeSelectorTerm,
+            PreferredSchedulingTerm,
+        };
+
+        let term = |keys: &[&str]| NodeSelectorTerm {
+            match_expressions: Some(
+                keys.iter()
+                    .map(|key| NodeSelectorRequirement {
+                        key: (*key).to_owned(),
+                        operator: "Exists".to_owned(),
+                        values: None,
+                    })
+                    .collect(),
+            ),
+            ..Default::default()
+        };
+        let daemon_set = DaemonSet {
+            spec: Some(DaemonSetSpec {
+                template: PodTemplateSpec {
+                    spec: Some(PodSpec {
+                        affinity: Some(Affinity {
+                            node_affinity: Some(NodeAffinity {
+                                required_during_scheduling_ignored_during_execution: Some(
+                                    NodeSelector {
+                                        node_selector_terms: vec![
+                                            term(&["disk", "team"]),
+                                            term(&["disk"]),
+                                        ],
+                                    },
+                                ),
+                                preferred_during_scheduling_ignored_during_execution: Some(vec![
+                                    PreferredSchedulingTerm {
+                                        weight: 1,
+                                        preference: term(&["zone"]),
+                                    },
+                                ]),
+                            }),
+                            ..Default::default()
+                        }),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        assert_eq!(
+            daemon_set_summary(&daemon_set).node_affinity_keys,
+            ["disk", "team"]
+        );
+        assert!(
+            daemon_set_summary(&DaemonSet::default())
+                .node_affinity_keys
+                .is_empty()
         );
     }
 }

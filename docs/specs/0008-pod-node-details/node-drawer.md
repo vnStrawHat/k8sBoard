@@ -44,3 +44,5 @@ CPU/Memory usage and allocated (requested) totals (0010, 0021), node shell, cord
 The Pods section sits above Addresses and tags each pod `DS`, `emptyDir`, `PDB 0`, or `no controller` (see 0034 `drain-dialog.md`).
 
 The CPU and Memory rows of "Allocatable used" read `3.3 used · 6.9 requested / 26 cores` when the pods of every namespace are known (bar tick = requests; the bar's tooltip names used, requested, and allocatable). The Nodes table has two opt-in columns, `CPU req` and `Mem req` (the pods' requests as a share of allocatable), hidden until ticked in the Columns menu; they read `—` under a namespace scope.
+
+The body of the node drawer scrolls with a handle (`DrawerState.scroll`), and every drawer built by `drawer_frame` tracks it. A drawer has the keyboard after Enter opened it (or a left press inside it): PageUp, PageDown, Home, and End then scroll its body (a page is 90 % of the view) instead of moving the table cursor, until the drawer closes or a table row is clicked. The header subtitle has a `Pods (N)` link that shows the Overview scrolled to the Pods section.

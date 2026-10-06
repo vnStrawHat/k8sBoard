@@ -283,6 +283,7 @@ fn daemon_set() -> DaemonSetSummary {
         available: 4,
         misscheduled: 0,
         node_selector: vec!["disk=ssd".to_owned(), "zone=a".to_owned()],
+        node_affinity_keys: Vec::new(),
         update_strategy: "RollingUpdate".to_owned(),
         selector: Vec::new(),
         containers: Vec::new(),

@@ -494,7 +494,7 @@ fn label_batch_skips_nodes_that_already_match() {
         labelled("wk-03", &["role=worker"]),
     ];
     let changes = [set("team", "infra"), remove("old-key")];
-    let batch = label_batch(&scope(&cluster), &nodes, &changes).expect("a batch");
+    let batch = label_batch(&scope(&cluster), &nodes, &changes, None).expect("a batch");
     // wk-01 gets both; wk-02 has the Set already and no old key; wk-03 only lacks the Set.
     assert_eq!(
         node_changes(&batch),
@@ -515,7 +515,7 @@ fn label_batch_skips_nodes_that_already_match() {
     assert_eq!(batch.action, ResourceAction::EditLabels);
     assert_eq!(batch.risk, ActionRisk::Change);
     assert_eq!(batch.plan.on_failure, BatchFailure::Continue);
-    assert!(matches!(batch.plan.extras, BatchExtras::None));
+    assert!(matches!(batch.plan.extras, BatchExtras::Labels(_)));
     assert_eq!(batch.plan.items[0].label, "Edit labels of node wk-01");
     // A bulk names no single object, so the tier types the cluster name.
     assert_eq!(batch.expected(), "prod-a");
@@ -526,7 +526,8 @@ fn label_batch_skips_nodes_that_already_match() {
             "Removing a label can make DaemonSets that select nodes by it delete their pods on these nodes"
         )]
     );
-    let only_set = label_batch(&scope(&cluster), &nodes, &[set("team", "infra")]).expect("a batch");
+    let only_set =
+        label_batch(&scope(&cluster), &nodes, &[set("team", "infra")], None).expect("a batch");
     assert!(only_set.warnings.is_empty());
 }
 
@@ -538,17 +539,22 @@ fn label_batch_keeps_a_changed_value_and_treats_an_empty_value_as_a_value() {
         labelled("wk-01", &["team="]),
         labelled("wk-02", &["team=infra"]),
     ];
-    let batch = label_batch(&scope(&cluster), &nodes, &[set("team", "")]).expect("a batch");
+    let batch = label_batch(&scope(&cluster), &nodes, &[set("team", "")], None).expect("a batch");
     assert_eq!(
         node_changes(&batch),
         [("wk-02".to_owned(), vec![set("team", "")])]
     );
     // A Remove of a key a node lacks is dropped for that node.
-    let batch = label_batch(&scope(&cluster), &nodes, &[remove("team")]).expect("a batch");
+    let batch = label_batch(&scope(&cluster), &nodes, &[remove("team")], None).expect("a batch");
     assert_eq!(batch.plan.items.len(), 2);
     let none = [labelled("wk-01", &[])];
     assert_eq!(
-        error_text(label_batch(&scope(&cluster), &none, &[remove("team")])),
+        error_text(label_batch(
+            &scope(&cluster),
+            &none,
+            &[remove("team")],
+            None
+        )),
         "All selected nodes already have these labels"
     );
 }
@@ -558,7 +564,7 @@ fn label_batch_checks_in_order() {
     let cluster = cluster();
     let nodes = [labelled("wk-01", &["team=infra"])];
     let try_with =
-        |changes: &[LabelChange]| error_text(label_batch(&scope(&cluster), &nodes, changes));
+        |changes: &[LabelChange]| error_text(label_batch(&scope(&cluster), &nodes, changes, None));
     assert_eq!(try_with(&[]), "No changes");
     assert_eq!(try_with(&[set("", "x")]), "Enter a key for every label");
     assert_eq!(try_with(&[set("a", "1"), remove("a")]), "a is listed twice");
@@ -589,7 +595,7 @@ fn label_batch_checks_in_order() {
 fn label_batch_refuses_an_unsafe_node_name() {
     let cluster = cluster();
     let nodes = [labelled("a/../b", &[])];
-    assert!(label_batch(&scope(&cluster), &nodes, &[set("team", "infra")]).is_err());
+    assert!(label_batch(&scope(&cluster), &nodes, &[set("team", "infra")], None).is_err());
 }
 
 #[test]
@@ -597,7 +603,7 @@ fn label_batch_trims_keys_and_values_like_the_single_editor() {
     let cluster = cluster();
     let nodes = [labelled("wk-01", &[])];
     let batch =
-        label_batch(&scope(&cluster), &nodes, &[set(" team ", " infra ")]).expect("a batch");
+        label_batch(&scope(&cluster), &nodes, &[set(" team ", " infra ")], None).expect("a batch");
     assert_eq!(
         node_changes(&batch),
         [("wk-01".to_owned(), vec![set("team", "infra")])]
@@ -788,4 +794,129 @@ fn a_changed_effect_is_an_edit_of_a_new_row_and_the_old_one_is_removed() {
         conflict_of(&base, &mine, now),
         [text_row("gpu", "", "NoExecute")]
     );
+}
+
+// ---- L17: the words and the DaemonSet warning of a bulk label edit ----
+
+fn daemon_set_selecting(
+    name: &str,
+    node_selector: &[&str],
+    affinity_keys: &[&str],
+) -> DaemonSetSummary {
+    DaemonSetSummary {
+        node_selector: node_selector
+            .iter()
+            .map(|term| (*term).to_owned())
+            .collect(),
+        node_affinity_keys: affinity_keys.iter().map(|key| (*key).to_owned()).collect(),
+        ..crate::topology_fixtures::daemon_set(name, 2, 2)
+    }
+}
+
+fn warnings_with(
+    nodes: &[TickedNode],
+    changes: &[LabelChange],
+    sets: &[DaemonSetSummary],
+) -> Vec<String> {
+    let cluster = cluster();
+    let sets: Vec<&DaemonSetSummary> = sets.iter().collect();
+    label_batch(&scope(&cluster), nodes, changes, Some(&sets))
+        .expect("a batch")
+        .warnings
+        .iter()
+        .map(ToString::to_string)
+        .collect()
+}
+
+#[test]
+fn a_bulk_label_edit_says_apply_to_n_nodes_and_names_what_it_did() {
+    let cluster = cluster();
+    let nodes = [labelled("wk-01", &["old=x"]), labelled("wk-02", &["old=x"])];
+    let batch = label_batch(
+        &scope(&cluster),
+        &nodes,
+        &[set("lab-batch", "1"), remove("old")],
+        None,
+    )
+    .expect("a batch");
+    let BatchExtras::Labels(extras) = &batch.plan.extras else {
+        panic!("a label batch carries its words");
+    };
+    assert_eq!(extras.confirm, "Apply to 2 nodes");
+    assert_eq!(
+        extras.done,
+        "Set lab-batch on 2 nodes. Removed old from 2 nodes"
+    );
+    assert_eq!(batch.confirm_label(0), "Apply to 2 nodes");
+    let set_only = label_batch(
+        &scope(&cluster),
+        &nodes[..1],
+        &[set("lab-batch", "1")],
+        None,
+    )
+    .expect("one");
+    assert_eq!(batch_extras(&set_only).confirm, "Apply to 1 node");
+    assert_eq!(batch_extras(&set_only).done, "Set lab-batch on 1 node");
+    let remove_only = label_batch(&scope(&cluster), &nodes, &[remove("old")], None).expect("two");
+    assert_eq!(batch_extras(&remove_only).done, "Removed old from 2 nodes");
+}
+
+fn batch_extras(batch: &BatchIntent) -> &LabelExtras {
+    match &batch.plan.extras {
+        BatchExtras::Labels(extras) => extras,
+        _ => panic!("a label batch carries its words"),
+    }
+}
+
+#[test]
+fn the_daemon_set_warning_needs_a_daemon_set_that_selects_by_the_key() {
+    let nodes = [labelled("wk-01", &["team=infra"])];
+    let unrelated = daemon_set_selecting("agent", &["disk=ssd"], &[]);
+    assert!(warnings_with(&nodes, &[remove("team")], &[unrelated]).is_empty());
+
+    let by_selector = daemon_set_selecting("logs", &["team=infra"], &[]);
+    let by_affinity = daemon_set_selecting("mon", &[], &["team"]);
+    assert_eq!(
+        warnings_with(
+            &nodes,
+            &[remove("team")],
+            std::slice::from_ref(&by_selector)
+        ),
+        ["DaemonSet shop/logs selects nodes by team: its pods on these nodes are deleted"]
+    );
+    assert_eq!(
+        warnings_with(&nodes, &[remove("team")], &[by_selector, by_affinity]),
+        [
+            "DaemonSets shop/logs, shop/mon select nodes by team: their pods on these nodes are deleted"
+        ]
+    );
+}
+
+#[test]
+fn a_set_warns_only_when_it_changes_a_value_a_daemon_set_selects_by() {
+    let sets = [daemon_set_selecting("logs", &["team=infra"], &[])];
+    // Adding the label to a node that lacks it deletes nothing.
+    assert!(warnings_with(&[labelled("wk-01", &[])], &[set("team", "infra")], &sets).is_empty());
+    // Changing the value on a node that has it moves the node out of the selector.
+    assert_eq!(
+        warnings_with(
+            &[labelled("wk-01", &["team=infra"])],
+            &[set("team", "dev")],
+            &sets
+        )
+        .len(),
+        1
+    );
+}
+
+#[test]
+fn without_the_daemon_sets_a_removal_keeps_the_generic_warning() {
+    let cluster = cluster();
+    let nodes = [labelled("wk-01", &["team=infra"])];
+    let batch = label_batch(&scope(&cluster), &nodes, &[remove("team")], None).expect("a batch");
+    assert_eq!(batch.warnings.len(), 1);
+    assert!(batch.warnings[0].starts_with("Removing a label can make DaemonSets"));
+    let set_only =
+        label_batch(&scope(&cluster), &nodes, &[set("team", "dev")], None).expect("a batch");
+    assert!(set_only.warnings.is_empty());
 }

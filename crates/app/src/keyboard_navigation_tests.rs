@@ -123,3 +123,19 @@ fn values_screen_context_follows_the_visible_screen() {
         assert_eq!(shell_key_context(screen), "AppShell", "{screen:?}");
     }
 }
+
+#[test]
+fn the_page_keys_mean_a_drawer_scroll_and_the_single_steps_do_not() {
+    assert_eq!(
+        drawer_scroll_of(RowStep::NextPage),
+        Some(DrawerScroll::PageDown)
+    );
+    assert_eq!(
+        drawer_scroll_of(RowStep::PreviousPage),
+        Some(DrawerScroll::PageUp)
+    );
+    assert_eq!(drawer_scroll_of(RowStep::First), Some(DrawerScroll::Top));
+    assert_eq!(drawer_scroll_of(RowStep::Last), Some(DrawerScroll::Bottom));
+    assert_eq!(drawer_scroll_of(RowStep::Next), None);
+    assert_eq!(drawer_scroll_of(RowStep::Previous), None);
+}

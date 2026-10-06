@@ -126,7 +126,15 @@ pub(crate) fn pod_drawer(
     };
     let titles = tab_titles(tabs, pod.containers.len(), events);
     let tab_bar = drawer_tab_bar(titles, shown, cx);
-    drawer_frame(header, tab_bar, body, state.width(DrawerSize::Wide), cx).into_any_element()
+    drawer_frame(
+        header,
+        tab_bar,
+        body,
+        state.width(DrawerSize::Wide),
+        &state.scroll,
+        cx,
+    )
+    .into_any_element()
 }
 
 fn subtitle(pod: &PodSummary, now: jiff::Timestamp, cx: &App) -> AnyElement {

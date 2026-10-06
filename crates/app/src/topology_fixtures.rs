@@ -299,6 +299,7 @@ pub(crate) fn daemon_set(name: &str, desired: u32, ready: u32) -> DaemonSetSumma
         available: ready,
         misscheduled: 0,
         node_selector: Vec::new(),
+        node_affinity_keys: Vec::new(),
         update_strategy: "RollingUpdate".to_owned(),
         selector: Vec::new(),
         containers: Vec::new(),
