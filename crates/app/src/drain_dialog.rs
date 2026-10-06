@@ -1369,13 +1369,17 @@ impl DrainDialog {
             [only] => format!("Drain {}", only.name),
             nodes => format!("Drain {} nodes", nodes.len()),
         };
-        let note = Checkbox::new("drain-note")
-            .label("Add a note to the audit log")
-            .checked(self.is_note_shown)
-            .on_click(cx.listener(|dialog, checked: &bool, _, cx| {
-                dialog.is_note_shown = *checked;
-                cx.notify();
-            }));
+        // Without an audit folder there is no line to add a note to.
+        let has_audit_file = crate::settings::AppSettings::config_dir(cx).is_some();
+        let note = has_audit_file.then(|| {
+            Checkbox::new("drain-note")
+                .label("Add a note to the audit log")
+                .checked(self.is_note_shown)
+                .on_click(cx.listener(|dialog, checked: &bool, _, cx| {
+                    dialog.is_note_shown = *checked;
+                    cx.notify();
+                }))
+        });
         h_flex()
             .w_full()
             .gap_2()
@@ -1390,7 +1394,7 @@ impl DrainDialog {
                         .on_click(cx.listener(|dialog, _, window, cx| dialog.close(window, cx))),
                 ),
             )
-            .child(h_flex().child(note))
+            .child(h_flex().children(note))
             .child(
                 h_flex()
                     .gap_2()

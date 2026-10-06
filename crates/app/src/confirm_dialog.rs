@@ -1280,7 +1280,9 @@ impl ConfirmDialog {
                 .outline()
                 .on_click(cx.listener(|dialog, _, window, cx| dialog.retry(window, cx)))
         });
-        let note = (!matches!(self.kind, DialogKind::Unlock { .. })).then(|| {
+        // Without an audit folder there is no line to add a note to.
+        let has_audit_file = AppSettings::config_dir(cx).is_some();
+        let note = (has_audit_file && !matches!(self.kind, DialogKind::Unlock { .. })).then(|| {
             Checkbox::new("write-note")
                 .label("Add a note to the audit log")
                 .checked(self.is_note_shown)

@@ -206,7 +206,7 @@ use crate::cluster_runtime::ClusterRuntime;
 use crate::launch_options::{LaunchOptions, LaunchRequest, USAGE, kubeconfig_chain};
 use crate::settings::AppSettings;
 use crate::settings_store::{
-    CONFIG_DIR_ENV, LoadedSettings, WriteMode, config_dir, default_config_dir, load_settings,
+    CONFIG_DIR_ENV, LoadedSettings, config_dir, default_config_dir, load_settings,
 };
 use crate::settings_window::{
     ManageClusters, OpenSettings, SettingsPage, SettingsSize, manage_clusters, open_settings_window,
@@ -382,10 +382,9 @@ fn load_launch_settings(options: &LaunchOptions) -> LoadedSettings {
     let Some(dir) = dir else {
         return LoadedSettings::without_config_dir();
     };
-    let mut loaded = load_settings(&dir);
-    // A screenshot run reads the seeded file but never changes it, so shots stay repeatable.
+    let loaded = load_settings(&dir);
     if options.screenshot.is_some() {
-        loaded.writes = WriteMode::Disabled;
+        return loaded.for_screenshot(cfg!(feature = "lab-writes"));
     }
     loaded
 }

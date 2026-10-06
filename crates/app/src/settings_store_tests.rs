@@ -296,3 +296,14 @@ fn only_a_reset_has_a_banner() {
         None
     );
 }
+
+#[test]
+fn a_screenshot_run_keeps_settings_read_only_except_in_the_lab_build() {
+    let dir = temp_dir("screenshot-writes");
+    let plain = load_settings(&dir).for_screenshot(false);
+    assert_eq!(plain.writes, WriteMode::Disabled);
+    // The lab build writes to the cluster, so its audit log needs the config folder.
+    let lab = load_settings(&dir).for_screenshot(true);
+    assert_eq!(lab.writes, WriteMode::Enabled(dir.clone()));
+    cleanup(&dir);
+}

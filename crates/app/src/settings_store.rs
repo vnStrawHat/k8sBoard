@@ -122,6 +122,15 @@ impl LoadedSettings {
         }
     }
 
+    /// A screenshot run reads the seeded file but never changes it, so shots stay repeatable. The lab
+    /// build really writes to the kind lab, so it keeps the config folder, which holds the audit log.
+    pub(crate) fn for_screenshot(mut self, is_lab_build: bool) -> Self {
+        if !is_lab_build {
+            self.writes = WriteMode::Disabled;
+        }
+        self
+    }
+
     /// No config folder could be located: defaults, nothing is saved.
     pub(crate) fn without_config_dir() -> Self {
         Self::defaults(WriteMode::Disabled, Some(SettingsNotice::NoConfigDir))
