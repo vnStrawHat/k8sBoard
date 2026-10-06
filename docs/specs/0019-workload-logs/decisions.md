@@ -15,7 +15,7 @@
 | 7 | One stream per (pod, selected container); default selection = `default_container` of the first member; multi-select picker | W8b "Containers: api, worker ▾" |
 | 8 | **Merge:** a 2 s staging window at every (re)start, stable-sorted by kubelet timestamp, then pushed once; afterwards arrival order. Staging flushes early above 8 MiB. Late joiners request a **50-line tail** (`LogRequest.tail_lines`) and append on arrival | initial tails arrive pod by pod; sorting them is the visible part; a short late tail limits out-of-order history. Ceiling: README open item 1 (incl. cross-node clock skew) |
 | 9 | The 0004 buffer caps (10k lines / 8 MiB) apply per tab across streams; eviction after the sorted merge keeps the newest lines overall. **Fairness ceiling:** a chatty pod can evict a quiet pod's lines | one memory bound per tab; per-source quotas are the upgrade (README open item 3) |
-| 10 | Screen prefix `{short}/{container}`; `short` = last `-` segment (StatefulSet: full pod name); color = `chart_1..chart_5` by the pod name's slot. Export uses the full prefix (decision 32) | W8b `x2k4q/api`; ordinals need the name; theme tokens only |
+| 10 | Screen prefix `{short}/{container}`; `short` = last `-` segment (StatefulSet: the pod name without the owner name, `-0`; a pod with no suffix keeps its whole name cut from the start); color = `chart_1..chart_5` by the pod name's slot. Export uses the full prefix (decision 32) | W8b `x2k4q/api`; ordinals need the name; theme tokens only |
 | 11 | Menu label "View logs (all pods)", Job "View logs" (W7 acts); opens through `AppShell`, so `kind_menu` needs no new parameters | one entry point owns connection, session, and dock |
 
 ## Filters and views

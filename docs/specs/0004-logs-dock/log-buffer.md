@@ -72,7 +72,7 @@ pub(crate) fn find_matches(text: &str, needle: &str) -> Vec<Range<usize>>;
 pub(crate) fn format_log_time(timestamp: jiff::Timestamp) -> String;
 ```
 
-- The zone is the system one (`TimeZone::system()`, the workspace jiff has `tz-system`). The Timestamps toggle tooltip names it. A line that itself starts with an ISO 8601 time loses that time while the column is on, since the column is the one that sorts.
+- The zone is the system one (`TimeZone::system()`, the workspace jiff has `tz-system`). The Timestamps toggle tooltip names it. A line from another day than today (in that zone) reads `MM-DD HH:MM:SS.mmm`; once the oldest kept line is from another day, every row reserves the date room and right-aligns the time. A line that itself starts with a time (ISO 8601, logfmt `time=`/`ts=`, or a first JSON `"time"`/`"ts"` member) loses it while the column is on, since the column is the one that sorts. With Wrap off, a line over 80 characters shows its whole text in a tooltip on hover.
 - `jiff` is already an app dependency, so nothing new is added.
 
 ## Memory bound per tab

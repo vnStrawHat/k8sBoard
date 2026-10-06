@@ -70,6 +70,8 @@ Every start is fresh. There is no resume, because the timestamp de-duplication w
 | Status | muted `text_xs`, pushed right | table below |
 | Reconnect | small ghost `Button` (`RefreshCw`, tooltip "Reconnect"). Shown in every state except Connecting | `restart_stream()` |
 
+Copy, Export, Pop out, and Reconnect (the last two when they apply) are one button each in the zoomed and popped-out tabs. In the docked (Compact) tab they sit in one `⋯` menu so the controls stay on one row; the status text wraps below only when the row has no room left (`toolbar_actions` in `log_tab.rs`).
+
 | State | Status text (`{count}` = `N lines`, or `V of N lines` when filtering; then `· older lines dropped` if any were dropped) |
 |---|---|
 | Connecting | `Opening…` |
