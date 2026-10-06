@@ -102,13 +102,13 @@ fn the_container_shows_only_when_the_name_keeps_its_room() {
         Some(" · api")
     );
     assert_eq!(suffix_that_fits("api", suffix(), 8), None);
-    // A long name keeps 16 characters first: 16 + the 6 of ` · api`.
+    // A long name keeps 15 characters first: 15 + the 6 of ` · api`.
     let long = "crashloop-85cc769bcd-q4nqt";
     assert_eq!(
-        suffix_that_fits(long, suffix(), 22).as_deref(),
+        suffix_that_fits(long, suffix(), 21).as_deref(),
         Some(" · api")
     );
-    assert_eq!(suffix_that_fits(long, suffix(), 21), None);
+    assert_eq!(suffix_that_fits(long, suffix(), 20), None);
     assert_eq!(suffix_that_fits(long, None, 40), None);
 }
 
@@ -164,12 +164,12 @@ fn count_and_age_stay_inside_the_window_at_1100_and_1320_px() {
 }
 
 #[test]
-fn object_keeps_sixteen_characters_and_cause_grows_most() {
+fn object_keeps_fifteen_characters_and_cause_grows_most() {
     // A mono glyph is about 9.6 px, and a cell keeps 24 px of padding.
-    let sixteen = 16. * 9.6 + 24.;
+    let fifteen = 15. * 9.6 + 24.;
     for window in [1100., 1320.] {
         let widths = widths_at(window);
-        assert!(widths[OBJECT] >= sixteen, "{window} px: {widths:?}");
+        assert!(widths[OBJECT] >= fifteen, "{window} px: {widths:?}");
     }
     let (narrow, wide) = (widths_at(1100.), widths_at(1320.));
     let growth = |index: usize| wide[index] - narrow[index];
@@ -304,4 +304,12 @@ fn an_unknown_onset_has_no_age_and_sorts_last() {
         ..issue()
     };
     assert!(matches!(unknown.value(AGE), CellValue::Age(None)));
+}
+
+#[test]
+fn reason_holds_the_longest_built_in_reason_at_1100_and_1320_px() {
+    // `Backoff limit reached` is the longest: measured at the UI font, `Backoff limit reac…` is cut at 152 px.
+    for window in [1100., 1320.] {
+        assert!(widths_at(window)[REASON] >= 175., "{window} px");
+    }
 }

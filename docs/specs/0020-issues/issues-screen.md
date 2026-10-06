@@ -30,14 +30,14 @@ impl TableRow for Issue { .. }  // namespace = shown.namespace, name = shown.nam
 
 | # | Column | Width | Cell | `value` (sort/filter) |
 |---|---|---|---|---|
-| 0 | Severity | 90 | `Critical` / `Warning`, toned | `Status` (Critical sorts first) |
-| 1 | Reason | 160 | pill text, toned | `Text` |
-| 2 | Kind | 110 | `shown.kind` | `Text` |
-| 3 | Object | 178, grows | mono `shown.name`, plus a muted ` · {c}` when the name keeps 16 characters beside it; otherwise the container joins the Cause tooltip | `Text` |
-| 4 | Namespace | 92, grows to 150 | `—` for cluster objects | `Text` |
-| 5 | Cause | 146, grows most | one line (`message_line`), full text (and `Container: {c}`) as tooltip | `Text` |
-| 6 | Count | 64, right | `count` (`—` when 1) | `Number` |
-| 7 | Age | 70 | `format_age(onset, now)`; `—` when no rule knows the onset (never the first-seen time) | `Age` |
+| 0 | Severity | 78 | `Critical` / `Warning`, toned | `Status` (Critical sorts first) |
+| 1 | Reason | 178, fixed: the longest built-in reason (`Backoff limit reached`) never cuts | pill text, toned | `Text` |
+| 2 | Kind | 88, grows to 130 | `shown.kind` | `Text` |
+| 3 | Object | 170, grows | mono `shown.name`, plus a muted ` · {c}` when the name keeps 15 characters beside it; otherwise the container joins the Cause tooltip | `Text` |
+| 4 | Namespace | 88, grows to 150 | `—` for cluster objects | `Text` |
+| 5 | Cause | 106, grows most | one line (`message_line`), full text (and `Container: {c}`) as tooltip | `Text` |
+| 6 | Count | 62, right | `count` (`—` when 1) | `Number` |
+| 7 | Age | 50, right | `format_age(onset, now)`; `—` when no rule knows the onset (never the first-seen time) | `Age` |
 
 Base widths sum to what a 1100 px window leaves, so Count and Age stay inside it; Kind (up to 130) and Namespace (up to 150) shrink to their content.
 

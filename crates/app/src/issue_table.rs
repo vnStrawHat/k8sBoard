@@ -46,21 +46,22 @@ const AGE: usize = 7;
 const ABSENT: &str = "—";
 
 /// The base widths add up to what a 1100 px window leaves for the table (Count and Age stay inside
-/// it). Object keeps 16 mono characters of the name there, and Cause, which holds the longest text,
-/// takes the most spare width; Kind and Namespace grow a little, up to the width of their content.
+/// it). Reason is sized to the longest built-in reason (`Backoff limit reached`) and never grows or
+/// cuts; Object keeps 15 mono characters of the name, and Cause, which holds the longest text, takes
+/// the most spare width; Kind and Namespace grow a little, up to the width of their content.
 const ISSUE_COLUMNS: [KindColumn; 8] = [
     column("Severity", 78., Align::Left),
-    column("Reason", 126., Align::Left),
+    column("Reason", 178., Align::Left),
     column("Kind", 88., Align::Left).grows(1).up_to(130.),
-    column("Object", 178., Align::Left).grows(3).up_to(320.),
-    column("Namespace", 92., Align::Left).grows(1).up_to(150.),
-    column("Cause", 146., Align::Left).grows(6),
+    column("Object", 170., Align::Left).grows(3).up_to(320.),
+    column("Namespace", 88., Align::Left).grows(1).up_to(150.),
+    column("Cause", 106., Align::Left).grows(6),
     column("Count", 62., Align::Right),
     column("Age", 50., Align::Right),
 ];
 
 /// Characters of the name the Object column keeps before it makes room for the container.
-const MIN_NAME_CHARS: usize = 16;
+const MIN_NAME_CHARS: usize = 15;
 
 pub(crate) struct IssueTableDelegate {
     /// The primary cluster: the issues of the other viewed clusters are not merged yet.
