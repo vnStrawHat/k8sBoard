@@ -24,7 +24,7 @@ const BUCKET_WIDTHS_SECS: [u64; 13] = [1, 5, 15, 30, 60, 300, 900, 1800, 3600, 1
 pub(crate) fn volume(lines: impl Iterator<Item = (jiff::Timestamp, Option<LogLevel>)>) -> Option<Volume>;
 /// The smallest width with `span / width < MAX_BUCKETS`; else one day, keeping the newest 60 buckets.
 fn bucket_width(span: Duration) -> Duration;
-/// `HH:MM:SS` under a minute, `HH:MM` under an hour, `MM-DD HH:MM` under a day, `MM-DD` otherwise (UTC).
+/// `HH:MM:SS` under a minute, `HH:MM` under an hour, `MM-DD HH:MM` under a day, `MM-DD` otherwise, in the local zone.
 fn bucket_label(start: jiff::Timestamp, width: Duration) -> String;
 pub(crate) fn volume_chart(volume: Rc<Volume>, cx: &App) -> AnyElement;
 ```

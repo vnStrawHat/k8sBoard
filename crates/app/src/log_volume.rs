@@ -8,12 +8,14 @@ use std::time::Duration;
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::chart::BarChart;
+use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _, h_flex};
 use gpui_kit::{
-    AnyElement, App, Bounds, DispatchPhase, InteractiveElement as _, IntoElement as _, MouseButton,
-    MouseMoveEvent, MouseUpEvent, ParentElement as _, Pixels, SharedString, Styled as _, canvas,
-    div, px, relative,
+    AnyElement, App, Bounds, DispatchPhase, Hsla, InteractiveElement as _, IntoElement,
+    MouseButton, MouseMoveEvent, MouseUpEvent, ParentElement as _, Pixels, SharedString,
+    StatefulInteractiveElement as _, Styled as _, canvas, div, px, relative,
 };
+use jiff::tz::TimeZone;
 
 use crate::log_buffer::TimeWindow;
 use crate::log_level::LogLevel;
@@ -26,6 +28,7 @@ const BUCKET_WIDTHS_SECS: [u64; 13] = [
 const CHART_HEIGHT: f32 = 48.;
 /// Pixels; a bucket with one or two lines would otherwise vanish next to a busy one.
 const MIN_BAR_HEIGHT: f32 = 2.;
+const LEGEND_SWATCH: f32 = 8.;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct VolumeBucket {
@@ -91,15 +94,15 @@ fn bucket_width(span: Duration) -> Duration {
 }
 
 /// `HH:MM:SS` under a minute, `HH:MM` under an hour, `MM-DD HH:MM` under a day, `MM-DD`
-/// otherwise (UTC).
-fn bucket_label(start: jiff::Timestamp, width: Duration) -> String {
+/// otherwise, on the clock of `zone`, the same one the log rows read.
+fn bucket_label(start: jiff::Timestamp, width: Duration, zone: &TimeZone) -> String {
     let format = match width.as_secs() {
         0..60 => "%H:%M:%S",
         60..3600 => "%H:%M",
         3600..86_400 => "%m-%d %H:%M",
         _ => "%m-%d",
     };
-    start.strftime(format).to_string()
+    start.to_zoned(zone.clone()).strftime(format).to_string()
 }
 
 /// `1s`, `15s`, `5m`, `3h`, `1d`.
@@ -198,6 +201,9 @@ pub(crate) struct BrushView {
 pub(crate) fn volume_chart(volume: &Rc<Volume>, brush: BrushView, cx: &App) -> AnyElement {
     let theme = cx.theme();
     let (normal, bad) = (theme.chart_1, tone_color(StatusTone::Bad, cx));
+    // One lookup per render, shared by the tooltip, the window chip, and the rows.
+    let zone = TimeZone::system();
+    let tooltip_zone = zone.clone();
     let width = volume.width;
     let chart = BarChart::new(volume.buckets.iter().cloned().enumerate())
         .id("log-volume")
@@ -216,7 +222,9 @@ pub(crate) fn volume_chart(volume: &Rc<Volume>, brush: BrushView, cx: &App) -> A
         .label_axis(false)
         .value_axis(false)
         .grid(false)
-        .tooltip_title(move |(_, bucket)| SharedString::from(bucket_label(bucket.start, width)))
+        .tooltip_title(move |(_, bucket)| {
+            SharedString::from(bucket_label(bucket.start, width, &tooltip_zone))
+        })
         .tooltip_value(|(_, bucket), lines| {
             SharedString::from(format!("{lines} lines · {} errors", bucket.errors))
         });
@@ -270,30 +278,46 @@ pub(crate) fn volume_chart(volume: &Rc<Volume>, brush: BrushView, cx: &App) -> A
         .py_1()
         .border_b_1()
         .border_color(theme.border)
-        .child(
-            div()
-                .flex_shrink_0()
-                .text_xs()
-                .text_color(theme.muted_foreground)
-                .child(format!("Lines per {}", width_label(width))),
-        )
-        .children(window.map(|window| window_chip(window, width, handlers.clear, cx)))
+        .child(chart_legend(width, bad, cx))
+        .children(window.map(|window| window_chip(window, width, &zone, handlers.clear, cx)))
         .child(cell)
         .into_any_element()
+}
+
+/// `Lines per 3h` and the key to the red bars. The bars of a quiet stretch are only a few pixels
+/// high, so a run of red ones reads as a dashed line unless the key says what they are.
+fn chart_legend(width: Duration, bad: Hsla, cx: &App) -> impl IntoElement {
+    let theme = cx.theme();
+    let width = width_label(width);
+    let tip = format!(
+        "Each bar counts the lines in one {width} bucket. A red bar has at least one error line."
+    );
+    h_flex()
+        .id("log-volume-legend")
+        .flex_shrink_0()
+        .items_center()
+        .gap_1p5()
+        .text_xs()
+        .text_color(theme.muted_foreground)
+        .tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
+        .child(format!("Lines per {width}"))
+        .child(div().size(px(LEGEND_SWATCH)).rounded_sm().bg(bad))
+        .child("has errors")
 }
 
 /// `HH:MM:SS – HH:MM:SS` and the ✕ that shows every line again.
 fn window_chip(
     window: TimeWindow,
     width: Duration,
+    zone: &TimeZone,
     clear: Rc<dyn Fn(&mut App)>,
     cx: &App,
 ) -> AnyElement {
     let theme = cx.theme();
     let label = format!(
         "{} – {}",
-        bucket_label(window.start, width),
-        bucket_label(window.end, width)
+        bucket_label(window.start, width, zone),
+        bucket_label(window.end, width, zone)
     );
     h_flex()
         .flex_shrink_0()
@@ -464,10 +488,13 @@ mod tests {
     #[test]
     fn bucket_label_formats_by_width() {
         let start = at("2024-05-01T10:47:58Z");
-        assert_eq!(bucket_label(start, secs(5)), "10:47:58");
-        assert_eq!(bucket_label(start, secs(300)), "10:47");
-        assert_eq!(bucket_label(start, secs(10_800)), "05-01 10:47");
-        assert_eq!(bucket_label(start, secs(86_400)), "05-01");
+        assert_eq!(bucket_label(start, secs(5), &TimeZone::UTC), "10:47:58");
+        assert_eq!(bucket_label(start, secs(300), &TimeZone::UTC), "10:47");
+        assert_eq!(
+            bucket_label(start, secs(10_800), &TimeZone::UTC),
+            "05-01 10:47"
+        );
+        assert_eq!(bucket_label(start, secs(86_400), &TimeZone::UTC), "05-01");
     }
 
     /// Ten buckets of 5 s from 10:00:00.

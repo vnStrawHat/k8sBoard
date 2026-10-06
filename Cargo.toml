@@ -21,7 +21,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 futures = "0.3"
 serde = { version = "1", features = ["derive"] }
-jiff = { version = "0.2", default-features = false, features = ["std", "tzdb-bundle-always"] }
+jiff = { version = "0.2", default-features = false, features = ["std", "tz-system", "tzdb-bundle-always"] }
 serde_json = "1"
 # The app's own CPU and memory use for the status bar (spec 0054); already in Cargo.lock through gpui.
 sysinfo = { version = "0.31.4", default-features = false, features = ["system"] }

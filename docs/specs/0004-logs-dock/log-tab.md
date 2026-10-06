@@ -64,7 +64,7 @@ Every start is fresh. There is no resume, because the timestamp de-duplication w
 | Container | ghost small `Button`: the name plus a muted kind tag (`kind_tag_text`, made `pub(crate)`), with `ChevronDown`, and a `DropdownMenu` using `menu_with_check` per container (`{name} · {KIND}`) | picking another container sets `container` and calls `restart_stream()`. Disabled when there is a single container |
 | Filter | `Input` on `InputState` (placeholder "Filter lines", cleanable), `flex_1`, `min_w(160px)`, `max_w(360px)` | on `InputEvent::Change`: `buffer.set_filter(value)`, then `scroller.reset(buffer.visible_len())` |
 | Previous | `Toggle` | flips `instance` and calls `restart_stream()` |
-| Timestamps | `Toggle`, on by default; tooltip "Kubelet time, UTC" | `scroller.remeasure()` |
+| Timestamps | `Toggle`, on by default; tooltip "Kubelet time, shown in your local time zone ({zone})" | `scroller.remeasure()` |
 | Wrap | `Toggle`, off by default | `scroller.remeasure()` |
 | Copy | ghost icon `Button` (`Copy`); tooltip "Copy visible lines" | `cx.write_to_clipboard(buffer.visible_text(shows_timestamps))` |
 | Status | muted `text_xs`, pushed right | table below |

@@ -5,6 +5,7 @@ use std::collections::VecDeque;
 
 use cluster::LogLine;
 use gpui_kit::SharedString;
+use jiff::tz::TimeZone;
 
 use crate::line_matcher::LineMatcher;
 use crate::log_level::{LevelSet, LogLevel, detect_level};
@@ -308,7 +309,12 @@ impl LogBuffer {
 
     /// One line per visible line: `{time} {prefix} {text}`. The time is written only for
     /// lines that have one; `prefixes` is indexed by source, and a missing index writes none.
-    pub(crate) fn visible_text(&self, time: LineTime, prefixes: &[SharedString]) -> String {
+    pub(crate) fn visible_text(
+        &self,
+        time: LineTime,
+        zone: &TimeZone,
+        prefixes: &[SharedString],
+    ) -> String {
         let mut text = String::new();
         for (index, buffered) in self.visible_lines().enumerate() {
             if index > 0 {
@@ -316,7 +322,7 @@ impl LogBuffer {
             }
             let stamp = buffered.line.timestamp.and_then(|timestamp| match time {
                 LineTime::Hidden => None,
-                LineTime::Clock => Some(format_log_time(timestamp)),
+                LineTime::Clock => Some(format_log_time(timestamp, zone)),
                 LineTime::Rfc3339 => Some(timestamp.to_string()),
             });
             if let Some(stamp) = stamp {
@@ -337,10 +343,25 @@ impl LogBuffer {
     }
 }
 
-/// `HH:MM:SS.mmm` in UTC, for example `10:47:58.902`. The workspace jiff has no time-zone
-/// support, so local time is not available.
-pub(crate) fn format_log_time(timestamp: jiff::Timestamp) -> String {
-    timestamp.strftime("%H:%M:%S%.3f").to_string()
+/// `HH:MM:SS.mmm` on the clock of `zone`, for example `10:47:58.902`. The tab passes the local
+/// zone, so the column reads like the user's own clock.
+pub(crate) fn format_log_time(timestamp: jiff::Timestamp, zone: &TimeZone) -> String {
+    timestamp
+        .to_zoned(zone.clone())
+        .strftime("%H:%M:%S%.3f")
+        .to_string()
+}
+
+/// The zone's IANA name, such as `Asia/Ho_Chi_Minh`; a zone without one shows its offset now, such
+/// as `UTC+07:00`.
+pub(crate) fn zone_label(zone: &TimeZone) -> String {
+    if let Some(name) = zone.iana_name() {
+        return name.to_owned();
+    }
+    let seconds = zone.to_offset(jiff::Timestamp::now()).seconds();
+    let sign = if seconds < 0 { '-' } else { '+' };
+    let minutes = seconds.unsigned_abs() / 60;
+    format!("UTC{sign}{:02}:{:02}", minutes / 60, minutes % 60)
 }
 
 #[cfg(test)]

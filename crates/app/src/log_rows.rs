@@ -5,6 +5,7 @@ use gpui_kit::{
     AnyElement, App, Div, HighlightStyle, Hsla, IntoElement as _, ParentElement as _, Rems,
     SharedString, Styled as _, StyledText, div, prelude::FluentBuilder as _, rems,
 };
+use jiff::tz::TimeZone;
 
 use crate::line_matcher::LineMatcher;
 use crate::log_buffer::{BufferedLine, LineKind, format_log_time};
@@ -29,6 +30,8 @@ pub(crate) struct RowPrefix {
 /// How every row of a tab is drawn.
 pub(crate) struct RowStyle<'a> {
     pub(crate) shows_timestamps: bool,
+    /// The zone the timestamp column reads in.
+    pub(crate) time_zone: &'a TimeZone,
     pub(crate) wraps_lines: bool,
     pub(crate) shows_json: bool,
     pub(crate) matcher: Option<&'a LineMatcher>,
@@ -37,8 +40,12 @@ pub(crate) struct RowStyle<'a> {
 
 pub(crate) fn log_row(line: &BufferedLine, style: &RowStyle, cx: &App) -> AnyElement {
     let theme = cx.theme();
-    let text = line.line.text.as_str();
     let is_marker = line.kind == LineKind::Marker;
+    // The column is the one that sorts, so a time the line itself starts with would show twice.
+    let text = match (style.shows_timestamps, line.line.timestamp, is_marker) {
+        (true, Some(_), false) => without_leading_timestamp(&line.line.text),
+        _ => line.line.text.as_str(),
+    };
     let json = (style.shows_json && !is_marker)
         .then(|| json_line(text))
         .flatten();
@@ -65,7 +72,11 @@ pub(crate) fn log_row(line: &BufferedLine, style: &RowStyle, cx: &App) -> AnyEle
             (range, highlight)
         })
         .collect();
-    let time = line.line.timestamp.map(format_log_time).unwrap_or_default();
+    let time = line
+        .line
+        .timestamp
+        .map(|timestamp| format_log_time(timestamp, style.time_zone))
+        .unwrap_or_default();
     let text_column = v_flex()
         .flex_1()
         .min_w_0()
@@ -141,4 +152,81 @@ fn level_tag(level: Option<LogLevel>, cx: &App) -> Div {
     };
     tag.text_color(color)
         .child(SharedString::from(level.label()))
+}
+
+/// `text` without a leading ISO 8601 time (`2026-10-05T11:09:25+07:00`, fractions and `Z` allowed)
+/// and the blanks after it; the text of a line that does not start with one.
+fn without_leading_timestamp(text: &str) -> &str {
+    let bytes = text.as_bytes();
+    let digits = |from: usize, count: usize| {
+        bytes
+            .get(from..from + count)
+            .is_some_and(|part| part.iter().all(u8::is_ascii_digit))
+    };
+    let at = |index: usize, wanted: u8| bytes.get(index) == Some(&wanted);
+    let is_date_and_time = digits(0, 4)
+        && at(4, b'-')
+        && digits(5, 2)
+        && at(7, b'-')
+        && digits(8, 2)
+        && at(10, b'T')
+        && digits(11, 2)
+        && at(13, b':')
+        && digits(14, 2)
+        && at(16, b':')
+        && digits(17, 2);
+    if !is_date_and_time {
+        return text;
+    }
+    let mut end = 19;
+    if at(end, b'.') {
+        end += 1;
+        while digits(end, 1) {
+            end += 1;
+        }
+    }
+    if at(end, b'Z') {
+        end += 1;
+    } else if (at(end, b'+') || at(end, b'-')) && digits(end + 1, 2) {
+        end += 3;
+        // The minutes of the offset, with or without a colon.
+        let colon = usize::from(at(end, b':'));
+        if digits(end + colon, 2) {
+            end += colon + 2;
+        }
+    }
+    text[end..].trim_start()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_leading_iso_time_is_removed_with_its_blanks() {
+        for (text, rest) in [
+            ("2026-10-05T11:09:25+07:00\tinfo started", "info started"),
+            ("2026-10-05T11:09:25Z started", "started"),
+            ("2026-10-05T11:09:25.123456789Z started", "started"),
+            ("2026-10-05T11:09:25.5-0530 started", "started"),
+            ("2026-10-05T11:09:25+07:00info started", "info started"),
+            ("2026-10-05T11:09:25 started", "started"),
+        ] {
+            assert_eq!(without_leading_timestamp(text), rest, "{text}");
+        }
+    }
+
+    #[test]
+    fn other_lines_keep_their_text() {
+        for text in [
+            "time=\"2026-10-05T02:16:23+07:00\" level=error",
+            "2026/10/05 02:21:42 http: TLS handshake error",
+            "2026-10-05 11:09:25 started",
+            "2026-10-05T11:09 started",
+            "{\"time\":\"2026-10-05T11:09:25Z\"}",
+            "",
+        ] {
+            assert_eq!(without_leading_timestamp(text), text, "{text}");
+        }
+    }
 }

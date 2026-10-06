@@ -68,11 +68,11 @@ pub(crate) fn find_matches(text: &str, needle: &str) -> Vec<Range<usize>>;
 ## Time format
 
 ```rust
-/// `HH:MM:SS.mmm` in UTC, e.g. 10:47:58.902 (W8 column), via `Timestamp::strftime("%H:%M:%S%.3f")`.
+/// `HH:MM:SS.mmm` on the clock of `zone` (the local zone, read once per tab), e.g. 10:47:58.902, via `Timestamp::to_zoned(zone).strftime("%H:%M:%S%.3f")`.
 pub(crate) fn format_log_time(timestamp: jiff::Timestamp) -> String;
 ```
 
-- The time is UTC because the workspace jiff has no time-zone features (README open item 3). The Timestamps toggle tooltip says so.
+- The zone is the system one (`TimeZone::system()`, the workspace jiff has `tz-system`). The Timestamps toggle tooltip names it. A line that itself starts with an ISO 8601 time loses that time while the column is on, since the column is the one that sorts.
 - `jiff` is already an app dependency, so nothing new is added.
 
 ## Memory bound per tab

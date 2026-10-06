@@ -7,7 +7,7 @@
 - Full layout only, where the histogram is drawn (zoomed dock, pop-out window).
 - Press on the chart, drag, release (decision 12: W8b draws the window but not its effect, so filtering is an interpretation): the buckets under the drag become the window `[first bucket start, last bucket end)`. Only lines whose timestamp falls in it show; lines without a timestamp hide while a window is set (decision 13).
 - The bars keep every bucket: the histogram ignores the window. The window is shaded over its buckets with `theme.selection` (the log match highlight token).
-- Caption, after `Lines per 5s`: a chip `10:47:58 – 10:48:06` (UTC, the `bucket_label` format of the bucket width) and ✕ (ghost xsmall `IconName::X`, tooltip `Show all lines`).
+- Caption, after `Lines per 5s` and its key (a red swatch, "has errors", and a tooltip saying each bar is one bucket and a red bar holds an error line): a chip `10:47:58 – 10:48:06` (local zone, the `bucket_label` format of the bucket width) and ✕ (ghost xsmall `IconName::X`, tooltip `Show all lines`).
 - Cleared by ✕, by a release without movement, and by `restart_stream` (Reconnect, container switch, Previous).
 - New lines keep arriving; those outside the window stay hidden and the view does not jump. As the span grows the bucket width can change; the window stays in time, so its shade moves.
 

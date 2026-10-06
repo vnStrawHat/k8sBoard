@@ -63,5 +63,5 @@ Stream one pod container's logs into a bottom dock. Users open it from the pod r
 
 1. A follow stream on a half-open connection can go silent, because there is no read timeout (0002 open item 1). The user can recover with Reconnect, which is shown while Streaming; there is no automatic detection.
 2. (Deferred) The number of tabs is unbounded. Each tab holds at most 8 MiB and one HTTP stream. Add a cap if users open many tabs.
-3. (Deferred) Local time needs jiff time-zone features, so timestamps are shown in UTC for now.
+3. (Done) Timestamps are shown in the local zone; the tooltip names it.
 4. (Deferred) When a container restarts, its follow stream ends. Auto-reconnect could follow the new instance.

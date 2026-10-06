@@ -20,6 +20,7 @@ use gpui_kit::{
     IntoElement, ParentElement as _, Pixels, Render, SharedString, StyleRefinement, Styled as _,
     Subscription, Task, WeakEntity, Window, div, prelude::FluentBuilder as _, px,
 };
+use jiff::tz::TimeZone;
 
 use crate::cluster_registry::ClusterRef;
 use crate::cluster_runtime::{ClusterRuntime, WatchSubscription};
@@ -29,7 +30,7 @@ use crate::file_export::{ExportState, export_file_name, start_export};
 use crate::kind_row::PodOwner;
 use crate::line_matcher::{FilterMode, InvalidRegex, LineMatcher};
 use crate::log_buffer::{
-    LineKind, LineTime, LineView, LogBuffer, SourceId, SourcedLine, TimeWindow,
+    LineKind, LineTime, LineView, LogBuffer, SourceId, SourcedLine, TimeWindow, zone_label,
 };
 use crate::log_legend::{LegendChip, legend_row, pod_color};
 use crate::log_level::{LevelSet, LogLevel};
@@ -234,6 +235,8 @@ pub(crate) struct LogTab {
     subject: LogSubject,
     instance: LogInstance,
     shows_timestamps: bool,
+    /// The zone of the timestamp column, read once when the tab opens.
+    time_zone: TimeZone,
     wraps_lines: bool,
     shows_json: bool,
     filter_mode: FilterMode,
@@ -303,6 +306,7 @@ impl LogTab {
             subject,
             instance: LogInstance::Current,
             shows_timestamps: defaults.show_timestamps,
+            time_zone: TimeZone::system(),
             wraps_lines: defaults.wrap_lines,
             shows_json: defaults.show_json,
             filter_mode: FilterMode::Plain,
@@ -871,7 +875,9 @@ impl LogTab {
         } else {
             Vec::new()
         };
-        let mut text = self.buffer.visible_text(LineTime::Rfc3339, &prefixes);
+        let mut text = self
+            .buffer
+            .visible_text(LineTime::Rfc3339, &self.time_zone, &prefixes);
         text.push('\n');
         (text, self.buffer.visible_len())
     }
@@ -1094,7 +1100,10 @@ impl LogTab {
                 Toggle::new("log-timestamps")
                     .small()
                     .label("Timestamps")
-                    .tooltip("Kubelet time, UTC")
+                    .tooltip(SharedString::from(format!(
+                        "Kubelet time, shown in your local time zone ({})",
+                        zone_label(&self.time_zone)
+                    )))
                     .checked(self.shows_timestamps)
                     .on_click(cx.listener(|tab, checked: &bool, _, cx| {
                         tab.shows_timestamps = *checked;
@@ -1132,7 +1141,7 @@ impl LogTab {
                         } else {
                             Vec::new()
                         };
-                        let text = tab.buffer.visible_text(time, &prefixes);
+                        let text = tab.buffer.visible_text(time, &tab.time_zone, &prefixes);
                         cx.write_to_clipboard(ClipboardItem::new_string(text));
                     })),
             )
@@ -1397,6 +1406,7 @@ impl LogTab {
             });
         let style = RowStyle {
             shows_timestamps: self.shows_timestamps,
+            time_zone: &self.time_zone,
             wraps_lines: self.wraps_lines,
             shows_json: self.shows_json,
             matcher: self.buffer.view().matcher.as_ref(),

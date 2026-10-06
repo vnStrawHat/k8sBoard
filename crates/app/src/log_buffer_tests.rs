@@ -295,19 +295,21 @@ fn visible_text_writes_prefixes_and_clock_time() {
     );
     let prefixes = [SharedString::from("api-1/app")];
     assert_eq!(
-        buffer.visible_text(LineTime::Clock, &prefixes),
+        buffer.visible_text(LineTime::Clock, &TimeZone::UTC, &prefixes),
         "10:47:58.902 api-1/app hello\n10:47:58.902 world\napi-1/app plain"
     );
     assert_eq!(
-        buffer.visible_text(LineTime::Hidden, &[]),
+        buffer.visible_text(LineTime::Hidden, &TimeZone::UTC, &[]),
         "hello\nworld\nplain"
     );
 }
 
 #[test]
-fn format_log_time_is_utc_with_millis() {
+fn format_log_time_reads_the_clock_of_the_zone_with_millis() {
     let timestamp: jiff::Timestamp = "2024-05-01T10:47:58.902345678Z".parse().expect("valid");
-    assert_eq!(format_log_time(timestamp), "10:47:58.902");
+    assert_eq!(format_log_time(timestamp, &TimeZone::UTC), "10:47:58.902");
+    let plus_seven = TimeZone::fixed(jiff::tz::offset(7));
+    assert_eq!(format_log_time(timestamp, &plus_seven), "17:47:58.902");
 }
 
 #[test]
@@ -330,7 +332,7 @@ fn visible_text_writes_prefixes_and_rfc3339_time() {
         SharedString::from("api-7d9f8c-z9z9z/app"),
     ];
     assert_eq!(
-        buffer.visible_text(LineTime::Rfc3339, &prefixes),
+        buffer.visible_text(LineTime::Rfc3339, &TimeZone::UTC, &prefixes),
         "2024-05-01T10:47:58.902345678Z api-7d9f8c-x2k4q/app hello\n\
          2024-05-01T10:47:58.902345678Z api-7d9f8c-z9z9z/app world\n\
          api-7d9f8c-x2k4q/app plain"
@@ -413,7 +415,7 @@ fn export_writes_markers() {
     push_checked(&mut buffer, vec![line("a"), marker("── restart ──")]);
     let prefixes = [SharedString::from("api-1/app")];
     assert_eq!(
-        buffer.visible_text(LineTime::Hidden, &prefixes),
+        buffer.visible_text(LineTime::Hidden, &TimeZone::UTC, &prefixes),
         "api-1/app a\napi-1/app ── restart ──"
     );
 }
@@ -510,4 +512,17 @@ fn a_window_applies_to_a_marker() {
         ..LineView::default()
     });
     assert_eq!(buffer.visible_len(), 0);
+}
+
+#[test]
+fn zone_label_names_the_zone_or_its_offset() {
+    assert_eq!(zone_label(&TimeZone::UTC), "UTC");
+    assert_eq!(
+        zone_label(&TimeZone::fixed(jiff::tz::offset(7))),
+        "UTC+07:00"
+    );
+    assert_eq!(
+        zone_label(&TimeZone::fixed(jiff::tz::offset(-5))),
+        "UTC-05:00"
+    );
 }
