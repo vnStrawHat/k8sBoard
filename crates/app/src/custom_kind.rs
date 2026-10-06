@@ -280,7 +280,7 @@ fn kind_column(printer: &PrinterColumn, rule: ColumnRule) -> KindColumn {
         }
         ColumnType::Boolean => column(name, 80., Align::Left),
         ColumnType::String if rule == ColumnRule::ConditionStatus => column(name, 80., Align::Left),
-        ColumnType::String => column(name, 160., Align::Left),
+        ColumnType::String => column(name, 160., Align::Left).grows(1),
     }
 }
 

@@ -49,9 +49,9 @@ const USAGE_BAR_WIDTH: f32 = 46.;
 /// Taints takes most of the spare width: it holds the longest values.
 const NODE_COLUMNS: [KindColumn; 9] = [
     column("Name", 112., Align::Left).grows(1).up_to(200.),
-    column("Status", 130., Align::Left),
+    column("Status", 110., Align::Left),
     column("Roles", 140., Align::Left).grows(1).up_to(220.),
-    column("Taints", 160., Align::Left).grows(3),
+    column("Taints", 190., Align::Left).grows(3),
     column("Version", 90., Align::Left),
     column("Internal IP", 120., Align::Left),
     column("CPU", 92., Align::Left),
@@ -486,6 +486,15 @@ fn taints_summary(taints: &[NodeTaint]) -> Option<TaintsSummary> {
     })
 }
 
+/// A taint without the domain of its key (`control-plane:NoSchedule` for
+/// `node-role.kubernetes.io/control-plane:NoSchedule`); the tooltip keeps the whole taint.
+fn short_taint(taint: &str) -> &str {
+    let key_end = taint.find(['=', ':']).unwrap_or(taint.len());
+    taint[..key_end]
+        .rfind('/')
+        .map_or(taint, |at| &taint[at + 1..])
+}
+
 fn taints_cell(
     taints: &[NodeTaint],
     mono: gpui_kit::SharedString,
@@ -513,7 +522,11 @@ fn taints_cell(
         .child(
             truncated_text_with_tooltip(
                 "taints",
-                middle_truncate(&summary.first, capacity.saturating_sub(more_width)).into_owned(),
+                middle_truncate(
+                    short_taint(&summary.first),
+                    capacity.saturating_sub(more_width),
+                )
+                .into_owned(),
                 summary.first,
             )
             .min_w_0(),
@@ -546,6 +559,18 @@ mod tests {
         }
     }
 
+    #[test]
+    fn short_taint_drops_the_key_domain_only() {
+        assert_eq!(
+            short_taint("node-role.kubernetes.io/control-plane:NoSchedule"),
+            "control-plane:NoSchedule"
+        );
+        assert_eq!(
+            short_taint("dedicated=a/b:NoSchedule"),
+            "dedicated=a/b:NoSchedule"
+        );
+        assert_eq!(short_taint("a:NoSchedule"), "a:NoSchedule");
+    }
     #[test]
     fn taints_cell_shows_first_and_plus_count() {
         let taints = [

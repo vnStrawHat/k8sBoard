@@ -279,7 +279,7 @@ static STATEFUL_SETS: KindSpec = KindSpec {
     },
     columns: &[
         column("Ready", 80., Align::Left),
-        column("Service", 200., Align::Left),
+        column("Service", 200., Align::Left).grows(1),
         column("Update strategy", 140., Align::Left),
         AGE_COLUMN,
     ],
@@ -313,7 +313,7 @@ static DAEMON_SETS: KindSpec = KindSpec {
         column("Ready", 80., Align::Right),
         column("Up-to-date", 100., Align::Right),
         column("Available", 90., Align::Right),
-        column("Node selector", 200., Align::Left),
+        column("Node selector", 200., Align::Left).grows(2),
         AGE_COLUMN,
     ],
     read_only_actions: &[KindAction::keyed(
@@ -341,7 +341,7 @@ static REPLICA_SETS: KindSpec = KindSpec {
         column("Desired", 80., Align::Right),
         column("Current", 80., Align::Right),
         column("Ready", 80., Align::Right),
-        column("Owner", 220., Align::Left),
+        column("Owner", 220., Align::Left).grows(1),
         AGE_COLUMN,
     ],
     // Scale belongs to the owning Deployment.
@@ -419,9 +419,9 @@ static SERVICES: KindSpec = KindSpec {
     columns: &[
         column("Type", 130., Align::Left),
         column("Cluster IP", 140., Align::Left),
-        column("External IP", 200., Align::Left),
-        column("Ports", 180., Align::Left),
-        column("Endpoints", 100., Align::Right),
+        column("External IP", 110., Align::Left),
+        column("Ports", 150., Align::Left).grows(1),
+        column("Endpoints", 80., Align::Right),
         AGE_COLUMN,
     ],
     read_only_actions: &[],
@@ -444,8 +444,8 @@ static INGRESSES: KindSpec = KindSpec {
     },
     columns: &[
         column("Class", 100., Align::Left),
-        column("Hosts", 260., Align::Left),
-        column("Backends", 160., Align::Left),
+        column("Hosts", 260., Align::Left).grows(2),
+        column("Backends", 160., Align::Left).grows(1),
         column("Address", 180., Align::Left),
         column("TLS", 140., Align::Left),
         AGE_COLUMN,
@@ -470,7 +470,7 @@ static CONFIG_MAPS: KindSpec = KindSpec {
     },
     columns: &[
         column("Data", 70., Align::Right),
-        column("Used by", 220., Align::Left),
+        column("Used by", 220., Align::Left).grows(2),
         AGE_COLUMN,
     ],
     read_only_actions: &[KindAction::keyed(
@@ -495,7 +495,7 @@ static NETWORK_POLICIES: KindSpec = KindSpec {
         access_check: AccessCheck::ListNetworkPolicies,
     },
     columns: &[
-        column("Pod selector", 220., Align::Left),
+        column("Pod selector", 220., Align::Left).grows(2),
         column("Policy types", 130., Align::Left),
         column("Affects", 90., Align::Right),
         AGE_COLUMN,
@@ -543,10 +543,10 @@ static HORIZONTAL_POD_AUTOSCALERS: KindSpec = KindSpec {
         access_check: AccessCheck::ListHorizontalPodAutoscalers,
     },
     columns: &[
-        column("Target", 220., Align::Left),
+        column("Target", 220., Align::Left).grows(2),
         column("Min / Max", 90., Align::Left),
         column("Replicas", 80., Align::Right),
-        column("Metrics", 200., Align::Left),
+        column("Metrics", 200., Align::Left).grows(2),
         AGE_COLUMN,
     ],
     read_only_actions: &[KindAction::keyed(
@@ -621,12 +621,14 @@ static PERSISTENT_VOLUMES: KindSpec = KindSpec {
         access_check: AccessCheck::ListPersistentVolumes,
     },
     columns: &[
+        // Status and Claim lead: with a drawer open the table is cut at the drawer, and they matter
+        // more than the access mode and the reclaim policy.
+        column("Status", 110., Align::Left),
+        column("Claim", 240., Align::Left).grows(2),
         column("Capacity", 90., Align::Right),
+        column("Class", 150., Align::Left).grows(1),
         column("Access", 90., Align::Left),
         column("Reclaim", 90., Align::Left),
-        column("Status", 110., Align::Left),
-        column("Claim", 240., Align::Left),
-        column("Class", 150., Align::Left),
         AGE_COLUMN,
     ],
     read_only_actions: &[],
@@ -648,7 +650,7 @@ static STORAGE_CLASSES: KindSpec = KindSpec {
         access_check: AccessCheck::ListStorageClasses,
     },
     columns: &[
-        column("Provisioner", 200., Align::Left),
+        column("Provisioner", 200., Align::Left).grows(1),
         column("Reclaim", 90., Align::Left),
         column("Binding mode", 190., Align::Left),
         column("Expansion", 90., Align::Left),
@@ -725,8 +727,8 @@ static ROLE_BINDINGS: KindSpec = KindSpec {
         access_check: AccessCheck::ListRoleBindings,
     },
     columns: &[
-        column("Role", 220., Align::Left),
-        column("Subjects", 300., Align::Left),
+        column("Role", 220., Align::Left).grows(2),
+        column("Subjects", 300., Align::Left).grows(2),
         AGE_COLUMN,
     ],
     read_only_actions: &[],
@@ -748,8 +750,8 @@ static CLUSTER_ROLE_BINDINGS: KindSpec = KindSpec {
         access_check: AccessCheck::ListClusterRoleBindings,
     },
     columns: &[
-        column("ClusterRole", 200., Align::Left),
-        column("Subjects", 300., Align::Left),
+        column("ClusterRole", 200., Align::Left).grows(2),
+        column("Subjects", 300., Align::Left).grows(2),
         AGE_COLUMN,
     ],
     read_only_actions: &[],
@@ -771,7 +773,7 @@ static SERVICE_ACCOUNTS: KindSpec = KindSpec {
         access_check: AccessCheck::ListServiceAccounts,
     },
     columns: &[
-        column("Bound roles", 280., Align::Left),
+        column("Bound roles", 280., Align::Left).grows(2),
         column("Used by", 90., Align::Right),
         AGE_COLUMN,
     ],
@@ -796,7 +798,7 @@ static SECRETS: KindSpec = KindSpec {
     columns: &[
         column("Type", 220., Align::Left),
         column("Keys", 70., Align::Right),
-        column("Used by", 220., Align::Left),
+        column("Used by", 220., Align::Left).grows(2),
         AGE_COLUMN,
     ],
     read_only_actions: &[KindAction::keyed(
@@ -822,7 +824,7 @@ static HELM_RELEASES: KindSpec = KindSpec {
         access_check: AccessCheck::ListSecrets,
     },
     columns: &[
-        column("Chart", 260., Align::Left),
+        column("Chart", 260., Align::Left).grows(2),
         column("App version", 110., Align::Left),
         column("Revision", 80., Align::Right),
         column("Status", 130., Align::Left),
@@ -848,7 +850,7 @@ static CRDS: KindSpec = KindSpec {
         access_check: AccessCheck::ListCustomResourceDefinitions,
     },
     columns: &[
-        column("Group", 200., Align::Left),
+        column("Group", 200., Align::Left).grows(1),
         column("Version", 90., Align::Left),
         column("Scope", 110., Align::Left),
         column("Instances", 90., Align::Right),

@@ -23,7 +23,7 @@ pub(crate) fn network_policy_row(policy: &NetworkPolicySummary) -> KindRow {
             tone: StatusTone::Done,
         })
     } else {
-        KindCell::Mono(terms.join(", ").into())
+        KindCell::label_terms(&terms)
     };
     let types_cell = if types.is_empty() {
         KindCell::Absent

@@ -274,9 +274,41 @@ impl KindCell {
         Self::Mono(text.to_owned().into())
     }
 
+    /// Selector or label terms (`app.kubernetes.io/name=kong`) for a table cell: the key's domain
+    /// prefix is dropped (`name=kong`), because it is the same on every row and cuts the value
+    /// off; the tooltip keeps the full terms. `Absent` without terms.
+    pub(crate) fn label_terms(terms: &[String]) -> Self {
+        if terms.is_empty() {
+            return Self::Absent;
+        }
+        let full = terms.join(", ");
+        let short = terms
+            .iter()
+            .map(|term| short_term(term))
+            .collect::<Vec<_>>()
+            .join(", ");
+        if short == full {
+            return Self::Text(full.into());
+        }
+        Self::Hinted {
+            text: short.into(),
+            tooltip: full.into(),
+        }
+    }
+
     pub(crate) fn text_or_absent(text: Option<&str>) -> Self {
         text.map_or(Self::Absent, |text| Self::Text(text.to_owned().into()))
     }
+}
+
+/// `app.kubernetes.io/name=kong` as `name=kong`; the operator and the values stay as they are.
+fn short_term(term: &str) -> String {
+    let (negation, rest) = term
+        .strip_prefix('!')
+        .map_or(("", term), |rest| ("!", rest));
+    let (key, operator) = rest.split_at(rest.find(['=', '!', ' ']).unwrap_or(rest.len()));
+    let key = key.rsplit('/').next().unwrap_or(key);
+    format!("{negation}{key}{operator}")
 }
 
 impl DetailRow {
@@ -550,6 +582,31 @@ mod tests {
         assert_eq!(percent(-0.3), 0);
         assert_eq!(percent(f64::NAN), 0);
         assert_eq!(percent(f64::INFINITY), 100);
+    }
+
+    #[test]
+    fn label_terms_drop_the_key_domain_and_keep_the_full_terms_for_the_tooltip() {
+        let terms = [
+            "app.kubernetes.io/name=kong".to_owned(),
+            "!legacy.io/old".to_owned(),
+            "tier in (a,b)".to_owned(),
+        ];
+        assert_eq!(
+            KindCell::label_terms(&terms),
+            KindCell::Hinted {
+                text: "name=kong, !old, tier in (a,b)".into(),
+                tooltip: "app.kubernetes.io/name=kong, !legacy.io/old, tier in (a,b)".into(),
+            }
+        );
+    }
+
+    #[test]
+    fn label_terms_without_a_domain_are_plain_text_and_none_is_absent() {
+        assert_eq!(
+            KindCell::label_terms(&["disk=ssd".to_owned()]),
+            KindCell::Text("disk=ssd".into())
+        );
+        assert_eq!(KindCell::label_terms(&[]), KindCell::Absent);
     }
 
     #[test]

@@ -91,9 +91,9 @@ fn pv_row_cells_match_column_count() {
         ResourceKind::PersistentVolumes.columns().len()
     );
     assert_eq!(row.namespace, None);
-    assert_eq!(row.cells[2], KindCell::Text("Delete".into()));
+    assert_eq!(row.cells[5], KindCell::Text("Delete".into()));
     assert_eq!(
-        row.cells[3],
+        row.cells[0],
         KindCell::Toned(labeled("Bound", StatusTone::Ok))
     );
 }
@@ -343,7 +343,7 @@ fn pvc_and_pv_class_link_to_storage_class() {
 fn pv_claim_cell_is_qualified() {
     let row = persistent_volume_row(&volume());
     assert_eq!(
-        row.cells[4],
+        row.cells[1],
         KindCell::Qualified {
             prefix: Some("shop".into()),
             text: "data".into(),
@@ -351,7 +351,7 @@ fn pv_claim_cell_is_qualified() {
     );
     let mut available = volume();
     available.claim = None;
-    assert_eq!(persistent_volume_row(&available).cells[4], KindCell::Absent);
+    assert_eq!(persistent_volume_row(&available).cells[1], KindCell::Absent);
 }
 
 #[test]

@@ -58,12 +58,12 @@ Pods of the namespace with any container mount whose source is `PersistentVolume
 
 | Column | Width | Cell |
 |---|---|---|
+| Status | 110 | `Toned(phase_label)` |
+| Claim | 240, weight 2 | `Qualified { prefix: namespace, text: name }`, or `Absent` |
 | Capacity | 90 r | `size_cell(capacity)` |
+| Class | 150, weight 1 | `Text` or `Absent` |
 | Access | 90 | `modes_text` |
 | Reclaim | 90 | `Text(reclaim_policy)` |
-| Status | 110 | `Toned(phase_label)` |
-| Claim | 240 | `Qualified { prefix: namespace, text: name }`, or `Absent` |
-| Class | 150 | `Text` or `Absent` |
 | Age | 70 r | |
 
 Status: `phase_label`.
