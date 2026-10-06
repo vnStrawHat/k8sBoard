@@ -160,13 +160,27 @@ fn segments_drop_points_before_start() {
 
 #[test]
 fn reference_labels_stay_inside_the_chart() {
+    const FLOOR: f32 = 100.;
     // Far from the top: just above the line.
-    assert_eq!(reference_label_y(60.), 60. - LABEL_SIZE - 3.);
+    assert_eq!(reference_label_y(60., &[], FLOOR), 60. - LABEL_SIZE - 3.);
     // A limit at the very top (y = the top gutter) would put the label above the chart.
-    assert_eq!(reference_label_y(GUTTER_TOP), GUTTER_TOP + 3.);
+    assert_eq!(reference_label_y(GUTTER_TOP, &[], FLOOR), GUTTER_TOP + 3.);
     for line in [0., 3., 6., 12., 13.] {
-        assert!(reference_label_y(line) >= 0., "{line}");
+        assert!(reference_label_y(line, &[], FLOOR) >= 0., "{line}");
     }
+}
+
+#[test]
+fn a_label_does_not_sit_on_another_reference_line() {
+    const FLOOR: f32 = 100.;
+    let above = 60. - LABEL_SIZE - 3.;
+    // Another line 8 px above the line would cross the text above it, so the label goes below.
+    assert_eq!(reference_label_y(60., &[52.], FLOOR), 63.);
+    // A line well clear of the text changes nothing.
+    assert_eq!(reference_label_y(60., &[20., 90.], FLOOR), above);
+    // Both sides crossed, or no room below: the label stays above.
+    assert_eq!(reference_label_y(60., &[52., 66.], FLOOR), above);
+    assert_eq!(reference_label_y(95., &[88.], FLOOR), 95. - LABEL_SIZE - 3.);
 }
 
 #[test]

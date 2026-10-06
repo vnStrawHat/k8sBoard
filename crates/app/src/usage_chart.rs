@@ -47,6 +47,8 @@ const THREE_QUARTERS: f64 = 0.75;
 const MIN_THREE_QUARTER_POWER: f64 = 8.;
 /// A reference label keeps this far left of the right edge, clear of the newest value's dot.
 const LABEL_INSET: f32 = 14.;
+/// Reference labels read brighter than the muted axis text.
+const REFERENCE_LABEL_OPACITY: f32 = 0.85;
 
 pub(crate) struct ChartSeries {
     pub(crate) name: SharedString,
@@ -215,10 +217,24 @@ fn nearest_tick(points: &[(jiff::Timestamp, Option<f64>)], at: jiff::Timestamp) 
 }
 
 /// The top of a reference line's label: above the line, or below it when the line is too near the
-/// top of the chart for the text to fit.
-fn reference_label_y(line_y: f32) -> f32 {
+/// top of the chart for the text to fit, or when another reference line (`others`, as y values)
+/// would run through the text above it. Below must stay above `floor`, the chart's baseline; if
+/// neither side is clear the label stays above.
+fn reference_label_y(line_y: f32, others: &[f32], floor: f32) -> f32 {
     let above = line_y - LABEL_SIZE - 3.;
-    if above >= 0. { above } else { line_y + 3. }
+    let below = line_y + 3.;
+    let is_crossed = |top: f32| {
+        others
+            .iter()
+            .any(|other| *other >= top - 1. && *other <= top + LABEL_SIZE + 1.)
+    };
+    if above < 0. {
+        return below;
+    }
+    if is_crossed(above) && below + LABEL_SIZE <= floor && !is_crossed(below) {
+        return below;
+    }
+    above
 }
 
 /// Where the chart is drawn inside its bounds.
@@ -298,9 +314,14 @@ impl Plot for UsageChart {
     fn paint(&mut self, bounds: Bounds<Pixels>, window: &mut Window, cx: &mut App) {
         let model = Rc::clone(&self.model);
         let plane = Plane::of(&model, bounds_size(bounds));
-        let (grid, muted, background) = {
+        let (grid, muted, foreground, background) = {
             let theme = cx.theme();
-            (theme.chart_grid, theme.muted_foreground, theme.background)
+            (
+                theme.chart_grid,
+                theme.muted_foreground,
+                theme.foreground.opacity(REFERENCE_LABEL_OPACITY),
+                theme.background,
+            )
         };
         let bad = tone_color(StatusTone::Bad, cx);
         let origin = bounds.origin;
@@ -379,13 +400,29 @@ impl Plot for UsageChart {
         }
 
         // Request, allocatable, and limit lines, labelled just above.
-        for reference in &model.references {
+        let line_ys: Vec<f32> = model
+            .references
+            .iter()
+            .map(|reference| plane.y(reference.value))
+            .collect();
+        for (index, reference) in model.references.iter().enumerate() {
             let color = match reference.kind {
                 ReferenceKind::Limit => bad,
                 ReferenceKind::Request | ReferenceKind::Allocatable => muted,
             };
-            let y = plane.y(reference.value);
-            let label_y = reference_label_y(y);
+            // The axis text is muted, so a label in the same shade would read as more axis.
+            let label_color = match reference.kind {
+                ReferenceKind::Limit => bad,
+                ReferenceKind::Request | ReferenceKind::Allocatable => foreground,
+            };
+            let y = line_ys[index];
+            let others: Vec<f32> = line_ys
+                .iter()
+                .enumerate()
+                .filter(|(other, _)| *other != index)
+                .map(|(_, y)| *y)
+                .collect();
+            let label_y = reference_label_y(y, &others, plane.baseline());
             Grid::new()
                 .y([y - GUTTER_TOP])
                 .stroke(color)
@@ -395,7 +432,7 @@ impl Plot for UsageChart {
                 Text::new(
                     format!("{} {}", reference.label, model.unit.format(reference.value)),
                     point(px(GUTTER_LEFT + plane.width - LABEL_INSET), px(label_y)),
-                    color,
+                    label_color,
                 )
                 .font_size(px(LABEL_SIZE))
                 .align(TextAlign::Right),
@@ -545,8 +582,8 @@ fn has_points_in_range(model: &UsageChartModel) -> bool {
 /// How much of the chart's range the data may fill before the chart stops saying it is still
 /// collecting: a line a quarter of the way across is a stub, not a trend.
 const COLLECTING_SHARE: f64 = 0.25;
-/// The share of the plot width the collecting text may take, clear of the data on the right.
-const COLLECTING_OVERLAY_WIDTH: f32 = 0.5;
+/// The share of the chart width the collecting text may take, clear of the data on the right.
+const COLLECTING_OVERLAY_WIDTH: f32 = 0.75;
 /// Charts of this step or finer are fed by the app's own polling, which keeps 24 hours. The coarser
 /// ones come from a metrics source with its own retention, so they never say "collecting".
 const POLLED_STEP_LIMIT: Duration = Duration::from_secs(60);
@@ -703,7 +740,17 @@ pub(crate) fn usage_chart_card(
             .text_xs()
             .text_color(muted)
             .text_center()
-            .child(div().max_w_full().child(text))
+            // A chip over the background, so a dashed reference line does not strike the text.
+            .child(
+                div()
+                    .max_w_full()
+                    .whitespace_nowrap()
+                    .overflow_hidden()
+                    .px_1p5()
+                    .rounded(theme.radius)
+                    .bg(theme.background)
+                    .child(text),
+            )
     });
     v_flex()
         .w_full()

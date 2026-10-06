@@ -51,7 +51,7 @@ fn nearest_tick(points: &[(jiff::Timestamp, Option<f64>)], at: jiff::Timestamp) 
 
 `max_gap` = 2.5 × `model.step` (decision 12). Points before `start` are dropped.
 
-**Short history.** A chart with a step of 60 s or finer (the app's own polling, kept 24 h) whose data spans under a quarter of its range puts `Collecting · {n} min of data (kept 24 h)` over the empty left of the plot (`collecting_text`); source charts (coarser step) never do.
+**Short history.** A chart with a step of 60 s or finer (the app's own polling, kept 24 h) whose data spans under a quarter of its range puts `Collecting · {n} min of data (kept 24 h)` on a background chip over the empty left of the plot (`collecting_text`); source charts (coarser step) never do.
 
 ## Paint (inside `bounds`)
 
@@ -63,7 +63,7 @@ fn nearest_tick(points: &[(jiff::Timestamp, Option<f64>)], at: jiff::Timestamp) 
 | Area | one series only: per segment, from the baseline | `chart_1.opacity(0.1)` |
 | Line | per segment, linear, 2 px | series `i` → `chart_1`, `chart_2` |
 | Last dot | at the newest non-`None` point of each series, 8 px, 2 px ring | series color, ring `background` |
-| References | dashed (4, 3) 1 px full-width line; label `{label} {value}` right-aligned just above it (below it near the top), 14 px left of the right edge so the newest value's dot never covers it; a request equal to the limit within 0.5% is one Limit line labelled `request = limit` | Request, Allocatable → `muted_foreground`; Limit → `tone_color(Bad)` |
+| References | dashed (4, 3) 1 px full-width line; label `{label} {value}` right-aligned just above it (below it near the top, or when another reference line would cross the text above it and there is room below), 14 px left of the right edge so the newest value's dot never covers it; a request equal to the limit within 0.5% is one Limit line labelled `request = limit` | Lines: Request, Allocatable → `muted_foreground`; Limit → `tone_color(Bad)`. Labels: Request, Allocatable → `foreground` at 85 % (a different shade from the muted axis text); Limit → `tone_color(Bad)` |
 | Markers | 8 px dot centered on the baseline at `x_at(marker)`, 2 px ring | `tone_color(Bad)`, ring `background` |
 
 Order: grid, area, lines, references, markers, last dots. A reference above `y_max` cannot happen (`y_max` includes it).
