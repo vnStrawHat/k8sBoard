@@ -431,3 +431,75 @@ fn a_running_forward_shows_its_address_and_a_copy_tooltip_apart_from_stop() {
     assert_eq!(forward_address_text(19090), "localhost:19090");
     assert_eq!(copy_address_tooltip(19090), "Copy localhost:19090");
 }
+
+fn owned_pod(controller: Option<(&str, &str)>, labels: &[&str]) -> PodSummary {
+    PodSummary {
+        controller: controller.map(|(kind, name)| cluster::ControllerRef {
+            kind: kind.to_owned(),
+            name: name.to_owned(),
+        }),
+        labels: labels.iter().map(|term| (*term).to_owned()).collect(),
+        ..pod(vec![container(
+            "web",
+            ContainerKind::Main,
+            vec![tcp(None, 80)],
+        )])
+    }
+}
+
+#[test]
+fn a_deployment_pod_forwards_to_its_deployment() {
+    let pod = owned_pod(
+        Some(("ReplicaSet", "web-6d9f7c")),
+        &["app=web", "pod-template-hash=6d9f7c"],
+    );
+    let subject = pod_drawer_subject(&pod);
+    assert_eq!(
+        subject.target,
+        TargetSpec {
+            kind: TargetKind::Deployment,
+            name: "web".to_owned()
+        }
+    );
+    // The ports are the pod's own.
+    assert_eq!(subject.ports.len(), 1);
+}
+
+#[test]
+fn a_stateful_set_pod_forwards_to_its_stateful_set() {
+    let pod = owned_pod(Some(("StatefulSet", "db")), &[]);
+    assert_eq!(
+        pod_drawer_subject(&pod).target,
+        TargetSpec {
+            kind: TargetKind::StatefulSet,
+            name: "db".to_owned()
+        }
+    );
+}
+
+#[test]
+fn a_pod_without_a_rollout_owner_forwards_by_name() {
+    let by_name = TargetSpec::pod("api-0");
+    // No owner, a Job, a DaemonSet, and a ReplicaSet that is not a Deployment's.
+    for controller in [None, Some(("Job", "once")), Some(("DaemonSet", "agent"))] {
+        let pod = owned_pod(controller, &["pod-template-hash=6d9f7c"]);
+        assert_eq!(pod_drawer_subject(&pod).target, by_name, "{controller:?}");
+    }
+    let bare = owned_pod(Some(("ReplicaSet", "standalone")), &[]);
+    assert_eq!(pod_drawer_subject(&bare).target, by_name);
+    // A hash that does not end the ReplicaSet name is not a Deployment's ReplicaSet either.
+    let mismatch = owned_pod(
+        Some(("ReplicaSet", "web-6d9f7c")),
+        &["pod-template-hash=aaaa"],
+    );
+    assert_eq!(pod_drawer_subject(&mismatch).target, by_name);
+}
+
+#[test]
+fn the_table_menu_keeps_the_pod_target() {
+    let pod = owned_pod(
+        Some(("ReplicaSet", "web-6d9f7c")),
+        &["pod-template-hash=6d9f7c"],
+    );
+    assert_eq!(pod_subject(&pod).target, TargetSpec::pod("api-0"));
+}

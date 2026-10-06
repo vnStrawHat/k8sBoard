@@ -30,7 +30,7 @@ use crate::kubelet_history::KubeletHistory;
 use crate::monitor_tab::{MonitorView, monitor_tab};
 use crate::pod_diagnosis::{ProbeKind, ProbeResult, next_retry, probe_of, probe_result};
 use crate::pod_drawer::{UsageRow, container_usage_row, kind_tag};
-use crate::port_forward_menu::{PortButtons, PortChoice, pod_subject};
+use crate::port_forward_menu::{PortButtons, PortChoice, pod_drawer_subject};
 use crate::status_tone::{StatusLabel, StatusTone, container_state_label, tone_color, toned_text};
 use crate::table_selection::ResourceKey;
 use crate::usage_bar::usage_bar;
@@ -248,7 +248,7 @@ fn info_body(input: &ContainerDetailInput<'_>, cx: &Context<AppShell>) -> AnyEle
     if container.ports.is_empty() {
         column = column.child(absent_text(cx));
     }
-    let forward_subject = pod_subject(input.pod);
+    let forward_subject = pod_drawer_subject(input.pod);
     for (index, port) in container.ports.iter().enumerate() {
         let mut text = format!("{}/{}", port.port, port.protocol);
         if let Some(name) = &port.name {

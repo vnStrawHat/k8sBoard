@@ -35,7 +35,7 @@ use crate::kind_row::deployment_of_pod;
 use crate::monitor_tab::{MonitorView, monitor_tab};
 use crate::object_events::{event_subject, recent_events};
 use crate::pod_diagnosis::{PodDiagnosis, pod_diagnosis};
-use crate::port_forward_menu::{ForwardMenu, PortButtons, pod_subject};
+use crate::port_forward_menu::{ForwardMenu, PortButtons, pod_drawer_subject};
 use crate::related_objects::key_related_subject;
 use crate::resource_actions::{
     LogsMenu, PodMenuItems, PodMenuLinks, ShellMenu, container_menu, pod_menu, view_logs_reason,
@@ -180,7 +180,7 @@ fn pod_menu_button(
                     LogsMenu::of(pod, &live.access),
                     live.connection().clone(),
                     ShellMenu::of(pod, &guard),
-                    ForwardMenu::of(pod_subject(pod), &row.cluster, &guard),
+                    ForwardMenu::of(pod_drawer_subject(pod), &row.cluster, &guard),
                 )
             };
             let shell_items = shell_menu.items(&row, &shell, window, cx);

@@ -89,6 +89,40 @@ pub(crate) fn pod_subject(pod: &PodSummary) -> ForwardSubject {
     }
 }
 
+/// The Deployment or StatefulSet that owns `pod`: a forward to it finds the pod again after a
+/// rollout, where a forward to the pod's own name ends with `Target lost`. A Deployment is reached
+/// through the pod's ReplicaSet, named `{deployment}-{pod-template-hash}`; a ReplicaSet that does
+/// not follow that name has no Deployment to forward to.
+fn rollout_owner(pod: &PodSummary) -> Option<TargetSpec> {
+    let controller = pod.controller.as_ref()?;
+    let (kind, name) = match controller.kind.as_str() {
+        "StatefulSet" => (TargetKind::StatefulSet, controller.name.as_str()),
+        "ReplicaSet" => {
+            let hash = pod
+                .labels
+                .iter()
+                .find_map(|term| term.strip_prefix("pod-template-hash="))?;
+            let name = controller.name.strip_suffix(&format!("-{hash}"))?;
+            (TargetKind::Deployment, name)
+        }
+        _ => return None,
+    };
+    (!name.is_empty()).then(|| TargetSpec {
+        kind,
+        name: name.to_owned(),
+    })
+}
+
+/// The subject of a pod's drawer: the pod's ports, forwarded to its Deployment or StatefulSet when
+/// it has one, so the forward survives a rollout. A pod without such an owner is forwarded by name.
+pub(crate) fn pod_drawer_subject(pod: &PodSummary) -> ForwardSubject {
+    let mut subject = pod_subject(pod);
+    if let Some(owner) = rollout_owner(pod) {
+        subject.target = owner;
+    }
+    subject
+}
+
 fn template_ports(containers: &[TemplateContainer]) -> Vec<PortChoice> {
     containers
         .iter()
