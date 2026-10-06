@@ -421,6 +421,14 @@ impl PortForwards {
             .count()
     }
 
+    /// The running forwards that are not saved presets: a preset starts again with the app, the
+    /// others end for good when the app or the cluster is left.
+    pub(crate) fn running_unsaved(&self) -> impl Iterator<Item = &Forward> {
+        self.forwards
+            .iter()
+            .filter(|forward| forward.state.is_running() && !forward.is_preset)
+    }
+
     /// A running forward of this exact target and remote port in `cluster`: what a Forward button
     /// shows as live.
     pub(crate) fn running_for(

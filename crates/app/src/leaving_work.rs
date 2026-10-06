@@ -22,6 +22,8 @@ use crate::fresh_enter::FreshEnter;
 pub(crate) struct LeavingWork {
     /// Open shell tabs: each session ends and a new shell starts empty.
     pub(crate) shells: usize,
+    /// Running port-forwards that are not saved presets: each stops and does not come back.
+    pub(crate) forwards: usize,
     /// Clusters with a batch still committing: it stops at the next item and the rest read `Not sent`.
     pub(crate) batches: usize,
     /// The line about the open edit text that was not applied (`Unsaved changes to Deployment/payments/api`,
@@ -36,6 +38,7 @@ pub(crate) struct LeavingWork {
 impl LeavingWork {
     pub(crate) fn is_empty(&self) -> bool {
         self.shells == 0
+            && self.forwards == 0
             && self.batches == 0
             && self.node_shells == 0
             && self.drains.is_empty()
@@ -49,6 +52,11 @@ impl LeavingWork {
             0 => {}
             1 => lines.push("1 shell will close".to_owned()),
             count => lines.push(format!("{count} shells will close")),
+        }
+        match self.forwards {
+            0 => {}
+            1 => lines.push("1 port-forward will stop".to_owned()),
+            count => lines.push(format!("{count} port-forwards will stop")),
         }
         match self.batches {
             0 => {}
@@ -87,6 +95,8 @@ impl AppShell {
         LeavingWork {
             shells: self.dock.read(cx).shell_count_of(leaving, cx),
             node_shells: self.dock.read(cx).node_shell_count_of(leaving, cx),
+            // Forwards survive a switch (spec 0029 decision 20); only a quit ends them.
+            forwards: 0,
             drains: self.running_drain_names_of(leaving, cx),
             batches: leaving
                 .iter()
@@ -184,6 +194,20 @@ mod tests {
             }
             .lines(),
             ["2 shells will close".to_owned()]
+        );
+    }
+
+    #[test]
+    fn port_forwards_are_counted_in_singular_and_plural() {
+        let forwards = |forwards| LeavingWork {
+            forwards,
+            ..LeavingWork::default()
+        };
+        assert!(!forwards(1).is_empty());
+        assert_eq!(forwards(1).lines(), ["1 port-forward will stop".to_owned()]);
+        assert_eq!(
+            forwards(2).lines(),
+            ["2 port-forwards will stop".to_owned()]
         );
     }
 

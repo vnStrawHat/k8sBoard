@@ -152,15 +152,17 @@ impl AppShell {
     /// for its delete. Otherwise it starts every delete, says so, and returns `false`; the window
     /// closes itself when the last one reports (each bounded by the request timeout).
     pub(crate) fn main_window_may_close(&mut self, cx: &mut Context<Self>) -> bool {
-        // A running drain is asked about first (spec 0034): leaving stops it, and its nodes stay
-        // cordoned. The answer starts the close again, which then does not ask a second time.
+        // Running work is asked about first (spec 0034): a drain stops and its nodes stay
+        // cordoned, a live shell or an unsaved port-forward ends. The answer starts the close
+        // again, which then does not ask a second time.
         if !self.is_quit_confirmed {
-            let drains = self.running_drain_names(cx);
-            if !drains.is_empty() {
-                let work = LeavingWork {
-                    drains,
-                    ..LeavingWork::default()
-                };
+            let work = LeavingWork {
+                drains: self.running_drain_names(cx),
+                shells: self.dock.read(cx).live_shell_count(cx),
+                forwards: self.port_forwards.read(cx).running_unsaved().count(),
+                ..LeavingWork::default()
+            };
+            if !work.is_empty() {
                 self.confirm_leaving(
                     work,
                     |shell, cx| {

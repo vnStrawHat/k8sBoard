@@ -57,7 +57,7 @@ Restart = Stop + `start_forward(existing)`; Retry and Start (preset) = `start_fo
 | Cluster switch (0026 `release_all`) or 0027 slot released (`release_slot`) | nothing: forwards keep running on their own connection clone; their rows keep the cluster label (0026 decision 1 amended; 0036 shells close instead). Neither path touches `PortForwards`, and forwards add no `leaving_work` line |
 | Lock toggled on (viewed cluster) | `PortForwards` observes each slot session's `lock` (0030 step 2b, in flight; the merged `ClusterSession::guard` still derives the lock from the profile) and sends `Refuse` to that cluster's running forwards: new local connections are closed, open ones continue, rows show `Paused · read-only`; unlock sends `Accept`. Start/Restart/Retry show `{cluster} is read-only`. A cluster that leaves the view keeps its last control |
 | Kubeconfig credentials rotate | handled by the kube client of the held connection |
-| App quit | `PortForwards` dropped with `AppShell`; runtime shutdown aborts the tasks (existing 2 s timeout) |
+| App quit | with a running forward that is not a saved preset (or a live shell), the window close asks first through `leaving_work` ("{N} port-forwards will stop", UX walk I6); then `PortForwards` is dropped with `AppShell` and runtime shutdown aborts the tasks (existing 2 s timeout) |
 | Pod deleted | transport reconnect (forward-transport.md step 7) |
 | Settings presets edited elsewhere (0025 window) | `observe_global` reloads preset rows that are `Stopped`; running rows are untouched |
 

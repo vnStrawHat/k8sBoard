@@ -611,6 +611,39 @@ fn twenty_first_forward_is_refused(cx: &mut TestAppContext) {
     assert_eq!(forwards.rows(cx).len(), MAX_RUNNING_FORWARDS);
 }
 
+#[gpui_kit::test]
+fn quitting_with_a_running_forward_asks_first_and_a_preset_does_not(cx: &mut TestAppContext) {
+    let forwards = two_clusters("quit-asks", Answers::Pod, cx);
+    let add = |is_preset, cx: &mut TestAppContext| {
+        forwards.fixture.shell.update(cx, |shell, cx| {
+            shell.port_forwards.update(cx, |list, _| {
+                let mut fixture = running_fixture(&forwards.stg, "api-0");
+                fixture.is_preset = is_preset;
+                list.insert_fixture(fixture);
+            });
+        });
+    };
+    let may_close = |cx: &mut TestAppContext| {
+        forwards
+            .fixture
+            .shell
+            .update(cx, |shell, cx| shell.main_window_may_close(cx))
+    };
+    add(true, cx);
+    assert!(
+        may_close(cx),
+        "a saved preset starts again, so it does not ask"
+    );
+    add(false, cx);
+    assert!(!may_close(cx), "the window waits for the answer");
+    cx.run_until_parked();
+    let asked = forwards
+        .fixture
+        .shell
+        .read_with(cx, |shell, _| shell.last_leaving.clone());
+    assert_eq!(asked, Some(vec!["1 port-forward will stop".to_owned()]));
+}
+
 fn running_fixture(cluster: &ClusterRef, pod: &str) -> ForwardFixture {
     ForwardFixture {
         cluster: cluster.clone(),

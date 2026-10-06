@@ -1049,3 +1049,21 @@ fn a_tab_takes_the_saved_shell_and_scrollback_but_an_attach_has_no_shell_choice(
         .expect("open the test window");
     });
 }
+
+#[gpui_kit::test]
+fn the_close_tooltip_says_a_live_shell_ends(cx: &mut TestAppContext) {
+    let fixture = open_tab(800., 500., cx);
+    let tooltip = |cx: &mut TestAppContext| fixture.tab.read_with(cx, |tab, _| tab.close_tooltip());
+    assert_eq!(tooltip(cx), "Close");
+    apply(&fixture, ShellUpdate::Started, cx);
+    assert_eq!(tooltip(cx), "Close (ends the shell)");
+    apply(
+        &fixture,
+        ShellUpdate::Exited(ShellExit {
+            code: Some(0),
+            message: None,
+        }),
+        cx,
+    );
+    assert_eq!(tooltip(cx), "Close");
+}

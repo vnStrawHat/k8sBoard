@@ -109,6 +109,16 @@ impl DockTab {
         }
     }
 
+    /// The tooltip of the × button: a pinned drain says why it stays, a live shell says the close
+    /// ends it.
+    fn close_tooltip(&self, cx: &App) -> &'static str {
+        match self {
+            Self::Drain(_) if self.is_pinned(cx) => "Cancel the drain first",
+            Self::Shell(tab) => tab.read(cx).close_tooltip(),
+            Self::Logs(_) | Self::Drain(_) => "Close",
+        }
+    }
+
     fn title(&self, cx: &App) -> String {
         match self {
             Self::Logs(tab) => tab.read(cx).label(),
@@ -452,6 +462,16 @@ impl Dock {
             .filter(|tab| {
                 let tab = tab.read(cx);
                 clusters.contains(tab.cluster()) && !tab.kind().is_node_shell()
+            })
+            .count()
+    }
+
+    /// How many shell tabs hold a live session, node shells apart: what quitting the app ends.
+    pub(crate) fn live_shell_count(&self, cx: &App) -> usize {
+        self.shell_tabs(cx)
+            .filter(|tab| {
+                let tab = tab.read(cx);
+                tab.is_live() && !tab.kind().is_node_shell()
             })
             .count()
     }
@@ -809,11 +829,7 @@ impl Dock {
                     .xsmall()
                     .icon(Icon::new(IconName::X))
                     .disabled(tab.is_pinned(cx))
-                    .tooltip(if tab.is_pinned(cx) {
-                        "Cancel the drain first"
-                    } else {
-                        "Close"
-                    })
+                    .tooltip(tab.close_tooltip(cx))
                     .on_click(cx.listener(move |dock, _, _, cx| dock.close_tab(index, cx))),
             )
     }

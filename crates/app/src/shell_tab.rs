@@ -820,6 +820,20 @@ impl ShellTab {
         }
     }
 
+    /// Whether a session runs in the tab: closing it ends the process.
+    pub(crate) fn is_live(&self) -> bool {
+        self.state == ShellState::Live
+    }
+
+    /// The tooltip of the tab's close button: a live shell says the close ends it.
+    pub(crate) fn close_tooltip(&self) -> &'static str {
+        if self.is_live() {
+            "Close (ends the shell)"
+        } else {
+            "Close"
+        }
+    }
+
     /// The dot of the tab: dim once the session has ended.
     pub(crate) fn tone(&self) -> StatusTone {
         match self.state {
