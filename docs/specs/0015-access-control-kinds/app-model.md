@@ -86,6 +86,7 @@ Each row is then lookups only. Bound roles needs the companion ready; Used by ne
 - `FilterPreset::HideSystem`; `KindRow::in_preset(HideSystem)` = `!row.name.starts_with("system:")`; Pods and Nodes rows return true.
 - `default_filter`: ClusterRoles and ClusterRoleBindings start with `preset: Some(HideSystem)`.
 - `render_header_actions`: those two screens get `toggle_button("hide-system", "Hide system", is_on)`, tooltip "Hide objects named system:*", built like Hide inactive. `Clear filters` turns it off; `reveal` clears it when it hides the target (0012 decision 27).
+- UX batch 5c: while the preset is on, the filter bar shows a `Hide system ×` chip (also `Hide inactive ×` on ReplicaSets) and the header count reads `95 total, 62 hidden (system:*)`; with typed text or other chips it reads `N of M match`.
 
 ## Diagnosis and menus
 

@@ -111,6 +111,7 @@ pub(crate) fn filter_bar(
         .border_color(cx.theme().border)
         .children(namespace_chips(state, shell, cx))
         .children(node_summary_chips(state, cx))
+        .children(hidden_preset_chip(state, cx))
         .children(chips)
         .children(add_filter_button(state, cx))
         .child(
@@ -127,6 +128,27 @@ pub(crate) fn filter_bar(
                 .child(columns_button(state, cx)),
         )
         .into_any_element()
+}
+
+/// `Hide system ×` or `Hide inactive ×` while that default filter is on, so a screen that hides
+/// rows says so beside the Filter button. A click turns it off. The Nodes presets have their own
+/// summary chips.
+fn hidden_preset_chip(state: &ToolkitState, cx: &Context<AppShell>) -> Option<AnyElement> {
+    let label = match state.preset {
+        Some(FilterPreset::HideSystem) => "Hide system",
+        Some(FilterPreset::HideInactive) => "Hide inactive",
+        Some(FilterPreset::Nodes(_)) | None => return None,
+    };
+    Some(
+        Button::new("preset-chip")
+            .small()
+            .outline()
+            .label(label)
+            .child(Icon::new(IconName::X).size_3())
+            .tooltip("Remove filter")
+            .on_click(cx.listener(|shell, _, _, cx| shell.set_preset(None, cx)))
+            .into_any_element(),
+    )
 }
 
 /// `Namespace: all ▾`, which opens the picker, or one removable chip per picked namespace.

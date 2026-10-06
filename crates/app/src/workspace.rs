@@ -237,9 +237,7 @@ impl AppShell {
         };
         // A filter replaces the total with how many rows match it.
         let count = match (toolkit, count) {
-            (Some(state), Some(_)) if state.is_filtering => {
-                Some(match_count_label(state.shown, state.total))
-            }
+            (Some(state), Some(_)) if state.is_filtering => Some(filtered_count_label(state)),
             (_, count) => count,
         };
         let count = count.map(|count| match live.and_then(LiveCluster::explorer_flow) {
@@ -1017,6 +1015,25 @@ fn match_count_label(shown: usize, total: usize) -> String {
     format!("{} of {} match", group_digits(shown), group_digits(total))
 }
 
+/// The header count of a filtered list. A list that only a default preset trims says what was hidden
+/// (`95 total, 62 hidden (system:*)`), because a plain `33 of 95 match` hides why someone's row is gone.
+fn filtered_count_label(state: &ToolkitState) -> String {
+    let only_preset = state.text.trim().is_empty() && state.chips.is_empty();
+    let reason = match state.preset {
+        Some(FilterPreset::HideSystem) => "system:*",
+        Some(FilterPreset::HideInactive) => "inactive",
+        Some(FilterPreset::Nodes(_)) | None => "",
+    };
+    if only_preset && !reason.is_empty() {
+        return format!(
+            "{} total, {} hidden ({reason})",
+            group_digits(state.total),
+            group_digits(state.total.saturating_sub(state.shown)),
+        );
+    }
+    match_count_label(state.shown, state.total)
+}
+
 /// `4 nodes`, then up to three roles with their counts, such as `4 nodes · 1 control-plane`.
 fn nodes_count_text(count: usize, roles: &[(String, usize)]) -> String {
     let mut text = count_label(count, "node", "nodes");
@@ -1347,6 +1364,38 @@ mod tests {
     fn match_count_label_groups_both_numbers() {
         assert_eq!(match_count_label(38, 1_284), "38 of 1,284 match");
         assert_eq!(match_count_label(0, 12), "0 of 12 match");
+    }
+
+    #[test]
+    fn a_default_preset_names_what_it_hides() {
+        let state = |text: &str, preset| ToolkitState {
+            screen: Screen::Kind(ResourceKind::ClusterRoles),
+            text: text.to_owned(),
+            chips: Vec::new(),
+            hidden: Default::default(),
+            columns: Vec::new(),
+            shown: 33,
+            total: 95,
+            is_filtering: true,
+            checked: 0,
+            preset,
+            node_counts: None,
+            scope: None,
+        };
+        assert_eq!(
+            filtered_count_label(&state("", Some(FilterPreset::HideSystem))),
+            "95 total, 62 hidden (system:*)"
+        );
+        assert_eq!(
+            filtered_count_label(&state("", Some(FilterPreset::HideInactive))),
+            "95 total, 62 hidden (inactive)"
+        );
+        // Typed text shares the blame, so the plain count stays.
+        assert_eq!(
+            filtered_count_label(&state("kube", Some(FilterPreset::HideSystem))),
+            "33 of 95 match"
+        );
+        assert_eq!(filtered_count_label(&state("kube", None)), "33 of 95 match");
     }
 
     #[gpui_kit::test]
