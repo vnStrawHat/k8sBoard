@@ -2987,18 +2987,24 @@ pub(crate) fn open_shell_picker(
     window: &mut Window,
     cx: &mut App,
 ) {
+    use gpui_kit::Focusable as _;
     use gpui_kit::component::WindowExt as _;
     let menu = PopupMenu::build(window, cx, move |menu, _, _| {
         choice_items(menu, &choices, &open)
     });
+    let focus = menu.focus_handle(cx);
     window.open_dialog(cx, move |dialog, _, _| {
-        // The menu draws its own border, so the dialog adds neither a title nor padding.
+        // The menu draws its own border, so the dialog adds neither a title nor padding, and its
+        // minimum height would leave an empty band under a short list.
         dialog
             .w(gpui_kit::px(300.))
+            .min_h(gpui_kit::px(0.))
             .p_0()
             .close_button(false)
             .child(menu.clone())
     });
+    // The arrow keys and Enter pick a container, as in the submenu.
+    window.focus(&focus, cx);
 }
 
 /// `--screen shell-picker-fixture`: nothing in it opens a shell.
