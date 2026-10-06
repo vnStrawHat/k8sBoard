@@ -15,7 +15,10 @@ use cluster::{
     FieldPath, ObjectEdit, ObjectKind, ObjectRef, WriteEffect, WriteError, WriteOperation,
     WriteOutcome, WriteRequest, format_yaml, rebase,
 };
-use gpui_kit::component::input::{EditorState, InputEvent};
+use gpui_kit::component::input::{
+    EditorState, InputEvent, Position, RangeDecoration, RangeDecorationCollection,
+    RangeDecorationStyle,
+};
 use gpui_kit::{
     AppContext as _, Context, Entity, FocusHandle, Focusable, KeyDownEvent, ListAlignment,
     ListState, SharedString, Subscription, Task, WeakEntity, Window, px,
@@ -26,13 +29,18 @@ use crate::app_shell::write_flow::{CheckedWriteError, WriteIntent, checked_write
 use crate::cluster_registry::ClusterRef;
 use crate::cluster_runtime::ClusterRuntime;
 use crate::cluster_session::error_text;
+use crate::edit_error_line::{line_byte_range, line_of_field, local_error_line};
 use crate::edit_quota::{QuotaLine, quota_line};
 use crate::resource_actions::ResourceAction;
 use crate::revision_diff::RollBackOffer;
 use crate::revision_history::{HistoryInputs, RevisionHistory};
+use crate::status_tone::{StatusTone, tone_color};
 use crate::table_selection::ClusterObject;
 use crate::write_guard::ActionRisk;
 use crate::yaml_diff::{DiffRow, diff_rows};
+
+/// How strongly the line of a failure is tinted by the danger token.
+const ERROR_LINE_TINT: f32 = 0.25;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum EditTab {
@@ -214,6 +222,8 @@ pub(crate) struct YamlEditView {
     overwritten: Vec<SharedString>,
     /// A held Ctrl S was seen in this key event (see `apply_from_key`).
     is_apply_key_held: bool,
+    /// The tint over the line the shown failure points at; it follows edits, and any edit clears it.
+    error_mark: RangeDecorationCollection,
     /// The Diff tab rows; its count follows `PassedPreview::rows`, and its rows wrap.
     diff_list: ListState,
     /// The Revision history tab, created on its first show and dropped with the view.
@@ -269,10 +279,15 @@ impl YamlEditView {
                 .soft_wrap(false)
                 .line_number(true)
         });
+        let error_mark = editor.update(cx, |state, cx| {
+            state.create_range_decorations_collection(Vec::new(), cx)
+        });
         let subscription =
             cx.subscribe_in(&editor, window, |view, _, event: &InputEvent, _, cx| {
                 if matches!(event, InputEvent::Change) {
                     view.refresh_dirty(cx);
+                    // The text moved under the failure: its line is no longer the one it named.
+                    view.error_mark.clear(cx);
                     cx.notify();
                 }
             });
@@ -286,6 +301,7 @@ impl YamlEditView {
             resource_version: None,
             env: EnvValues::Hidden,
             editor,
+            error_mark,
             tab: EditTab::Editor,
             is_dirty: false,
             load: LoadState::Ready,
@@ -337,6 +353,47 @@ impl YamlEditView {
             .base
             .as_ref()
             .is_some_and(|base| base.text() != text.as_ref());
+    }
+
+    /// The 1-based line the shown failure points at in `text`: a syntax error's own line, or the
+    /// first server field path that resolves.
+    pub(crate) fn error_line(&self, text: &str) -> Option<usize> {
+        match &self.preview {
+            PreviewState::Failed(PreviewFailure::Local(error)) => local_error_line(error, text),
+            PreviewState::Failed(PreviewFailure::Invalid { fields, .. }) => {
+                fields.iter().find_map(|field| line_of_field(text, field))
+            }
+            _ => None,
+        }
+    }
+
+    /// Tints the line of the shown failure in the editor, or clears the tint when there is none.
+    /// The editor has no gutter hook, so the mark is a danger-token fill over the line's text.
+    fn sync_error_mark(&self, cx: &mut Context<Self>) {
+        let text = self.text(cx);
+        let range = self
+            .error_line(&text)
+            .and_then(|line| line_byte_range(&text, line))
+            .filter(|range| !range.is_empty());
+        let tint = tone_color(StatusTone::Bad, cx).opacity(ERROR_LINE_TINT);
+        let marks = range
+            .map(|range| {
+                RangeDecoration::new(range)
+                    .with_style(RangeDecorationStyle::Fill)
+                    .with_color(tint)
+            })
+            .into_iter()
+            .collect();
+        self.error_mark.set(marks, cx);
+    }
+
+    /// Puts the cursor at the start of the 1-based `line` in the editor, which scrolls to it.
+    pub(crate) fn go_to_line(&mut self, line: usize, window: &mut Window, cx: &mut Context<Self>) {
+        self.show_tab(EditTab::Editor, cx);
+        let row = u32::try_from(line.saturating_sub(1)).unwrap_or(u32::MAX);
+        self.editor.update(cx, |editor, cx| {
+            editor.set_cursor_position(Position::new(row, 0), window, cx);
+        });
     }
 
     // ---- loading ----
@@ -461,6 +518,7 @@ impl YamlEditView {
                     .update(cx, |editor, cx| editor.focus(window, cx));
             }
         }
+        self.sync_error_mark(cx);
         cx.notify();
     }
 
@@ -534,6 +592,7 @@ impl YamlEditView {
             }
             Err(error) => self.preview = PreviewState::Failed(PreviewFailure::Local(error)),
         }
+        self.sync_error_mark(cx);
         cx.notify();
     }
 
@@ -669,6 +728,7 @@ impl YamlEditView {
             Ok(edit) => edit,
             Err(error) => {
                 self.preview = PreviewState::Failed(PreviewFailure::Local(error));
+                self.sync_error_mark(cx);
                 cx.notify();
                 return;
             }
@@ -720,6 +780,7 @@ impl YamlEditView {
         });
         self.preview = PreviewState::Running { _task: task };
         self.tab = EditTab::Diff;
+        self.sync_error_mark(cx);
         cx.notify();
     }
 
@@ -765,6 +826,7 @@ impl YamlEditView {
             }
             (Err(error), _) => self.apply_failure(edit_failure_of(&error), true),
         }
+        self.sync_error_mark(cx);
         cx.notify();
     }
 
@@ -815,6 +877,7 @@ impl YamlEditView {
     /// A commit of this edit failed; the dialog is gone.
     pub(crate) fn commit_failed(&mut self, failure: EditFailure, cx: &mut Context<Self>) {
         self.apply_failure(failure, false);
+        self.sync_error_mark(cx);
         cx.notify();
     }
 
@@ -844,6 +907,29 @@ impl YamlEditView {
         &self.server_changed
     }
 
+    /// The byte ranges the editor tints as the line of the shown failure.
+    #[cfg(test)]
+    pub(crate) fn error_mark_ranges(&self, cx: &gpui_kit::App) -> Vec<std::ops::Range<usize>> {
+        self.error_mark.get_ranges(cx)
+    }
+
+    /// The 1-based line the editor's cursor is on.
+    #[cfg(test)]
+    pub(crate) fn cursor_line_for_test(&self, cx: &gpui_kit::App) -> usize {
+        self.editor.read(cx).cursor_position().line as usize + 1
+    }
+
+    /// Types `text` at the cursor, which emits the change event a real edit does.
+    #[cfg(test)]
+    pub(crate) fn insert_for_test(
+        &mut self,
+        text: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.editor
+            .update(cx, |editor, cx| editor.insert(text.to_owned(), window, cx));
+    }
     #[cfg(test)]
     pub(crate) fn set_text_for_test(
         &mut self,

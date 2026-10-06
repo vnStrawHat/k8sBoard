@@ -9,6 +9,7 @@ use gpui_kit::component::input::Editor;
 use gpui_kit::component::kbd::Kbd;
 use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::tab::{Tab, TabBar};
+use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{
     ActiveTheme as _, Disableable as _, Selectable as _, Sizable as _, StyledExt as _, h_flex,
     v_flex,
@@ -16,7 +17,7 @@ use gpui_kit::component::{
 use gpui_kit::{
     AnyElement, App, Context, Div, HighlightStyle, InteractiveElement as _, IntoElement,
     KeyDownEvent, ParentElement as _, Render, SharedString, StatefulInteractiveElement as _,
-    Styled as _, StyledText, Window, div, list, px,
+    Styled as _, StyledText, Window, div, list, prelude::FluentBuilder as _, px,
 };
 
 use super::{
@@ -24,6 +25,7 @@ use super::{
     elide_middle, footer_text,
 };
 use crate::drawer::truncated_text_with_tooltip;
+use crate::edit_error_line::line_of_field;
 use crate::edit_quota::QuotaLine;
 use crate::environment::{Environment, environment_badge};
 use crate::keymap::{ApplyEdit, YAML_EDIT};
@@ -468,14 +470,23 @@ impl YamlEditView {
                     .text_color(tone_color(StatusTone::Bad, cx))
                     .child(message.clone()),
             );
-            for field in fields {
-                side = side.child(
-                    div()
-                        .text_xs()
-                        .font_family(mono.clone())
-                        .text_color(tone_color(StatusTone::Bad, cx))
-                        .child(field.clone()),
-                );
+            for (index, field) in fields.iter().enumerate() {
+                let row = div()
+                    .id(("edit-field", index))
+                    .text_xs()
+                    .font_family(mono.clone())
+                    .text_color(tone_color(StatusTone::Bad, cx));
+                // The line is looked up where the failure is shown, so it matches the text now.
+                side = side.child(match line_of_field(text, field) {
+                    Some(line) => row
+                        .cursor_pointer()
+                        .hover(|style| style.opacity(0.8))
+                        .child(format!("{field} · line {line}"))
+                        .on_click(cx.listener(move |view, _, window, cx| {
+                            view.go_to_line(line, window, cx);
+                        })),
+                    None => row.child(field.clone()),
+                });
             }
         }
         side.into_any_element()
@@ -510,7 +521,18 @@ impl YamlEditView {
                     .truncate()
                     .text_sm()
                     .text_color(tone)
-                    .child(status),
+                    .child(status)
+                    .when_some(self.error_line(text), |status, line| {
+                        status
+                            .cursor_pointer()
+                            .hover(|style| style.opacity(0.8))
+                            .tooltip(move |window, cx| {
+                                Tooltip::new(format!("Go to line {line}")).build(window, cx)
+                            })
+                            .on_click(cx.listener(move |view, _, window, cx| {
+                                view.go_to_line(line, window, cx);
+                            }))
+                    }),
             )
             .child(
                 Button::new("edit-cancel")

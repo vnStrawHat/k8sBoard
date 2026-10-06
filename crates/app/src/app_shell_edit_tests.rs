@@ -771,6 +771,76 @@ fn a_422_of_the_preview_lists_its_fields_verbatim(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn a_syntax_error_marks_its_line_and_the_footer_jumps_there(cx: &mut TestAppContext) {
+    let t = edit_test("edit-error-line", cx);
+    t.open(cx);
+    t.set_text("kind: Deployment\nspec: [unclosed\nreplicas: 3\n", cx);
+    t.apply(cx);
+    cx.run_until_parked();
+    let (line, marks) = t.view(cx).read_with(cx, |view, cx| {
+        (
+            view.error_line(&view.text(cx)),
+            view.error_mark_ranges(cx).len(),
+        )
+    });
+    let line = line.expect("the parser names a line");
+    assert_eq!(marks, 1, "the line is marked");
+    t.t.fixture.draw_twice(cx);
+    let view = t.view(cx);
+    t.t.fixture.with_window(cx, |window, cx| {
+        view.update(cx, |view, cx| view.go_to_line(line, window, cx));
+    });
+    let cursor = t
+        .view(cx)
+        .read_with(cx, |view, cx| view.cursor_line_for_test(cx));
+    assert_eq!(cursor, line);
+    // An edit clears the mark: the failure no longer describes the text.
+    let view = t.view(cx);
+    t.t.fixture.with_window(cx, |window, cx| {
+        view.update(cx, |view, cx| view.insert_for_test("x", window, cx));
+    });
+    let marks = t
+        .view(cx)
+        .read_with(cx, |view, cx| view.error_mark_ranges(cx).len());
+    assert_eq!(marks, 0);
+}
+
+#[gpui_kit::test]
+fn a_422_field_path_resolves_to_its_line_in_the_editor(cx: &mut TestAppContext) {
+    let t = edit_test("edit-422-line", cx);
+    *lock(&t.server.dry_run_answer) = Some((422, INVALID.to_owned()));
+    t.open(cx);
+    t.change("replicas: 3", "replicas: -1", cx);
+    t.apply(cx);
+    t.wait_for_preview(cx);
+    let (line, expected, marks) = t.view(cx).read_with(cx, |view, cx| {
+        let text = view.text(cx);
+        let expected = text
+            .lines()
+            .position(|line| line.trim() == "replicas: -1")
+            .map(|index| index + 1);
+        (
+            view.error_line(&text),
+            expected,
+            view.error_mark_ranges(cx).len(),
+        )
+    });
+    assert_eq!(line, expected);
+    assert_eq!(marks, 1);
+    t.t.fixture.draw_twice(cx);
+    // The side panel row and the footer jump to the same line.
+    let view = t.view(cx);
+    t.t.fixture.with_window(cx, |window, cx| {
+        view.update(cx, |view, cx| {
+            view.go_to_line(line.expect("a line"), window, cx)
+        });
+    });
+    let cursor = t
+        .view(cx)
+        .read_with(cx, |view, cx| view.cursor_line_for_test(cx));
+    assert_eq!(Some(cursor), expected);
+}
+#[gpui_kit::test]
 fn the_lock_stops_the_preview_before_anything_is_sent(cx: &mut TestAppContext) {
     let t = edit_test("edit-lock", cx);
     t.open(cx);

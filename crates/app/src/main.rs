@@ -37,6 +37,7 @@ mod drain_run;
 mod drain_tab;
 mod drain_writes;
 mod drawer;
+mod edit_error_line;
 mod edit_quota;
 mod environment;
 mod environment_form;

@@ -93,3 +93,7 @@ pub(crate) type CommitCallback = Box<dyn FnOnce(&Result<WriteOutcome, CheckedWri
 
 - `keymap.rs`: `secondary-s` → `ApplyEdit` in context `YamlEdit` (step 3); `keymap_tests.rs` drops `secondary-s` from `RESERVED_KEYS`; one sheet row. The code editor is an `Input`, so 0028 `WORKSPACE` single keys stay inactive there.
 - `--screen edit-yaml-diff` (step 3, screenshot feature): `YamlEditView::fixture(..)` with W10's diff (`spec.replicas` 3 → 5, `…limits.memory` 512Mi → 1Gi), `Rollout { RollingUpdate }`, `Passed { 412 ms }`, no base (Apply disabled), no connection call.
+
+## Errors point at the line (UX fix H4)
+
+`edit_error_line.rs` (pure): `local_error_line` gives the 1-based line of a local error (a syntax error's own line; a placeholder or identity error through its field path) and `line_of_field` looks a field path (`spec.template.spec.containers[0].image`) up in the text by walking keys and sequence indexes, falling back to the deepest part that exists; `[name]` selectors are not followed. `YamlEditView::sync_error_mark` tints that line in the editor (a `RangeDecoration` fill in the danger token; the editor has no gutter hook), and any edit clears it. The footer error and the 422 field rows of the side panel (`spec.replicas · line 13`) are clickable and call `go_to_line`, which opens the Editor tab and puts the cursor there.
