@@ -973,7 +973,7 @@ fn a_fresh_enter_in_a_taint_field_presses_review_and_a_held_one_does_not(cx: &mu
     let editor = t.wait_for_editor(cx);
     t.add_row(&editor, ("gpu", "true", "NoSchedule"), cx);
     t.t.fixture.with_window(cx, |window, cx| {
-        editor.update(cx, |editor, cx| editor.focus_last_key(window, cx));
+        editor.update(cx, |editor, cx| editor.focus_added_key(window, cx));
     });
     t.t.fixture.draw_twice(cx);
     t.t.fixture.with_window(cx, |window, cx| {
@@ -1003,7 +1003,7 @@ fn enter_in_the_taint_editor_does_nothing_while_the_edit_has_no_changes(cx: &mut
     let editor = t.wait_for_editor(cx);
     t.add_row(&editor, ("", "", "NoSchedule"), cx);
     t.t.fixture.with_window(cx, |window, cx| {
-        editor.update(cx, |editor, cx| editor.focus_last_key(window, cx));
+        editor.update(cx, |editor, cx| editor.focus_added_key(window, cx));
     });
     t.t.fixture.draw_twice(cx);
     t.t.fixture.with_window(cx, |window, cx| {
@@ -1080,4 +1080,162 @@ fn edit_labels_on_the_bar_is_off_over_the_cap(cx: &mut TestAppContext) {
         state_of(&t.bulk_states(cx), "Edit labels…"),
         BulkState::Off("Select at most 50 rows".into())
     );
+}
+
+// ---- L8 and L9: Add, the empty-key line, and closing with changes ----
+
+impl NodeTest {
+    fn press_add(&self, editor: &Entity<NodeEditor>, cx: &mut TestAppContext) {
+        self.add_row(editor, ("", "", "NoSchedule"), cx);
+    }
+
+    fn has_dialog(&self, cx: &mut TestAppContext) -> bool {
+        self.t
+            .fixture
+            .with_window(cx, |window, cx| window.has_active_dialog(cx))
+    }
+
+    /// Closes the top dialog, whatever it is, and tells whether another one is left under it.
+    fn close_top_dialog(&self, cx: &mut TestAppContext) -> bool {
+        self.t.fixture.with_window(cx, |window, cx| {
+            window.close_dialog(cx);
+            window.has_active_dialog(cx)
+        })
+    }
+}
+
+#[gpui_kit::test]
+fn add_puts_the_new_row_first_with_the_cursor_in_its_key(cx: &mut TestAppContext) {
+    let t = node_test("node-edit-add-top", cx);
+    t.open_editor(NodeEditKind::Taints, &t.t.stg, "node-b", cx);
+    let editor = t.wait_for_editor(cx);
+    t.press_add(&editor, cx);
+    editor.read_with(cx, |editor, cx| {
+        assert_eq!(editor.row_keys(cx), ["", "dedicated"]);
+    });
+    t.t.fixture.draw_twice(cx);
+    let is_focused = t.t.fixture.with_window(cx, |window, cx| {
+        editor.read_with(cx, |editor, cx| editor.is_added_key_focused(window, cx))
+    });
+    assert!(is_focused, "typing goes into the new row");
+}
+
+#[gpui_kit::test]
+fn text_set_right_after_add_stays_in_the_new_taint_row(cx: &mut TestAppContext) {
+    let t = node_test("node-edit-add-keeps", cx);
+    t.open_editor(NodeEditKind::Taints, &t.t.stg, "node-b", cx);
+    let editor = t.wait_for_editor(cx);
+    t.press_add(&editor, cx);
+    t.t.fixture.with_window(cx, |window, cx| {
+        editor.update(cx, |editor, cx| editor.set_first_key("gpu", window, cx));
+    });
+    t.t.fixture.draw_twice(cx);
+    editor.read_with(cx, |editor, cx| {
+        assert_eq!(editor.row_keys(cx), ["gpu", "dedicated"]);
+        assert_eq!(editor.shown_problem_now(cx), None);
+    });
+}
+
+#[gpui_kit::test]
+fn an_empty_key_is_named_only_after_review_and_the_line_goes_with_the_fix(cx: &mut TestAppContext) {
+    let t = node_test("node-edit-empty-key", cx);
+    t.open_editor(NodeEditKind::Labels, &t.t.stg, "node-b", cx);
+    let editor = t.wait_for_editor(cx);
+    t.press_add(&editor, cx);
+    t.t.fixture.draw_twice(cx);
+    editor.read_with(cx, |editor, cx| {
+        // Typing has not named a problem, and Review… stays pressable.
+        assert_eq!(editor.shown_problem_now(cx), None);
+        assert!(!editor.is_review_off_now(cx));
+    });
+    t.review(&editor, cx);
+    t.t.fixture.draw_twice(cx);
+    editor.read_with(cx, |editor, cx| {
+        assert_eq!(
+            editor.shown_problem_now(cx).as_deref(),
+            Some("Enter a key for every label")
+        );
+    });
+    assert!(writes(&t.t.stg_api).is_empty(), "nothing was reviewed");
+    t.t.fixture.with_window(cx, |window, cx| {
+        editor.update(cx, |editor, cx| editor.set_first_key("gpu", window, cx));
+    });
+    t.t.fixture.draw_twice(cx);
+    editor.read_with(cx, |editor, cx| {
+        assert!(!editor.has_tried_review_now());
+        assert_eq!(editor.shown_problem_now(cx), None);
+    });
+}
+
+#[gpui_kit::test]
+fn cancel_closes_an_untouched_editor_and_asks_before_losing_changes(cx: &mut TestAppContext) {
+    let t = node_test("node-edit-cancel", cx);
+    t.open_editor(NodeEditKind::Taints, &t.t.stg, "node-b", cx);
+    let editor = t.wait_for_editor(cx);
+    t.t.fixture.with_window(cx, |window, cx| {
+        editor.update(cx, |editor, cx| editor.press_cancel(window, cx));
+    });
+    assert!(!t.has_dialog(cx), "nothing changed, so it closes at once");
+
+    t.open_editor(NodeEditKind::Taints, &t.t.stg, "node-b", cx);
+    let editor = t.wait_for_editor(cx);
+    t.add_row(&editor, ("gpu", "true", "NoSchedule"), cx);
+    t.t.fixture.with_window(cx, |window, cx| {
+        editor.update(cx, |editor, cx| editor.press_cancel(window, cx));
+    });
+    // The question sits over the editor: closing it leaves the editor open.
+    assert!(t.close_top_dialog(cx), "Keep editing leaves the editor");
+    assert!(!t.close_top_dialog(cx));
+}
+
+#[gpui_kit::test]
+fn escape_and_an_outside_click_never_drop_changed_rows(cx: &mut TestAppContext) {
+    let t = node_test("node-edit-escape", cx);
+    t.open_editor(NodeEditKind::Labels, &t.t.stg, "node-b", cx);
+    let editor = t.wait_for_editor(cx);
+    t.add_row(&editor, ("gpu", "true", ""), cx);
+    t.t.fixture.draw_twice(cx);
+    // A click on the backdrop does nothing.
+    let mut visual = gpui_kit::VisualTestContext::from_window(t.t.fixture.window.into(), cx);
+    visual.simulate_click(
+        gpui_kit::point(gpui_kit::px(3.), gpui_kit::px(450.)),
+        Default::default(),
+    );
+    assert!(t.has_dialog(cx));
+    assert!(!t.close_top_dialog(cx), "only the editor was open");
+
+    t.open_editor(NodeEditKind::Labels, &t.t.stg, "node-b", cx);
+    let editor = t.wait_for_editor(cx);
+    t.add_row(&editor, ("gpu", "true", ""), cx);
+    t.t.fixture.draw_twice(cx);
+    t.t.fixture.press("escape", cx);
+    assert!(
+        t.close_top_dialog(cx),
+        "Escape asked, and the editor stayed"
+    );
+    assert!(!t.close_top_dialog(cx));
+}
+
+#[gpui_kit::test]
+fn escape_closes_an_untouched_editor_at_once(cx: &mut TestAppContext) {
+    let t = node_test("node-edit-escape-clean", cx);
+    t.open_editor(NodeEditKind::Taints, &t.t.stg, "node-b", cx);
+    t.wait_for_editor(cx);
+    t.t.fixture.draw_twice(cx);
+    t.t.fixture.press("escape", cx);
+    assert!(!t.has_dialog(cx));
+}
+
+#[gpui_kit::test]
+fn the_bulk_editor_asks_before_losing_a_typed_change(cx: &mut TestAppContext) {
+    let t = node_test("bulk-labels-escape", cx);
+    let editor = t.bulk_over_three(cx);
+    editor.read_with(cx, |editor, _| assert_eq!(editor.row_count(), 1));
+    t.t.fixture.draw_twice(cx);
+    t.t.fixture.press("escape", cx);
+    assert!(
+        t.close_top_dialog(cx),
+        "the typed change kept the editor open"
+    );
+    assert!(!t.close_top_dialog(cx));
 }

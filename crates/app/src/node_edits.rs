@@ -294,6 +294,15 @@ pub(crate) struct RowProblem {
     pub(crate) text: SharedString,
 }
 
+/// The start of the problem line of a row with no key. The editors show it only once Review… was
+/// pressed, not while the user is still typing.
+const EMPTY_KEY_PROBLEM: &str = "Enter a key for every";
+
+/// Whether `problem` is the line of a row with no key.
+pub(crate) fn is_empty_key_problem(problem: &str) -> bool {
+    problem.starts_with(EMPTY_KEY_PROBLEM)
+}
+
 /// What a key or value may look like, shown under the editor and in the tooltip of a bad row.
 pub(crate) const KEY_HINT: &str = "optional prefix/ then name: letters, digits, - _ ., max 63";
 /// Long input is cut so the line stays one line.
@@ -400,7 +409,7 @@ fn taint_problem(edit: &NodeEdit, taints: &[NodeTaint]) -> Option<SharedString> 
     let mut seen = HashSet::new();
     for taint in taints {
         if taint.key.is_empty() {
-            return Some("Enter a key for every taint".into());
+            return Some(format!("{EMPTY_KEY_PROBLEM} taint").into());
         }
         if !EFFECTS.contains(&taint.effect.as_str()) {
             return Some(format!("{} is not a taint effect", taint.effect).into());
@@ -519,7 +528,7 @@ pub(crate) fn label_intent(
     for row in rows {
         let key = row.key.trim();
         if key.is_empty() {
-            return Err("Enter a key for every label".into());
+            return Err(format!("{EMPTY_KEY_PROBLEM} label").into());
         }
         if !seen.insert(key) {
             return Err(format!("{key} is listed twice").into());

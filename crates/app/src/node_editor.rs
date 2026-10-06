@@ -9,7 +9,8 @@
 use cluster::{ClusterConnection, ClusterError, LabelChange, NodeEdit, NodeTaint};
 use gpui_kit::assets::IconName;
 use gpui_kit::component::WindowExt as _;
-use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::component::button::{Button, ButtonVariant, ButtonVariants as _};
+use gpui_kit::component::dialog::DialogButtonProps;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::select::{Select, SelectEvent, SelectState};
 use gpui_kit::component::spinner::Spinner;
@@ -32,8 +33,9 @@ use crate::fresh_enter::{confirms, is_enter};
 use crate::keymap::FORWARD_FORM;
 use crate::node_edits::{
     CordonMode, KEY_HINT, LabelRow, NO_EXECUTE_WARNING, NodeScope, RowField, RowProblem, TaintRow,
-    TickedNode, conflict_notice, cordon_batch, label_batch, label_intent, label_row_problem,
-    label_rows, node_names_text, rows_after_conflict, taint_intent, taint_row_problem, taint_rows,
+    TickedNode, conflict_notice, cordon_batch, is_empty_key_problem, label_batch, label_intent,
+    label_row_problem, label_rows, node_names_text, rows_after_conflict, taint_intent,
+    taint_row_problem, taint_rows,
 };
 use crate::resource_actions::{
     ActionAvailability, NOT_SHIPPED_REASON, ResourceAction, action_availability, action_label,
@@ -123,7 +125,55 @@ pub(crate) struct NodeEditor {
     /// The rows and base of the editor a conflict closed; used once, when the node is read.
     kept: Option<KeptEdit>,
     state: EditorState,
+    /// Review… was pressed on a row with no key: the problem line and the row mark show now, not
+    /// while the user is still typing.
+    has_tried_review: bool,
+    /// The kubelet labels are folded into one row until the user opens it.
+    are_kubelet_labels_shown: bool,
     _load: Option<Task<()>>,
+}
+
+/// Closing an editor with changes asks first: returns whether it opened `Discard changes?`, in which
+/// case the editor stays open until the user picks Discard. An outside click never closes it.
+fn ask_before_closing(has_unsaved: bool, window: &mut Window, cx: &mut App) -> bool {
+    if !has_unsaved {
+        return false;
+    }
+    window.open_alert_dialog(cx, |alert, _, _| {
+        alert
+            .title("Discard changes?")
+            .child(div().text_sm().child("Your edits to this list are lost."))
+            .confirm()
+            .button_props(
+                DialogButtonProps::default()
+                    .ok_text("Discard")
+                    .ok_variant(ButtonVariant::Danger)
+                    .cancel_text("Keep editing")
+                    .show_cancel(true),
+            )
+            .on_ok(|_, window, cx| {
+                // The alert closes itself; the editor under it goes after.
+                window.defer(cx, |window, cx| window.close_dialog(cx));
+                true
+            })
+    });
+    true
+}
+
+/// Opens the taint or label editor as the window's modal. An outside click does not close it, and
+/// Escape asks first when rows changed.
+fn show_node_editor(editor: Entity<NodeEditor>, title: String, window: &mut Window, cx: &mut App) {
+    window.open_dialog(cx, move |dialog, _, _| {
+        let asked = editor.clone();
+        dialog
+            .title(title.clone())
+            .w(px(DIALOG_WIDTH))
+            .child(editor.clone())
+            .overlay_closable(false)
+            .on_cancel(move |_, window, cx| {
+                !ask_before_closing(asked.read(cx).has_unsaved_rows(cx), window, cx)
+            })
+    });
 }
 
 fn text_input(
@@ -279,6 +329,8 @@ impl NodeEditor {
             notice: None,
             kept,
             state: EditorState::Loading,
+            has_tried_review: false,
+            are_kubelet_labels_shown: false,
             _load: Some(load),
         }
     }
@@ -364,11 +416,28 @@ impl NodeEditor {
         }
     }
 
+    /// The first row the user can edit that has no key, to mark it once Review… was pressed.
+    fn first_empty_key_row(&self, cx: &App) -> Option<usize> {
+        let EditorState::Ready { rows, .. } = &self.state else {
+            return None;
+        };
+        match rows {
+            Rows::Taints(inputs) => inputs
+                .iter()
+                .position(|row| !row.is_read_only && row.key.read(cx).value().trim().is_empty()),
+            Rows::Labels(inputs) => inputs
+                .iter()
+                .position(|row| !row.is_read_only && row.key.read(cx).value().trim().is_empty()),
+        }
+    }
+
+    /// Puts a new empty row at the top, where it is in view whatever the list scrolled to, and the
+    /// cursor in its key field so typing goes into it.
     fn add_row(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let EditorState::Ready { rows, .. } = &mut self.state else {
             return;
         };
-        match rows {
+        let key = match rows {
             Rows::Taints(inputs) => {
                 let row = TaintRow {
                     key: String::new(),
@@ -376,16 +445,23 @@ impl NodeEditor {
                     effect: EFFECT_CHOICES[0].to_owned(),
                     time_added: None,
                 };
-                inputs.push(taint_inputs(&row, window, cx));
+                let added = taint_inputs(&row, window, cx);
+                let key = added.key.clone();
+                inputs.insert(0, added);
+                key
             }
             Rows::Labels(inputs) => {
                 let row = LabelRow {
                     key: String::new(),
                     value: String::new(),
                 };
-                inputs.push(label_inputs(&row, window, cx));
+                let added = label_inputs(&row, window, cx);
+                let key = added.key.clone();
+                inputs.insert(0, added);
+                key
             }
-        }
+        };
+        key.update(cx, |input, cx| input.focus(window, cx));
         cx.notify();
     }
 
@@ -408,8 +484,16 @@ impl NodeEditor {
     /// Review…: closes the editor and starts the guarded flow, whose dialog follows. Nothing is
     /// sent from here.
     fn review(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Ok(intent) = self.intent(cx) else {
-            return;
+        let intent = match self.intent(cx) {
+            Ok(intent) => intent,
+            Err(reason) => {
+                // A row with no key is named only now that the user asked to review.
+                if is_empty_key_problem(&reason) {
+                    self.has_tried_review = true;
+                    cx.notify();
+                }
+                return;
+            }
         };
         let base = match &self.state {
             EditorState::Ready { edit, .. } if self.kind == NodeEditKind::Taints => {
@@ -430,6 +514,24 @@ impl NodeEditor {
                 shell.start_write(intent, window, cx);
             });
         });
+    }
+
+    /// Whether the rows differ from the node as it was read: closing now would lose them.
+    fn has_unsaved_rows(&self, cx: &App) -> bool {
+        let EditorState::Ready { edit, rows } = &self.state else {
+            return false;
+        };
+        match rows {
+            Rows::Taints(inputs) => Self::read_taints(inputs, cx) != taint_rows(edit),
+            Rows::Labels(inputs) => Self::read_labels(inputs, cx) != label_rows(edit),
+        }
+    }
+
+    /// Cancel: closes at once when no row changed, else asks first.
+    fn cancel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !ask_before_closing(self.has_unsaved_rows(cx), window, cx) {
+            window.close_dialog(cx);
+        }
     }
 
     /// Enter in a row's text field presses Review…, a fresh press only. A focused button or
@@ -467,10 +569,15 @@ impl NodeEditor {
         };
         let (muted, danger) = (cx.theme().muted_foreground, cx.theme().danger);
         let problem = self.row_problem(cx);
+        let empty_key = self
+            .has_tried_review
+            .then(|| self.first_empty_key_row(cx))
+            .flatten();
         let is_bad = |index: usize, field: RowField| {
-            problem
-                .as_ref()
-                .is_some_and(|problem| problem.index == index && problem.field == field)
+            (field == RowField::Key && empty_key == Some(index))
+                || problem
+                    .as_ref()
+                    .is_some_and(|problem| problem.index == index && problem.field == field)
         };
         let remove = |index: usize, is_read_only: bool, cx: &mut Context<Self>| {
             if is_read_only {
@@ -533,10 +640,8 @@ impl NodeEditor {
                         )
                     })
                     .collect::<Vec<_>>(),
-                Rows::Labels(inputs) => inputs
-                    .iter()
-                    .enumerate()
-                    .map(|(index, row)| {
+                Rows::Labels(inputs) => {
+                    let line = |index: usize, row: &LabelInputs, cx: &mut Context<Self>| {
                         with_note(
                             h_flex()
                                 .gap_2()
@@ -555,8 +660,29 @@ impl NodeEditor {
                             row.is_read_only.then_some(SET_BY_KUBELET),
                             muted,
                         )
-                    })
-                    .collect::<Vec<_>>(),
+                    };
+                    // The labels the kubelet owns cannot change, so they fold into one row under
+                    // the editable ones instead of pushing them out of the list.
+                    let mut list: Vec<AnyElement> = inputs
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, row)| !row.is_read_only)
+                        .map(|(index, row)| line(index, row, cx))
+                        .collect();
+                    let locked = inputs.iter().filter(|row| row.is_read_only).count();
+                    if locked > 0 {
+                        list.push(self.render_kubelet_fold(locked, cx));
+                        if self.are_kubelet_labels_shown {
+                            let locked_rows = inputs
+                                .iter()
+                                .enumerate()
+                                .filter(|(_, row)| row.is_read_only)
+                                .map(|(index, row)| line(index, row, cx));
+                            list.extend(locked_rows.collect::<Vec<_>>());
+                        }
+                    }
+                    list
+                }
             };
         v_flex()
             .id("node-edit-rows")
@@ -567,17 +693,64 @@ impl NodeEditor {
             .into_any_element()
     }
 
+    /// Whether Review… is off. A row with no key keeps it on: pressing it is what names the problem.
+    fn is_review_off(intent: &Result<WriteIntent, SharedString>) -> bool {
+        intent
+            .as_ref()
+            .err()
+            .is_some_and(|reason| !is_empty_key_problem(reason))
+    }
+
+    /// The problem line under the rows: nothing for an edit with no change, and nothing for a row
+    /// with no key until Review… was pressed.
+    fn shown_problem(&self, intent: Result<WriteIntent, SharedString>) -> Option<SharedString> {
+        match intent {
+            Err(reason)
+                if reason.as_ref() != "No changes"
+                    && (!is_empty_key_problem(&reason) || self.has_tried_review) =>
+            {
+                Some(reason)
+            }
+            _ => None,
+        }
+    }
+
+    /// `6 kubelet labels` with a chevron: one row that opens the labels the kubelet owns.
+    fn render_kubelet_fold(&self, count: usize, cx: &mut Context<Self>) -> AnyElement {
+        let noun = if count == 1 { "label" } else { "labels" };
+        let chevron = if self.are_kubelet_labels_shown {
+            IconName::ChevronDown
+        } else {
+            IconName::ChevronRight
+        };
+        h_flex()
+            .child(
+                Button::new("node-edit-kubelet-fold")
+                    .ghost()
+                    .small()
+                    .icon(Icon::new(chevron))
+                    .label(format!("{count} kubelet {noun}"))
+                    .tooltip(SET_BY_KUBELET)
+                    .on_click(cx.listener(|editor, _, _, cx| {
+                        editor.are_kubelet_labels_shown = !editor.are_kubelet_labels_shown;
+                        cx.notify();
+                    })),
+            )
+            .into_any_element()
+    }
+
     fn render_footer(&self, cx: &mut Context<Self>) -> AnyElement {
         let intent = self.intent(cx);
         let is_ready = matches!(self.state, EditorState::Ready { .. });
+        let is_off = Self::is_review_off(&intent);
         let review = Button::new("node-edit-review")
             .label("Review…")
             .small()
             .primary()
-            .disabled(intent.is_err())
+            .disabled(is_off)
             .on_click(cx.listener(|editor, _, window, cx| editor.review(window, cx)));
         let review = match &intent {
-            Err(reason) if is_ready => review.tooltip(reason.clone()),
+            Err(reason) if is_ready && is_off => review.tooltip(reason.clone()),
             _ => review,
         };
         h_flex()
@@ -589,7 +762,7 @@ impl NodeEditor {
                     .label("Cancel")
                     .small()
                     .outline()
-                    .on_click(|_, window, cx| window.close_dialog(cx)),
+                    .on_click(cx.listener(|editor, _, window, cx| editor.cancel(window, cx))),
             )
             .child(review)
             .into_any_element()
@@ -598,6 +771,13 @@ impl NodeEditor {
 
 impl Render for NodeEditor {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // A row with no key is named only after Review… asked, and no longer once every row has one.
+        let intent = self.intent(cx);
+        let is_empty_key = intent
+            .as_ref()
+            .err()
+            .is_some_and(|reason| is_empty_key_problem(reason));
+        self.has_tried_review &= is_empty_key;
         let theme = cx.theme();
         let (muted, warning, danger) = (theme.muted_foreground, theme.warning, theme.danger);
         let body: AnyElement = match &self.state {
@@ -619,10 +799,7 @@ impl Render for NodeEditor {
                     .small()
                     .outline()
                     .on_click(cx.listener(|editor, _, window, cx| editor.add_row(window, cx)));
-                let problem = match self.intent(cx) {
-                    Err(reason) if reason.as_ref() != "No changes" => Some(reason),
-                    _ => None,
-                };
+                let problem = self.shown_problem(intent);
                 let hint = self
                     .row_problem(cx)
                     .map(|_| div().text_xs().text_color(muted).child(KEY_HINT));
@@ -742,12 +919,7 @@ impl AppShell {
         {
             self.last_node_editor = Some(editor.downgrade());
         }
-        window.open_dialog(cx, move |dialog, _, _| {
-            dialog
-                .title(title.clone())
-                .w(px(DIALOG_WIDTH))
-                .child(editor.clone())
-        });
+        show_node_editor(editor, title, window, cx);
     }
 
     /// The Edit labels button of the Nodes header: the 0034 editor for one ticked node, the bulk
@@ -1076,12 +1248,14 @@ impl BulkLabelEditor {
             window,
             |editor, _, _: &SelectEvent<Vec<String>>, _, cx| editor.refresh_problem(cx),
         ));
+        let added_key = key.clone();
         self.rows.push(BulkRow {
             key,
             operation,
             value,
             _subscriptions: subscriptions,
         });
+        added_key.update(cx, |input, cx| input.focus(window, cx));
         self.refresh_problem(cx);
     }
 
@@ -1258,7 +1432,12 @@ impl Render for BulkLabelEditor {
                             .label("Cancel")
                             .small()
                             .outline()
-                            .on_click(|_, window, cx| window.close_dialog(cx)),
+                            .on_click(cx.listener(|editor, _, window, cx| {
+                                let has_changes = !editor.changes(cx).is_empty();
+                                if !ask_before_closing(has_changes, window, cx) {
+                                    window.close_dialog(cx);
+                                }
+                            })),
                     )
                     .child(review),
             )
@@ -1314,10 +1493,15 @@ impl AppShell {
         }
         let title = format!("Edit labels of {count} nodes");
         window.open_dialog(cx, move |dialog, _, _| {
+            let asked = editor.clone();
             dialog
                 .title(title.clone())
                 .w(px(DIALOG_WIDTH))
                 .child(editor.clone())
+                .overlay_closable(false)
+                .on_cancel(move |_, window, cx| {
+                    !ask_before_closing(!asked.read(cx).changes(cx).is_empty(), window, cx)
+                })
         });
     }
 
@@ -1429,19 +1613,16 @@ impl AppShell {
             notice: None,
             kept: None,
             state: ready(kind, edit, None, window, cx),
+            has_tried_review: false,
+            are_kubelet_labels_shown: false,
             _load: None,
         });
-        for (key, value, effect) in extra_taints {
+        for (key, value, effect) in extra_taints.iter().rev() {
             editor.update(cx, |editor, cx| {
                 editor.add_fixture_taint(key, value, effect, window, cx);
             });
         }
-        window.open_dialog(cx, move |dialog, _, _| {
-            dialog
-                .title(title.clone())
-                .w(px(DIALOG_WIDTH))
-                .child(editor.clone())
-        });
+        show_node_editor(editor, title, window, cx);
     }
 }
 
@@ -1507,7 +1688,7 @@ impl NodeEditor {
         else {
             return;
         };
-        let Some(row) = rows.last() else {
+        let Some(row) = rows.first() else {
             return;
         };
         row.key
@@ -1639,9 +1820,9 @@ impl NodeEditor {
         };
         let (key_input, value_input, select) = match rows {
             Rows::Taints(rows) => rows
-                .last()
+                .first()
                 .map(|row| (&row.key, &row.value, Some(&row.effect))),
-            Rows::Labels(rows) => rows.last().map(|row| (&row.key, &row.value, None)),
+            Rows::Labels(rows) => rows.first().map(|row| (&row.key, &row.value, None)),
         }
         .expect("a row was added");
         key_input.update(cx, |input, cx| input.set_value(key.to_owned(), window, cx));
@@ -1661,18 +1842,83 @@ impl NodeEditor {
         self.review(window, cx);
     }
 
-    /// Puts the cursor in the key field of the last row, as a click would.
-    pub(crate) fn focus_last_key(&self, window: &mut Window, cx: &mut Context<Self>) {
+    /// Puts the cursor in the key field of the newest row (the first), as a click would.
+    pub(crate) fn focus_added_key(&self, window: &mut Window, cx: &mut Context<Self>) {
         let EditorState::Ready { rows, .. } = &self.state else {
             return;
         };
         let key = match rows {
-            Rows::Taints(rows) => rows.last().map(|row| row.key.clone()),
-            Rows::Labels(rows) => rows.last().map(|row| row.key.clone()),
+            Rows::Taints(rows) => rows.first().map(|row| row.key.clone()),
+            Rows::Labels(rows) => rows.first().map(|row| row.key.clone()),
         };
         if let Some(key) = key {
             key.update(cx, |input, cx| input.focus(window, cx));
         }
+    }
+
+    /// The problem line the editor draws now.
+    pub(crate) fn shown_problem_now(&self, cx: &App) -> Option<SharedString> {
+        self.shown_problem(self.intent(cx))
+    }
+
+    pub(crate) fn is_review_off_now(&self, cx: &App) -> bool {
+        Self::is_review_off(&self.intent(cx))
+    }
+
+    pub(crate) fn has_tried_review_now(&self) -> bool {
+        self.has_tried_review
+    }
+
+    /// The key texts of the rows, top to bottom.
+    pub(crate) fn row_keys(&self, cx: &App) -> Vec<String> {
+        match &self.state {
+            EditorState::Ready {
+                rows: Rows::Taints(rows),
+                ..
+            } => rows
+                .iter()
+                .map(|row| row.key.read(cx).value().to_string())
+                .collect(),
+            EditorState::Ready {
+                rows: Rows::Labels(rows),
+                ..
+            } => rows
+                .iter()
+                .map(|row| row.key.read(cx).value().to_string())
+                .collect(),
+            _ => Vec::new(),
+        }
+    }
+
+    /// Whether the cursor is in the key field of the newest row (the first).
+    pub(crate) fn is_added_key_focused(&self, window: &Window, cx: &App) -> bool {
+        let EditorState::Ready { rows, .. } = &self.state else {
+            return false;
+        };
+        let key = match rows {
+            Rows::Taints(rows) => rows.first().map(|row| &row.key),
+            Rows::Labels(rows) => rows.first().map(|row| &row.key),
+        };
+        key.is_some_and(|key| key.read(cx).focus_handle(cx).is_focused(window))
+    }
+
+    /// Sets the key of the first row, as typing would.
+    pub(crate) fn set_first_key(&self, text: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let EditorState::Ready { rows, .. } = &self.state else {
+            return;
+        };
+        let key = match rows {
+            Rows::Taints(rows) => rows.first().map(|row| row.key.clone()),
+            Rows::Labels(rows) => rows.first().map(|row| row.key.clone()),
+        };
+        if let Some(key) = key {
+            key.update(cx, |input, cx| input.set_value(text.to_owned(), window, cx));
+        }
+    }
+
+    /// Cancel, pressed.
+    pub(crate) fn press_cancel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.cancel(window, cx);
     }
 
     pub(crate) fn current_intent(&self, cx: &App) -> Result<WriteIntent, SharedString> {
