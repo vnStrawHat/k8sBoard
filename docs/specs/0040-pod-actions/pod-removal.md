@@ -39,7 +39,7 @@ The uid read re-checks the one fact the row may lag on: `finish_delete_start` re
 pub(crate) enum Removal { Delete, Restart, Evict }
 pub(crate) struct DeleteExtras { pub(crate) removal: Removal, /* propagation, kind, targets, already_gone as 0033 */ }
 impl AppShell {
-    /// `start_delete` renamed; Delete keeps its scope rule, Restart and Evict always get the cursor pod alone.
+    /// `start_delete` renamed; Delete, Restart and Evict share the scope rule: the ticked set when the cursor row is one of several (M3, 2026-10-06).
     pub(crate) fn start_removal(&mut self, removal: Removal, scope: Vec<ClusterObject>, window: &mut Window, cx: &mut Context<Self>);
 }
 ```

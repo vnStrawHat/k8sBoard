@@ -721,16 +721,26 @@ impl AppShell {
             ResourceAction::EditYaml(_) => self.open_edit(subject, window, cx),
             // The values editor of the cursor ConfigMap or Secret, in its own cluster (spec 0047).
             ResourceAction::EditValues(_) => self.open_values_edit(subject, window, cx),
-            // The cursor row, or the ticked set when it is one of several (spec 0033).
-            ResourceAction::Delete(_) => self.delete_at_cursor(&subject, window, cx),
-            // The cursor pod alone: never the ticked set (spec 0040).
+            // The cursor row, or the ticked set when it is one of several (specs 0009, 0033).
+            ResourceAction::Delete(_) => {
+                self.remove_at_cursor(Removal::Delete, &subject, window, cx)
+            }
             ResourceAction::RestartPod => {
-                self.start_removal(Removal::Restart, vec![subject], window, cx);
+                self.remove_at_cursor(Removal::Restart, &subject, window, cx)
             }
-            ResourceAction::EvictPod => {
-                self.start_removal(Removal::Evict, vec![subject], window, cx);
+            ResourceAction::EvictPod => self.remove_at_cursor(Removal::Evict, &subject, window, cx),
+            // Each builds its intent from the cursor row and opens the confirm dialog, or the batch
+            // dialog of the selection bar when the cursor row is one of several ticked rows.
+            ResourceAction::RestartRollout(_)
+            | ResourceAction::PauseRollout
+            | ResourceAction::SuspendCronJob
+            | ResourceAction::TriggerCronJob
+            | ResourceAction::RerunJob
+            | ResourceAction::Scale(_)
+                if self.is_among_ticked(&subject, cx) =>
+            {
+                self.run_bulk(action, window, cx);
             }
-            // Each builds its intent from the cursor row and opens the confirm dialog.
             ResourceAction::RestartRollout(_)
             | ResourceAction::PauseRollout
             | ResourceAction::SuspendCronJob

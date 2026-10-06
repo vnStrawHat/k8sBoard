@@ -88,3 +88,13 @@ When a filter change (text, chip, preset) unticks rows the filter now hides, a p
 ## Bar clearance (J10)
 
 While any row is ticked the table body gets bottom padding of `selection_bar_clearance` (64 px: the bar and its margin), so the last rows scroll into view above the floating bar. The value popover uses the same constant.
+
+## Row keys on the ticked set (M3, 2026-10-06)
+
+When the cursor row is one of at least two ticked rows (`is_among_ticked`), R, X and Shift+S act on the ticked set exactly as Del does (and as the selection bar buttons do):
+
+- Pods: R and X go through `start_removal` with the ticked pods (`Restart 3 pods`, `Evict 3 pods`; every pod must pass `pod_block`).
+- Workloads: R, Pause, Suspend, Trigger now and Re-run call `run_bulk`, so the batch dialog of the bar opens (`Restart 2 deployments`); Shift+S opens the bulk Scale popover.
+- A cursor row that is not ticked, or a single ticked row, keeps the single-object dialogs. Mixed clusters or more than 50 rows give the bar's notice (`Select rows of one cluster`, `Select at most 50 rows`).
+
+Tests: `r_on_a_ticked_row_restarts_the_ticked_set`, `shift_s_on_a_ticked_row_scales_the_ticked_set`, `a_restart_acts_on_the_ticked_set_when_the_cursor_row_is_one_of_them`, `an_evict_acts_on_the_ticked_set_when_the_cursor_row_is_one_of_them`.

@@ -219,8 +219,11 @@ pub(crate) fn delete_batch(
     let action = removal.action(kind);
     let (label, verb) = match removal {
         Removal::Delete => (format!("Delete {}", kind_noun(kind, items.len())), "Delete"),
-        Removal::Restart => ("Restart pod".to_owned(), "Restart"),
-        Removal::Evict => ("Evict pod".to_owned(), "Evict"),
+        Removal::Restart => (
+            format!("Restart {}", kind_noun(kind, items.len())),
+            "Restart",
+        ),
+        Removal::Evict => (format!("Evict {}", kind_noun(kind, items.len())), "Evict"),
     };
     // The kind table is the warnings of a delete; a restart or an eviction has its own lines, so
     // the bare-pod line of an eviction shows once.
@@ -805,17 +808,25 @@ impl AppShell {
         delete_scope(subject, &self.checked_objects(cx)).map_or(1, |scope| scope.len())
     }
 
-    /// Del, the menu item, and the palette entry end here: the cursor row, or the ticked set.
-    pub(crate) fn delete_at_cursor(
+    /// Whether `subject` is one of at least two ticked rows: a row key then acts on the ticked set.
+    pub(crate) fn is_among_ticked(&self, subject: &ClusterObject, cx: &App) -> bool {
+        let checked = self.checked_objects(cx);
+        checked.len() >= 2 && checked.contains(subject)
+    }
+
+    /// Del, R and X on a pod, the menu items, and the palette entries end here: the cursor row, or
+    /// the ticked set when the cursor row is one of several.
+    pub(crate) fn remove_at_cursor(
         &mut self,
+        removal: Removal,
         subject: &ClusterObject,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         match delete_scope(subject, &self.checked_objects(cx)) {
-            Ok(scope) => self.start_removal(Removal::Delete, scope, window, cx),
+            Ok(scope) => self.start_removal(removal, scope, window, cx),
             Err(reason) => {
-                let label = action_label(ResourceAction::Delete(ObjectKind::Pod));
+                let label = action_label(removal.action(ObjectKind::Pod));
                 notify_delete(window, cx, unavailable_text(label, &reason));
             }
         }
@@ -823,7 +834,7 @@ impl AppShell {
 
     /// The first step of a delete, a restart, or an eviction: gate, then read the uid of every object
     /// (decision 2), then the confirm dialog. Nothing is sent without the dialog, and nothing is
-    /// removed from here. A restart or an eviction takes the cursor pod alone.
+    /// removed from here.
     ///
     /// A second call while a read is running, or while a dialog is open, does nothing: a held Del
     /// repeats, and must not open the dialog twice.
@@ -878,17 +889,13 @@ impl AppShell {
         if scope.iter().any(|object| object.cluster != first.cluster) {
             return Err("Select rows of one cluster".into());
         }
-        // A restart or an eviction is one pod; the ticked set is never its scope.
+        // A restart or an eviction is of pods only.
         if removal != Removal::Delete
-            && !matches!(
-                scope,
-                [ClusterObject {
-                    key: ResourceKey::Pod { .. },
-                    ..
-                }]
-            )
+            && scope
+                .iter()
+                .any(|object| !matches!(object.key, ResourceKey::Pod { .. }))
         {
-            return Err("Select one pod".into());
+            return Err("Select pods".into());
         }
         if scope.len() > MAX_BATCH_ITEMS {
             return Err(format!("Select at most {MAX_BATCH_ITEMS} rows").into());
@@ -910,9 +917,11 @@ impl AppShell {
             .live_of(&first.cluster, cx)
             .ok_or_else(|| SharedString::from("the cluster is not open"))?;
         // The row may lag the cluster, so the uid read checks the terminating state again.
-        let pod = live.pods.items().iter().find(|pod| first.key.is_pod(pod));
-        if let Some(reason) = pod.and_then(|pod| pod_block(removal.action(kind), pod)) {
-            return Err(reason);
+        for object in scope {
+            let pod = live.pods.items().iter().find(|pod| object.key.is_pod(pod));
+            if let Some(reason) = pod.and_then(|pod| pod_block(removal.action(kind), pod)) {
+                return Err(reason);
+            }
         }
         if scope.iter().all(|object| is_helm_record(live, &object.key)) {
             return Err(HELM_RECORD_REASON.into());

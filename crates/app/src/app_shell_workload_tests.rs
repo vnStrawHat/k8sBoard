@@ -1842,3 +1842,38 @@ fn a_locked_cluster_leaves_the_diff_dialog_roll_back_disabled(cx: &mut TestAppCo
     assert!(!t.has_dialog(cx));
     assert!(writes(&t.stg_api).is_empty());
 }
+
+#[gpui_kit::test]
+fn r_on_a_ticked_row_restarts_the_ticked_set(cx: &mut TestAppContext) {
+    let t = workload_clusters("restart-key-ticked", cx);
+    t.with_ticked_deployments(&[0, 1], cx);
+    t.cursor_on(&t.stg, ResourceKind::Deployments, "api", cx);
+    t.press("r", cx);
+    assert_eq!(t.dialog_label(cx), "Restart 2 deployments");
+    t.wait_for_dry_run(cx);
+    assert_eq!(t.items(cx).len(), 2);
+    assert_eq!(writes(&t.stg_api).len(), 2);
+}
+
+#[gpui_kit::test]
+fn r_acts_on_the_cursor_row_when_it_is_not_ticked(cx: &mut TestAppContext) {
+    let t = workload_clusters("restart-key-unticked", cx);
+    t.with_ticked_deployments(&[0, 1], cx);
+    t.cursor_on(&t.stg, ResourceKind::Deployments, "worker", cx);
+    t.press("r", cx);
+    assert_eq!(t.dialog_label(cx), "Restart rollout of deployment worker");
+}
+
+#[gpui_kit::test]
+fn shift_s_on_a_ticked_row_scales_the_ticked_set(cx: &mut TestAppContext) {
+    let t = workload_clusters("scale-key-ticked", cx);
+    t.with_ticked_deployments(&[0, 1], cx);
+    t.cursor_on(&t.stg, ResourceKind::Deployments, "api", cx);
+    t.press("shift-s", cx);
+    let popover = t.popover(cx).expect("the bulk popover opens");
+    t.type_in_popover(&popover, "2", cx);
+    t.fixture.with_window(cx, |window, cx| {
+        popover.update(cx, |popover, cx| popover.press_submit(window, cx));
+    });
+    assert_eq!(t.dialog_label(cx), "Scale 2 deployments to 2");
+}

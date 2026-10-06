@@ -1843,18 +1843,39 @@ fn restart_and_evict_refuse_a_blocked_pod_without_reading(cx: &mut TestAppContex
     );
 }
 
-#[gpui_kit::test]
-fn a_restart_acts_on_the_cursor_pod_never_the_ticked_set(cx: &mut TestAppContext) {
-    let t = delete_test("restart-cursor-only", cx);
+fn assert_removal_covers_the_ticked_set(row: RowAction, label: &str, cx: &mut TestAppContext) {
+    let t = delete_test("removal-ticked-set", cx);
     t.tick_staging_pods(&["api-0", "api-1", "api-2"], 3, cx);
+    let _ = t.cursor_on_first_ticked(cx);
+    t.open_removal(row, cx);
+    assert_eq!(t.dialog_label(cx), label);
+    assert_eq!(t.items(cx).len(), 3);
+    assert_eq!(t.identity_reads(&t.t.stg_api), 3);
+}
+
+#[gpui_kit::test]
+fn a_restart_acts_on_the_ticked_set_when_the_cursor_row_is_one_of_them(cx: &mut TestAppContext) {
+    assert_removal_covers_the_ticked_set(RowAction::RestartPod, "Restart 3 pods", cx);
+}
+
+#[gpui_kit::test]
+fn an_evict_acts_on_the_ticked_set_when_the_cursor_row_is_one_of_them(cx: &mut TestAppContext) {
+    assert_removal_covers_the_ticked_set(RowAction::EvictPod, "Evict 3 pods", cx);
+}
+
+#[gpui_kit::test]
+fn a_restart_acts_on_the_cursor_pod_when_it_is_not_ticked(cx: &mut TestAppContext) {
+    let t = delete_test("restart-cursor-unticked", cx);
+    t.tick_staging_pods(&["api-0", "api-1", "api-2"], 2, cx);
     let ticked = t.cursor_on_first_ticked(cx);
+    let other = ["api-0", "api-1", "api-2"]
+        .into_iter()
+        .find(|name| !ticked.iter().any(|ticked| ticked == name))
+        .expect("one row is not ticked");
+    t.cursor_on_pod(&t.t.stg, other, cx);
     t.open_removal(RowAction::RestartPod, cx);
-    assert_eq!(t.items(cx).len(), 1, "one pod, not the three ticked");
-    assert_eq!(t.identity_reads(&t.t.stg_api), 1);
-    assert_eq!(
-        writes(&t.t.stg_api)[0].path.rsplit('/').next(),
-        ticked.first().map(String::as_str)
-    );
+    assert_eq!(t.items(cx).len(), 1, "one pod, not the two ticked");
+    assert_eq!(writes(&t.t.stg_api)[0].path.rsplit('/').next(), Some(other));
 }
 
 #[gpui_kit::test]
