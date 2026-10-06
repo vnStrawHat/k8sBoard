@@ -19,9 +19,10 @@ use gpui_kit::component::{
     ActiveTheme as _, Disableable as _, Sizable as _, StyledExt as _, h_flex, v_flex,
 };
 use gpui_kit::{
-    AnyElement, App, AppContext as _, Context, Div, Entity, FocusHandle, Focusable as _,
-    InteractiveElement as _, IntoElement, KeyDownEvent, ParentElement as _, Render, SharedString,
-    StatefulInteractiveElement as _, Styled as _, Subscription, Task, WeakEntity, Window, div, px,
+    AnyElement, AnyWindowHandle, App, AppContext as _, Context, Div, Entity, FocusHandle,
+    Focusable as _, InteractiveElement as _, IntoElement, KeyDownEvent, ParentElement as _, Render,
+    SharedString, StatefulInteractiveElement as _, Styled as _, Subscription, Task, WeakEntity,
+    Window, div, px,
 };
 
 use crate::app_shell::AppShell;
@@ -205,6 +206,8 @@ pub(crate) struct ConfirmDialog {
     confirm: DialogConfirm,
     environment: Environment,
     generation: u64,
+    /// The window the dialog opened in, for closing it from its dry-run task.
+    window: AnyWindowHandle,
     /// `None` for an unlock, which has nothing to check.
     dry_run: Option<DryRunState>,
     /// Where each item of a batch stands, in the order of its plan; empty for any other dialog.
@@ -261,6 +264,7 @@ impl ConfirmDialog {
             confirm: inputs.confirm,
             environment: inputs.environment,
             generation: inputs.generation,
+            window: window.window_handle(),
             dry_run,
             items,
             typed,
@@ -370,6 +374,8 @@ impl ConfirmDialog {
             note: None,
         };
         let shell = self.shell.clone();
+        let window = self.window;
+        let intent = Rc::clone(&step.intent);
         self.dry_run = Some(DryRunState::Running);
         // Dropping the dialog drops the task: closing it ends the dry-run.
         self.dry_run_task = Some(cx.spawn(async move |this, cx| {
@@ -378,6 +384,17 @@ impl ConfirmDialog {
                 &result,
                 Err(CheckedWriteError::Write(WriteError::Conflict { .. }))
             );
+            // An edit that conflicts on the check has nothing to retry: the dialog closes and the
+            // editor offers Reload and keep my changes, as for a conflict on the commit.
+            if is_conflict && matches!(intent.action, ResourceAction::EditValues(_)) {
+                let _ = shell.update(cx, |shell, cx| {
+                    shell.values_commit_finished(&intent, &result, cx)
+                });
+                let _ = cx.update_window(window, |_, window, cx| {
+                    let _ = this.update(cx, |dialog, cx| dialog.close(window, cx));
+                });
+                return;
+            }
             let _ = this.update(cx, |dialog, cx| {
                 dialog.is_conflict = is_conflict;
                 dialog.dry_run = Some(dry_run_state_of(result));

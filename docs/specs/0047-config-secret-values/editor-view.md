@@ -55,6 +55,8 @@ The summary check is for the menu only; `values_base` refuses again from the ser
 
 Banner `The object changed since you opened it.` with `Reload and keep my changes` and `Discard`. Reload spawns `values_base`, re-applies the pending changes by key, lists dropped ones in the banner (`DB_USER: removed on the server, your change was dropped`), and keeps the next Apply's warnings.
 
+A 409 on the dry-run (the object changed between opening the editor and Apply) is the same conflict: the confirm dialog closes (no Retry, the base `resourceVersion` is stale) and the editor shows this banner (`values_commit_finished`, called from the dialog's dry-run task). Test `a_conflict_on_the_dry_run_closes_the_dialog_and_shows_the_banner`.
+
 ## Leaving and switching
 
 - Cancel, Esc in the footer, another screen, a reveal, a namespace change: the 0031 discard prompt when dirty, else close.

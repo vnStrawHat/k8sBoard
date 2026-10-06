@@ -707,6 +707,32 @@ fn conflict_shows_banner(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn a_conflict_on_the_dry_run_closes_the_dialog_and_shows_the_banner(cx: &mut TestAppContext) {
+    let t = values_test("values-dry-conflict", cx);
+    *lock(&t.server.dry_run_answer) = Some((
+        409,
+        r#"{"kind":"Status","apiVersion":"v1","status":"Failure","message":"the object has been modified","reason":"Conflict","code":409}"#
+            .to_owned(),
+    ));
+    t.open(cx);
+    t.insert("DB_PASSWORD", SECRET_VALUE, cx);
+    t.apply(cx);
+    t.wait_for("the banner", cx, |cx| {
+        t.view(cx).is_some_and(|view| {
+            view.read_with(cx, |view, _| {
+                matches!(view.banner(), Some(ValuesBanner::Conflict))
+            })
+        })
+    });
+    cx.run_until_parked();
+    // Nothing was committed, the dialog is gone, and the editor keeps the typed value.
+    assert!(!t.has_dialog(cx));
+    assert_eq!(t.patches().len(), 1, "{:?}", t.patches());
+    assert!(t.is_editing(cx));
+    assert!(t.edit_view(cx).read_with(cx, |view, _| view.is_dirty()));
+}
+
+#[gpui_kit::test]
 fn a_held_ctrl_s_never_opens_the_dialog(cx: &mut TestAppContext) {
     let t = values_test("values-held", cx);
     t.open(cx);

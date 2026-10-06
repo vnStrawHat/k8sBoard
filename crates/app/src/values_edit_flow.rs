@@ -109,10 +109,10 @@ impl AppShell {
         self.values_commit_open = Some(open_id);
     }
 
-    /// A commit of the values edit finished: success closes the editor, and a failure that the
-    /// editor can show (a conflict, an invalid key, a deleted object) is shown in place. The dialog
-    /// is gone by now, and the write flow has already audited the commit.
-    pub(super) fn values_commit_finished(
+    /// A commit of the values edit finished, or its dry-run hit a conflict: success closes the
+    /// editor, and a failure that the editor can show (a conflict, an invalid key, a deleted object)
+    /// is shown in place. The dialog is gone by now, and the write flow has already audited the commit.
+    pub(crate) fn values_commit_finished(
         &mut self,
         intent: &WriteIntent,
         result: &Result<WriteOutcome, CheckedWriteError>,
