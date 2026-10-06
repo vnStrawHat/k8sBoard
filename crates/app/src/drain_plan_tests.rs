@@ -210,6 +210,7 @@ fn blocked_budget_reuses_disruption_state() {
         is_true: false,
         reason: Some("SyncFailed".to_owned()),
         message: None,
+        last_transition: None,
     }];
     assert_eq!(
         verdict_of(&pod("payments", "api-1"), &[failed], 1),

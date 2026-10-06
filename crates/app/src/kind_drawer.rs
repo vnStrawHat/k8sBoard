@@ -50,7 +50,7 @@ use crate::resource_actions::{
 use crate::resource_kind::ResourceKind;
 use crate::row_context::RowContext;
 use crate::secret_values::{SecretValuesView, ValueAccess};
-use crate::status_tone::{StatusTone, tone_color, toned_text};
+use crate::status_tone::{StatusLabel, StatusTone, tone_color, toned_text};
 use crate::table_selection::{ClusterObject, ResourceKey};
 
 pub(crate) fn kind_drawer(
@@ -621,6 +621,12 @@ fn detail_element(
             let link = link_text(id, text, target.clone(), cx);
             stacked_row(label, link, id, cx)
         }
+        DetailRow::Condition {
+            name,
+            status,
+            since,
+            message,
+        } => condition_element(name, status, *since, message.as_ref(), now, cx),
         DetailRow::Port { text, port, is_tcp } => match &paint.ports {
             Some(ports) => {
                 let choice = PortChoice {
@@ -736,6 +742,36 @@ fn code_base(text: &SharedString, cx: &App) -> Div {
 }
 
 /// The label above its value, for labels that do not fit the label column.
+/// The status line of a condition with its age, then the message in muted wrapped text under the
+/// status, so a long controller message never widens the drawer.
+fn condition_element(
+    name: &SharedString,
+    status: &StatusLabel,
+    since: Option<jiff::Timestamp>,
+    message: Option<&SharedString>,
+    now: jiff::Timestamp,
+    cx: &App,
+) -> AnyElement {
+    let muted = cx.theme().muted_foreground;
+    let status_line = h_flex()
+        .gap_1()
+        .child(toned_text(status.clone(), cx).truncate())
+        .children(since.map(|at| {
+            div()
+                .flex_shrink_0()
+                .text_color(muted)
+                .child(format!("· {} ago", format_age(Some(at), now)))
+        }));
+    v_flex()
+        .child(wide_detail_row(name.clone(), status_line, cx))
+        .children(
+            message.map(|message| {
+                wide_detail_row("", div().text_color(muted).child(message.clone()), cx)
+            }),
+        )
+        .into_any_element()
+}
+
 fn stacked_row(label: &SharedString, value: AnyElement, id: usize, cx: &App) -> AnyElement {
     v_flex()
         .py_1()

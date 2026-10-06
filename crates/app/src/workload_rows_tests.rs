@@ -54,6 +54,7 @@ fn condition(name: &str, is_true: bool, reason: Option<&str>) -> WorkloadConditi
         is_true,
         reason: reason.map(str::to_owned),
         message: None,
+        last_transition: None,
     }
 }
 
@@ -213,10 +214,7 @@ fn deployment_conditions_show_reason_when_false() {
         .rows
         .iter()
         .filter_map(|row| match row {
-            DetailRow::Field {
-                value: KindCell::Toned(label),
-                ..
-            } => Some((label.text.to_string(), label.tone)),
+            DetailRow::Condition { status, .. } => Some((status.text.to_string(), status.tone)),
             _ => None,
         })
         .collect();
@@ -803,6 +801,26 @@ fn workload_kinds_share_one_vocabulary() {
     };
     assert!(columns(ResourceKind::StatefulSets).contains(&"Strategy"));
     assert!(columns(ResourceKind::CronJobs).contains(&"Last run"));
+}
+
+#[test]
+fn a_condition_keeps_its_reason_message_and_transition_time() {
+    let at = "2026-10-01T10:00:00Z".parse().expect("a valid timestamp");
+    let mut available = condition("Progressing", true, Some("NewReplicaSetAvailable"));
+    available.message = Some("ReplicaSet \"api-7d9\" has successfully progressed.".to_owned());
+    available.last_transition = Some(at);
+    assert_eq!(
+        condition_row(&available),
+        DetailRow::Condition {
+            name: "Progressing".into(),
+            status: StatusLabel {
+                text: "True · NewReplicaSetAvailable".into(),
+                tone: StatusTone::Ok,
+            },
+            since: Some(at),
+            message: Some("ReplicaSet \"api-7d9\" has successfully progressed.".into()),
+        }
+    );
 }
 
 #[test]

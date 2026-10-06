@@ -189,19 +189,34 @@ fn port_rows(containers: &[TemplateContainer]) -> Vec<DetailRow> {
         .collect()
 }
 
-/// `True` is ok; `False` is a warning, with the reason when the controller gave one.
+/// `True` is ok; `False` is a warning. The reason follows the status either way, then the message
+/// and the age of the last transition that say what happened and when.
 pub(crate) fn condition_row(condition: &WorkloadCondition) -> DetailRow {
-    let (text, tone) = match (condition.is_true, &condition.reason) {
-        (true, _) => ("True".to_owned(), StatusTone::Ok),
-        (false, Some(reason)) => (format!("False · {reason}"), StatusTone::Warn),
-        (false, None) => ("False".to_owned(), StatusTone::Warn),
+    condition_row_toned(condition, StatusTone::Ok)
+}
+
+/// `condition_row` with `true_tone` for a `True` status.
+pub(crate) fn condition_row_toned(
+    condition: &WorkloadCondition,
+    true_tone: StatusTone,
+) -> DetailRow {
+    let (status, tone) = if condition.is_true {
+        ("True", true_tone)
+    } else {
+        ("False", StatusTone::Warn)
     };
-    DetailRow::Field {
-        label: condition.name.clone().into(),
-        value: KindCell::Toned(StatusLabel {
+    let text = match &condition.reason {
+        Some(reason) => format!("{status} · {reason}"),
+        None => status.to_owned(),
+    };
+    DetailRow::Condition {
+        name: condition.name.clone().into(),
+        status: StatusLabel {
             text: text.into(),
             tone,
-        }),
+        },
+        since: condition.last_transition,
+        message: condition.message.clone().map(Into::into),
     }
 }
 

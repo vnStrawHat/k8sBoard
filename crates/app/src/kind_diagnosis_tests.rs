@@ -21,6 +21,7 @@ fn condition(
         is_true,
         reason: reason.map(str::to_owned),
         message: message.map(str::to_owned),
+        last_transition: None,
     }
 }
 

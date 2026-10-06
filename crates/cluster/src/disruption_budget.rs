@@ -152,6 +152,7 @@ pub(crate) fn pod_disruption_budget_summary(
                     &item.status,
                     Some(&item.reason),
                     Some(&item.message),
+                    Some(item.last_transition_time.0),
                 )
             })
             .collect(),

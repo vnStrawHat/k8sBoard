@@ -11,7 +11,7 @@ use crate::kind_row::{
 };
 use crate::status_tone::{StatusLabel, StatusTone};
 use crate::table_selection::ResourceKey;
-use crate::workload_rows::condition_row;
+use crate::workload_rows::condition_row_toned;
 
 const BOUND: &str = "Bound";
 const RESIZING: &str = "Resizing";
@@ -120,16 +120,12 @@ fn claim_condition_row(condition: &WorkloadCondition) -> DetailRow {
         condition.name.as_str(),
         RESIZING | FILE_SYSTEM_RESIZE_PENDING
     );
-    if !(is_resize && condition.is_true) {
-        return condition_row(condition);
-    }
-    DetailRow::field(
-        condition.name.clone(),
-        KindCell::Toned(StatusLabel {
-            text: "True".into(),
-            tone: StatusTone::Info,
-        }),
-    )
+    let true_tone = if is_resize {
+        StatusTone::Info
+    } else {
+        StatusTone::Ok
+    };
+    condition_row_toned(condition, true_tone)
 }
 
 fn condition_is_true(conditions: &[WorkloadCondition], name: &str) -> bool {

@@ -62,6 +62,7 @@ fn deployment_summary_reads_replica_counts() {
             is_true: true,
             reason: None,
             message: None,
+            last_transition: None,
         }]
     );
 }

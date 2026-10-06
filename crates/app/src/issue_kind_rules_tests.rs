@@ -24,6 +24,7 @@ fn condition(name: &str, is_true: bool, reason: &str, message: &str) -> Workload
         is_true,
         reason: Some(reason.to_owned()),
         message: Some(message.to_owned()),
+        last_transition: None,
     }
 }
 

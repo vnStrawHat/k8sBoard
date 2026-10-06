@@ -208,6 +208,7 @@ fn why_box_tones_node_and_adds_check() {
         is_true: false,
         reason: Some("FailedGetResourceMetric".to_owned()),
         message: None,
+        last_transition: None,
     }];
     let graph = Fixture::default()
         .with_deployment("api", 1, 1)

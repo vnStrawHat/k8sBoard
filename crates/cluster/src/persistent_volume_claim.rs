@@ -91,6 +91,7 @@ pub(crate) fn persistent_volume_claim_summary(
                     &item.status,
                     item.reason.as_deref(),
                     item.message.as_deref(),
+                    item.last_transition_time.as_ref().map(|time| time.0),
                 )
             })
             .collect(),

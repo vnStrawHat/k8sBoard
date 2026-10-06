@@ -820,6 +820,7 @@ fn stalled_api() -> KindObject {
             is_true: false,
             reason: Some("ProgressDeadlineExceeded".to_owned()),
             message: None,
+            last_transition: None,
         }],
         template_change: None,
     })

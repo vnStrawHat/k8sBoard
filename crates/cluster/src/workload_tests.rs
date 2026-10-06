@@ -159,13 +159,19 @@ fn int_or_string_text_reads_percent_and_number() {
 
 #[test]
 fn condition_reads_truth_and_drops_empty_reason() {
-    let reasoned = condition("Available", "True", Some("MinimumReplicasAvailable"), None);
+    let reasoned = condition(
+        "Available",
+        "True",
+        Some("MinimumReplicasAvailable"),
+        None,
+        None,
+    );
     assert!(reasoned.is_true);
     assert_eq!(reasoned.reason.as_deref(), Some("MinimumReplicasAvailable"));
-    let unknown = condition("Progressing", "Unknown", Some(""), None);
+    let unknown = condition("Progressing", "Unknown", Some(""), None, None);
     assert!(!unknown.is_true);
     assert_eq!(unknown.reason, None);
-    assert!(!condition("Failed", "False", None, None).is_true);
+    assert!(!condition("Failed", "False", None, None, None).is_true);
 }
 
 #[test]
@@ -193,12 +199,15 @@ fn revision_keeps_only_the_deployment_revision_annotation() {
 
 #[test]
 fn condition_message_is_cut() {
-    let short = condition("Failed", "True", None, Some("  quota exceeded \n"));
+    let short = condition("Failed", "True", None, Some("  quota exceeded \n"), None);
     assert_eq!(short.message.as_deref(), Some("quota exceeded"));
-    assert_eq!(condition("Failed", "True", None, Some("")).message, None);
-    assert_eq!(condition("Failed", "True", None, None).message, None);
+    assert_eq!(
+        condition("Failed", "True", None, Some(""), None).message,
+        None
+    );
+    assert_eq!(condition("Failed", "True", None, None, None).message, None);
     let long = "x".repeat(5_000);
-    let cut = condition("Failed", "True", None, Some(&long));
+    let cut = condition("Failed", "True", None, Some(&long), None);
     let message = cut.message.expect("message kept");
     assert!(message.len() < 1_100);
     assert!(message.ends_with('\u{2026}'));
@@ -224,4 +233,13 @@ fn container_port_keeps_host_port() {
         .map(|port| port.host_port)
         .collect();
     assert_eq!(host_ports, [Some(8080), None, None]);
+}
+
+#[test]
+fn condition_keeps_the_last_transition_time() {
+    let at = jiff::Timestamp::UNIX_EPOCH;
+    assert_eq!(
+        condition("Available", "True", None, None, Some(at)).last_transition,
+        Some(at)
+    );
 }

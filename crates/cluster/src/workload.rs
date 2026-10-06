@@ -29,6 +29,8 @@ pub struct WorkloadCondition {
     pub reason: Option<String>,
     /// `conditions[].message`, cut to 1 KiB; empty is `None`.
     pub message: Option<String>,
+    /// `conditions[].lastTransitionTime`; `None` when the controller did not set it.
+    pub last_transition: Option<jiff::Timestamp>,
 }
 
 /// A main container of a pod template. Only the name, image, and ports are kept:
@@ -119,12 +121,14 @@ pub(crate) fn condition(
     status: &str,
     reason: Option<&str>,
     message: Option<&str>,
+    last_transition: Option<jiff::Timestamp>,
 ) -> WorkloadCondition {
     WorkloadCondition {
         name: name.to_owned(),
         is_true: status == "True",
         reason: non_empty(reason),
         message: optional_message(message),
+        last_transition,
     }
 }
 

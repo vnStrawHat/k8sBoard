@@ -254,6 +254,14 @@ pub(crate) enum DetailRow {
         text: SharedString,
         target: ResourceKey,
     },
+    /// A condition: its status with the age of the last transition (read at paint time), and
+    /// the message the controller gave under it.
+    Condition {
+        name: SharedString,
+        status: StatusLabel,
+        since: Option<jiff::Timestamp>,
+        message: Option<SharedString>,
+    },
 }
 
 impl KindCell {

@@ -108,6 +108,7 @@ pub(crate) fn deployment_summary(deployment: &Deployment) -> DeploymentSummary {
                     &item.status,
                     item.reason.as_deref(),
                     item.message.as_deref(),
+                    item.last_transition_time.as_ref().map(|time| time.0),
                 )
             })
             .collect(),

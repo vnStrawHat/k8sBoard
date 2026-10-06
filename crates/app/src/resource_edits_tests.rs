@@ -262,6 +262,7 @@ fn pending_file_system() -> WorkloadCondition {
         is_true: true,
         reason: None,
         message: None,
+        last_transition: None,
     }
 }
 

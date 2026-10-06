@@ -79,6 +79,7 @@ fn pdb_sync_failed_status() {
         is_true: false,
         reason: Some("SyncFailed".to_owned()),
         message: Some("found no controller ref".to_owned()),
+        last_transition: None,
     }];
     let status = pod_disruption_budget_row(&failed).status;
     assert_eq!(status.text.as_ref(), "Budget not computed");
@@ -162,6 +163,7 @@ fn cond(name: &str, is_true: bool, reason: &str) -> WorkloadCondition {
         is_true,
         reason: Some(reason.to_owned()),
         message: None,
+        last_transition: None,
     }
 }
 

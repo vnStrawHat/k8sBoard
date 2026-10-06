@@ -55,6 +55,7 @@ fn condition(name: &str) -> WorkloadCondition {
         is_true: true,
         reason: None,
         message: None,
+        last_transition: None,
     }
 }
 
@@ -242,14 +243,10 @@ fn true_resize_conditions_read_info() {
     let row = persistent_volume_claim_row(&resizing);
     let conditions = row.section("Conditions").expect("section");
     for detail in &conditions.rows {
-        let DetailRow::Field {
-            value: KindCell::Toned(label),
-            ..
-        } = detail
-        else {
-            panic!("a toned condition field");
+        let DetailRow::Condition { status, .. } = detail else {
+            panic!("a condition row");
         };
-        assert_eq!(label, &labeled("True", StatusTone::Info));
+        assert_eq!(status, &labeled("True", StatusTone::Info));
     }
 }
 
@@ -261,10 +258,12 @@ fn other_true_conditions_read_ok() {
     let conditions = row.section("Conditions").expect("section");
     assert_eq!(
         conditions.rows,
-        [DetailRow::field(
-            "Other",
-            KindCell::Toned(labeled("True", StatusTone::Ok))
-        )]
+        [DetailRow::Condition {
+            name: "Other".into(),
+            status: labeled("True", StatusTone::Ok),
+            since: None,
+            message: None,
+        }]
     );
 }
 
