@@ -122,6 +122,7 @@ fn diagnose(object: &KindObject, nodes: &[NodeSummary], now: Timestamp) -> Optio
             service: None,
             bindings: None,
             tls_secrets: None,
+            events: None,
             now,
         },
     )

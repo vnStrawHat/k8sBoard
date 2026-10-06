@@ -3,7 +3,7 @@
 
 use std::rc::Rc;
 
-use cluster::{HelmRevisionRef, ObjectKind};
+use cluster::{EventSummary, HelmRevisionRef, ObjectKind};
 use gpui_kit::component::alert::Alert;
 use gpui_kit::component::menu::DropdownMenu as _;
 use gpui_kit::component::progress::Progress;
@@ -31,7 +31,9 @@ use crate::drawer::{
 };
 use crate::helm_release_view::HelmReleaseView;
 use crate::helm_rows::VALUES_CHANGE_TITLE;
-use crate::kind_diagnosis::{DiagnosisInputs, KindDiagnosis, kind_diagnosis};
+use crate::kind_diagnosis::{
+    DiagnosisInputs, KindDiagnosis, kind_diagnosis, missing_storage_class,
+};
 use crate::kind_join::{matching_pods, service_health_of};
 use crate::kind_row::{DetailRow, KindCell, KindObject, KindRow, LiveContent};
 use crate::live_sections::{
@@ -316,6 +318,7 @@ fn overview(paint: &DrawerPaint, cx: &Context<AppShell>) -> Overview {
     if let Some(diagnosis) = row_diagnosis(kind, row, live, now) {
         sections.push(why_box(&diagnosis, cx));
     }
+    let missing_class = missing_claim_class(kind, row, live);
     for section in &row.sections {
         // An all-ready DaemonSet has nothing to list under "Not ready"; the bars already say so.
         if section.rows == [DetailRow::Live(LiveContent::NotReadyPods)] && all_pods_ready(row, live)
@@ -336,6 +339,18 @@ fn overview(paint: &DrawerPaint, cx: &Context<AppShell>) -> Overview {
         }
         for detail in &section.rows {
             next_id += 1;
+            let plain_class;
+            let detail = match (detail, missing_class) {
+                (DetailRow::Link { label, .. }, Some(class)) if label.as_ref() == "Class" => {
+                    // A link to a StorageClass that does not exist would open nothing.
+                    plain_class = DetailRow::field(
+                        "Class",
+                        KindCell::Text(format!("{class} (not found)").into()),
+                    );
+                    &plain_class
+                }
+                _ => detail,
+            };
             sections.push(detail_element(detail, next_id, paint, cx));
         }
     }
@@ -360,6 +375,28 @@ pub(crate) const REVISIONS_TITLE: &str = "Revisions";
 struct Overview {
     sections: Vec<AnyElement>,
     section_starts: Vec<(&'static str, usize)>,
+}
+
+/// The events of the open drawer's object, once they have loaded.
+fn loaded_events<'a>(
+    kind: ResourceKind,
+    row: &KindRow,
+    live: &'a LiveCluster,
+) -> Option<&'a [EventSummary]> {
+    let subject = event_subject(&ResourceKey::of_row(kind, row))?;
+    live.events_of(&subject)?.ready_items()
+}
+
+/// The StorageClass of a claim row that the provisioner's events say does not exist.
+fn missing_claim_class<'a>(
+    kind: ResourceKind,
+    row: &'a KindRow,
+    live: &LiveCluster,
+) -> Option<&'a str> {
+    let KindObject::PersistentVolumeClaim(claim) = &row.object else {
+        return None;
+    };
+    missing_storage_class(claim, loaded_events(kind, row, live)?)
 }
 
 /// The WHY box of the row, read from its object, its owned pods (a Service's matching pods), and
@@ -409,6 +446,7 @@ fn row_diagnosis(
             tls_secrets: companion
                 .and_then(CompanionLists::tls_secrets)
                 .and_then(|list| list.ready_items()),
+            events: loaded_events(kind, row, live),
             now,
         },
     )

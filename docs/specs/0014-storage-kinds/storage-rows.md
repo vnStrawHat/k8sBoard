@@ -27,6 +27,8 @@ Status: `phase_label`; for a Bound claim, condition `Resizing` true → Info "Re
 
 WHY **VOLUME LOST** (Bad), phase `Lost`: `The bound volume {volume} no longer exists. The data on it is gone or unreachable.`
 
+WHY **PENDING** (Warn), phase `Pending`: `{reason}: {message}` of the newest Warning event of the open drawer (`ProvisioningFailed`); no Warning event (a claim waiting for its first consumer) means no box. When that message says the claim's class is `"{class}" not found`, the Class row reads `{class} (not found)` as plain text instead of a link (the StorageClasses list is not loaded on the claim screens, so the event is the evidence).
+
 | Section | Rows |
 |---|---|
 | WHY | above |

@@ -198,6 +198,7 @@ fn run(
             service: None,
             bindings: None,
             tls_secrets: None,
+            events: None,
             now: at(1_000),
         },
     )
@@ -654,6 +655,7 @@ fn run_service(health: ServiceHealth, pods: &[PodSummary]) -> Option<KindDiagnos
             service: Some(health),
             bindings: None,
             tls_secrets: None,
+            events: None,
             now: at(1_000),
         },
     )
@@ -729,6 +731,7 @@ fn service_no_ready_endpoints_waits_for_the_pods() {
             service: Some(health),
             bindings: None,
             tls_secrets: None,
+            events: None,
             now: at(1_000),
         },
     );
@@ -766,6 +769,7 @@ fn budget_diagnosis(budget: PodDisruptionBudgetSummary) -> Option<KindDiagnosis>
             service: None,
             bindings: None,
             tls_secrets: None,
+            events: None,
             now: at(1_000),
         },
     )
@@ -865,6 +869,7 @@ fn autoscaler_diagnosis(hpa: HorizontalPodAutoscalerSummary) -> Option<KindDiagn
             service: None,
             bindings: None,
             tls_secrets: None,
+            events: None,
             now: at(1_000),
         },
     )
@@ -1008,6 +1013,7 @@ fn quota_at_limit() {
                 service: None,
                 bindings: None,
                 tls_secrets: None,
+                events: None,
                 now: at(1_000),
             },
         )
@@ -1049,6 +1055,7 @@ fn quota_status_and_box_name_the_same_item() {
             service: None,
             bindings: None,
             tls_secrets: None,
+            events: None,
             now: at(1_000),
         },
     )
@@ -1067,6 +1074,7 @@ fn storage_inputs() -> DiagnosisInputs<'static> {
         service: None,
         bindings: None,
         tls_secrets: None,
+        events: None,
         now: at(1_000),
     }
 }
@@ -1661,6 +1669,7 @@ fn secret_box(object: KindObject, now: i64) -> Option<KindDiagnosis> {
             service: None,
             bindings: None,
             tls_secrets: None,
+            events: None,
             now: at(now),
         },
     )
@@ -1787,6 +1796,7 @@ fn ingress_box(
             service: None,
             bindings: None,
             tls_secrets: secrets,
+            events: None,
             now: at(now),
         },
     )
@@ -1848,6 +1858,134 @@ fn ingress_box_waits_for_companion() {
     assert_eq!(ingress_box(&object, None, 100 * DAY), None);
     // An ingress without TLS needs no box even with the list loaded.
     assert_eq!(ingress_box(&tls_ingress(&[]), Some(&[]), 100 * DAY), None);
+}
+
+fn claim_event(event_type: EventType, reason: &str, message: &str, seen: i64) -> EventSummary {
+    EventSummary {
+        namespace: "shop".to_owned(),
+        name: format!("data.{seen}"),
+        event_type,
+        reason: reason.to_owned(),
+        object: cluster::InvolvedObject {
+            kind: "PersistentVolumeClaim".to_owned(),
+            namespace: Some("shop".to_owned()),
+            name: "data".to_owned(),
+        },
+        message: message.to_owned(),
+        count: 1,
+        first_seen: Some(at(seen)),
+        last_seen: Some(at(seen)),
+        source: None,
+        container: None,
+    }
+}
+
+const NO_CLASS_MESSAGE: &str = "storageclass.storage.k8s.io \"fast-ssd\" not found";
+
+#[test]
+fn pending_claim_box_quotes_the_newest_warning_event() {
+    let events = [
+        claim_event(
+            EventType::Warning,
+            "ProvisioningFailed",
+            "older failure",
+            100,
+        ),
+        claim_event(
+            EventType::Warning,
+            "ProvisioningFailed",
+            NO_CLASS_MESSAGE,
+            200,
+        ),
+        claim_event(EventType::Normal, "WaitForFirstConsumer", "waiting", 300),
+    ];
+    let inputs = DiagnosisInputs {
+        events: Some(&events),
+        ..storage_inputs()
+    };
+    let diagnosis = kind_diagnosis(
+        &KindObject::PersistentVolumeClaim(claim("Pending")),
+        &inputs,
+    )
+    .expect("a box");
+    assert_eq!(diagnosis.tone, StatusTone::Warn);
+    assert_eq!(diagnosis.title, "PENDING");
+    assert_eq!(
+        diagnosis.text,
+        format!("ProvisioningFailed: {NO_CLASS_MESSAGE}")
+    );
+}
+
+#[test]
+fn pending_claim_box_needs_a_warning_event() {
+    let object = KindObject::PersistentVolumeClaim(claim("Pending"));
+    // A claim that waits for its first consumer has only Normal events.
+    let normal = [claim_event(
+        EventType::Normal,
+        "WaitForFirstConsumer",
+        "waiting",
+        1,
+    )];
+    let inputs = DiagnosisInputs {
+        events: Some(&normal),
+        ..storage_inputs()
+    };
+    assert_eq!(kind_diagnosis(&object, &inputs), None);
+    assert_eq!(kind_diagnosis(&object, &storage_inputs()), None);
+}
+
+#[test]
+fn a_class_the_events_call_missing_is_named_missing() {
+    let events = [claim_event(
+        EventType::Warning,
+        "ProvisioningFailed",
+        NO_CLASS_MESSAGE,
+        200,
+    )];
+    let mut pending = claim("Pending");
+    assert_eq!(missing_storage_class(&pending, &events), None);
+    pending.storage_class = Some("fast-ssd".to_owned());
+    assert_eq!(missing_storage_class(&pending, &events), Some("fast-ssd"));
+    pending.storage_class = Some("standard".to_owned());
+    assert_eq!(missing_storage_class(&pending, &events), None);
+}
+
+fn old_ingress(class: Option<&str>, addresses: &[&str]) -> KindObject {
+    let KindObject::Ingress(mut ingress) = tls_ingress(&[]) else {
+        unreachable!("tls_ingress builds an ingress");
+    };
+    ingress.created_at = Some(at(0));
+    ingress.class = class.map(str::to_owned);
+    ingress.addresses = addresses.iter().map(|text| (*text).to_owned()).collect();
+    KindObject::Ingress(ingress)
+}
+
+#[test]
+fn ingress_without_an_address_names_the_missing_controller() {
+    let classless = ingress_box(&old_ingress(None, &[]), None, 600).expect("a box");
+    assert_eq!(classless.tone, StatusTone::Warn);
+    assert_eq!(classless.title, "NO ADDRESS");
+    assert!(
+        classless
+            .text
+            .starts_with("No address: no ingress controller has picked it up (no ingressClassName"),
+        "{}",
+        classless.text
+    );
+    let classed = ingress_box(&old_ingress(Some("nginx"), &[]), None, 600).expect("a box");
+    assert_eq!(
+        classed.text,
+        "No address: no ingress controller has picked it up (class nginx: no controller reports it)."
+    );
+}
+
+#[test]
+fn ingress_address_box_waits_for_the_grace_and_an_empty_status() {
+    assert_eq!(ingress_box(&old_ingress(None, &[]), None, 300), None);
+    assert_eq!(
+        ingress_box(&old_ingress(None, &["10.0.0.5"]), None, 600),
+        None
+    );
 }
 
 // ---- Helm releases ----

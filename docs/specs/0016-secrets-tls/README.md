@@ -6,6 +6,7 @@ Status: done (steps 1-4, read-only); amended after the security review (HEAD `6d
 
 - **Secrets** explorer kind: Type, Keys, **Used by** (pods and ingresses), **unused** flag, Age; drawer with masked **Data** (key names and sizes), per-key **Reveal** for 30 s, **Reveal all** per drawer, **Copy** without reveal (private on Windows, auto-cleared after 30 s); type views: TLS certificate (subject, issuer, SANs, validity), docker registry hosts, service-account link; **CERTIFICATE** box.
 - **Ingresses**: **TLS** column with expiry (replaces Ports, as W7), TLS section with secret link, issuer, not-after, and a **CERTIFICATE** box.
+- **Ingresses** also get a **NO ADDRESS** box (Warn) before the certificate box: older than 5 min with no load-balancer address, `No address: no ingress controller has picked it up (class X: no controller reports it)` or `(no ingressClassName; only a default IngressClass would pick it up)`. The default IngressClass is not read.
 - A parsed-certificate model the Overview/Issues feed (0020/0021) reuses.
 
 ## Non-goals

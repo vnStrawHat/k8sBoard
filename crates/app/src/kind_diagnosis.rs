@@ -7,12 +7,12 @@
 use cluster::{
     BindingSummary, BlockCause, BroadGroup, CertificateIssue, ConditionStatus, ContainerKind,
     ContainerState, CronJobSummary, CustomObjectSummary, DaemonSetSummary, DeploymentSummary,
-    DisruptionState, HelmReleaseSummary, HelmStatus, HorizontalPodAutoscalerSummary,
-    IngressSummary, JobStatus, JobSummary, NamespacePhase, NamespaceSummary, NodeReadiness,
-    NodeSummary, PersistentVolumeClaimSummary, PersistentVolumeSummary, PodDisruptionBudgetSummary,
-    PodStatus, PodSummary, ResourceQuotaSummary, RoleSummary, SecretDetails, SecretSummary,
-    ServiceAccountSummary, ServiceSummary, StatusReason, Subject, SubjectKind, Termination,
-    WorkloadCondition,
+    DisruptionState, EventSummary, EventType, HelmReleaseSummary, HelmStatus,
+    HorizontalPodAutoscalerSummary, IngressSummary, JobStatus, JobSummary, NamespacePhase,
+    NamespaceSummary, NodeReadiness, NodeSummary, PersistentVolumeClaimSummary,
+    PersistentVolumeSummary, PodDisruptionBudgetSummary, PodStatus, PodSummary,
+    ResourceQuotaSummary, RoleSummary, SecretDetails, SecretSummary, ServiceAccountSummary,
+    ServiceSummary, StatusReason, Subject, SubjectKind, Termination, WorkloadCondition,
 };
 use jiff::Timestamp;
 
@@ -23,6 +23,7 @@ use crate::age::format_age;
 use crate::batch_rows::{CronState, cron_state_at};
 use crate::certificate_expiry::{ExpiryState, date_text, expiry_state};
 use crate::custom_rows::is_failing;
+use crate::event_rows::message_line;
 use crate::kind_join::{ServiceHealth, tls_secret_names};
 use crate::kind_row::KindObject;
 use crate::namespace_rows::STUCK_AFTER;
@@ -69,6 +70,8 @@ pub(crate) struct DiagnosisInputs<'a> {
     pub(crate) bindings: Option<&'a BindingIndex<'a>>,
     /// Ingresses: the TLS secrets of a ready companion; `None` while it is not ready or denied.
     pub(crate) tls_secrets: Option<&'a [SecretSummary]>,
+    /// PVCs: the events of the open drawer's object once they have loaded; `None` before that.
+    pub(crate) events: Option<&'a [EventSummary]>,
     pub(crate) now: Timestamp,
 }
 
@@ -87,7 +90,7 @@ pub(crate) fn kind_diagnosis(
         KindObject::PodDisruptionBudget(budget) => pod_disruption_budget_diagnosis(budget),
         KindObject::HorizontalPodAutoscaler(hpa) => horizontal_pod_autoscaler_diagnosis(hpa),
         KindObject::ResourceQuota(quota) => resource_quota_diagnosis(quota),
-        KindObject::PersistentVolumeClaim(claim) => claim_diagnosis(claim),
+        KindObject::PersistentVolumeClaim(claim) => claim_diagnosis(claim, inputs.events),
         KindObject::PersistentVolume(volume) => volume_diagnosis(volume),
         KindObject::Role(role) => role_diagnosis(role, inputs.bindings),
         KindObject::Binding(binding) => binding_diagnosis(binding),
@@ -374,21 +377,63 @@ fn resource_quota_diagnosis(quota: &ResourceQuotaSummary) -> Option<KindDiagnosi
 
 // ---- Storage ----
 
-/// VOLUME LOST: the volume a claim was bound to is gone. Reads only the claim.
-fn claim_diagnosis(claim: &PersistentVolumeClaimSummary) -> Option<KindDiagnosis> {
-    if claim.phase != "Lost" {
-        return None;
+/// VOLUME LOST: the volume a claim was bound to is gone (reads only the claim). PENDING: the
+/// newest Warning event of a claim nothing provisions.
+fn claim_diagnosis(
+    claim: &PersistentVolumeClaimSummary,
+    events: Option<&[EventSummary]>,
+) -> Option<KindDiagnosis> {
+    match claim.phase.as_str() {
+        "Lost" => Some(lost_claim_diagnosis(claim)),
+        "Pending" => pending_claim_diagnosis(events?),
+        _ => None,
     }
+}
+
+/// A claim that waits for its first consumer has only Normal events, so it gets no box.
+fn pending_claim_diagnosis(events: &[EventSummary]) -> Option<KindDiagnosis> {
+    let newest = newest_warning(events)?;
+    Some(KindDiagnosis {
+        tone: StatusTone::Warn,
+        title: "PENDING".to_owned(),
+        text: format!("{}: {}", newest.reason, message_line(&newest.message)),
+        link: None,
+    })
+}
+
+fn newest_warning(events: &[EventSummary]) -> Option<&EventSummary> {
+    events
+        .iter()
+        .filter(|event| event.event_type == EventType::Warning)
+        .max_by_key(|event| event.last_seen)
+}
+
+/// The claim's StorageClass when the newest Warning event says the cluster has no such class
+/// (`storageclass.storage.k8s.io "fast-ssd" not found`). The StorageClasses list is not loaded on
+/// the claim screens, so the provisioner's own event is the evidence.
+pub(crate) fn missing_storage_class<'a>(
+    claim: &'a PersistentVolumeClaimSummary,
+    events: &[EventSummary],
+) -> Option<&'a str> {
+    let class = claim.storage_class.as_deref()?;
+    let newest = newest_warning(events)?;
+    newest
+        .message
+        .contains(&format!("\"{class}\" not found"))
+        .then_some(class)
+}
+
+fn lost_claim_diagnosis(claim: &PersistentVolumeClaimSummary) -> KindDiagnosis {
     let gone = claim.volume.as_deref().map_or_else(
         || "The bound volume no longer exists.".to_owned(),
         |volume| format!("The bound volume {volume} no longer exists."),
     );
-    Some(KindDiagnosis {
+    KindDiagnosis {
         tone: StatusTone::Bad,
         title: "VOLUME LOST".to_owned(),
         text: format!("{gone} The data on it is gone or unreachable."),
         link: None,
-    })
+    }
 }
 
 /// RELEASED: the claim is gone but the volume is not; RECLAIM FAILED: the reclaim policy could not
@@ -1097,11 +1142,44 @@ fn secret_diagnosis(secret: &SecretSummary, now: Timestamp) -> Option<KindDiagno
     })
 }
 
+/// How long an Ingress may lack a load-balancer address before the box says no controller took it.
+const NO_ADDRESS_GRACE: jiff::SignedDuration = jiff::SignedDuration::from_mins(5);
+
+/// An Ingress with no address after `NO_ADDRESS_GRACE` first (nothing serves it), else its
+/// CERTIFICATE box. Only the first needs no list, so it shows while the TLS secrets load.
+fn ingress_diagnosis(ingress: &IngressSummary, inputs: &DiagnosisInputs) -> Option<KindDiagnosis> {
+    no_address_diagnosis(ingress, inputs.now)
+        .or_else(|| ingress_certificate_diagnosis(ingress, inputs))
+}
+
+/// NO ADDRESS: the Ingress has been there for a while and no controller wrote an address into its
+/// status. The cluster's default IngressClass is not read here, so a classless Ingress is told
+/// what it needs.
+fn no_address_diagnosis(ingress: &IngressSummary, now: Timestamp) -> Option<KindDiagnosis> {
+    let age = now.duration_since(ingress.created_at?);
+    if !ingress.addresses.is_empty() || age <= NO_ADDRESS_GRACE {
+        return None;
+    }
+    let cause = match &ingress.class {
+        Some(class) => format!("class {class}: no controller reports it"),
+        None => "no ingressClassName; only a default IngressClass would pick it up".to_owned(),
+    };
+    Some(KindDiagnosis {
+        tone: StatusTone::Warn,
+        title: "NO ADDRESS".to_owned(),
+        text: format!("No address: no ingress controller has picked it up ({cause})."),
+        link: None,
+    })
+}
+
 /// CERTIFICATE of an Ingress: the worst of the TLS secrets it names. An expired certificate comes
 /// first, then a missing secret, then the rest (expiring, not yet valid, unusable), the earliest
 /// not-after first. The text is the Secret box text prefixed with the secret's name. It waits for
 /// the TLS secrets companion, and links to the Secret it is about.
-fn ingress_diagnosis(ingress: &IngressSummary, inputs: &DiagnosisInputs) -> Option<KindDiagnosis> {
+fn ingress_certificate_diagnosis(
+    ingress: &IngressSummary,
+    inputs: &DiagnosisInputs,
+) -> Option<KindDiagnosis> {
     let secrets = inputs.tls_secrets?;
     let mut worst: Option<((u8, i64, &str), KindDiagnosis)> = None;
     for name in tls_secret_names(ingress) {

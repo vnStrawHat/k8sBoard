@@ -483,6 +483,7 @@ fn diagnosis_check(
             service,
             bindings: None,
             tls_secrets,
+            events: None,
             now: inputs.now,
         },
     )?;
