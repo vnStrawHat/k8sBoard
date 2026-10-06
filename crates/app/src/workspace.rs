@@ -25,6 +25,7 @@ use cluster::{EVENT_LIMIT, EventFilter, NamespaceScope, ObjectKind};
 
 use super::{AppShell, KubeconfigState, Screen};
 use crate::cluster_session::{FlowState, LiveCluster, SessionPhase};
+use crate::clusters_page::ClustersPage;
 use crate::dock::{
     DEFAULT_DOCK_HEIGHT, DockMode, MIN_DOCK_HEIGHT, dock_max_height, initial_dock_height,
     max_line_offset, saved_dock_height,
@@ -48,7 +49,7 @@ use crate::resource_kind::ResourceKind;
 use crate::row_context::RowContext;
 use crate::row_selection::selection_bar;
 use crate::settings::AppSettings;
-use crate::settings_window::manage_clusters;
+use crate::settings_window::{ClusterAddition, add_cluster, manage_clusters};
 use crate::table_filter::FilterPreset;
 use crate::table_selection::ResourceKey;
 use crate::usage_format::group_digits;
@@ -1108,8 +1109,8 @@ fn open_clusters_settings_button() -> Button {
 }
 
 /// First run: no kubeconfig file exists yet. `detail` is the reason, kept as a muted line.
-/// Import and Paste live on the Clusters page, which owns their dialogs; the button opens that
-/// page instead of duplicating the entry points here.
+/// Import and Paste live on the Clusters page, which owns their dialogs; the buttons open that
+/// page and start the flow there instead of duplicating it here.
 fn no_clusters_view(detail: &str, cx: &App) -> AnyElement {
     v_flex()
         .size_full()
@@ -1123,7 +1124,19 @@ fn no_clusters_view(detail: &str, cx: &App) -> AnyElement {
                 .text_color(cx.theme().muted_foreground)
                 .child("Add a kubeconfig on the Clusters page to start."),
         )
-        .child(open_clusters_settings_button())
+        .child(
+            h_flex()
+                .gap_2()
+                .child(open_clusters_settings_button())
+                .child(
+                    Button::new("first-run-import")
+                        .label("Import kubeconfig…")
+                        .outline()
+                        .small()
+                        .on_click(|_, _, cx| add_cluster(ClusterAddition::ImportFile, cx)),
+                )
+                .child(paste_kubeconfig_button(cx)),
+        )
         .child(
             div()
                 .max_w(px(640.))
@@ -1132,6 +1145,18 @@ fn no_clusters_view(detail: &str, cx: &App) -> AnyElement {
                 .child(detail.to_owned()),
         )
         .into_any_element()
+}
+
+/// `Paste YAML…`, off with the reason the Clusters page gives when pasting cannot work.
+fn paste_kubeconfig_button(cx: &App) -> Button {
+    let button = Button::new("first-run-paste")
+        .label("Paste YAML…")
+        .outline()
+        .small();
+    match ClustersPage::paste_blocked_reason(cx) {
+        Some(reason) => button.disabled(true).tooltip(reason),
+        None => button.on_click(|_, _, cx| add_cluster(ClusterAddition::PasteYaml, cx)),
+    }
 }
 
 fn busy_view(text: &str, cx: &App) -> AnyElement {

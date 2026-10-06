@@ -509,6 +509,20 @@ fn every_default_of_a_dropdown_is_listed_in_its_table() {
     }
 }
 
+#[gpui_kit::test]
+fn the_first_run_screen_starts_a_paste_on_the_clusters_page(cx: &mut TestAppContext) {
+    install(None, &[], cx);
+    cx.update(|cx| add_cluster(ClusterAddition::PasteYaml, cx));
+    cx.run_until_parked();
+    let window = handle_of_settings(cx).expect("the Settings window opened");
+    render(window, cx);
+    let has_dialog = cx
+        .update_window(window, |_, window, cx| window.has_active_dialog(cx))
+        .expect("the window is open");
+    assert!(has_dialog, "the paste dialog is open");
+    close(window, cx);
+}
+
 #[test]
 fn settings_page_icons_are_distinct() {
     let mut seen = std::collections::HashSet::new();

@@ -193,12 +193,41 @@ pub(crate) fn open_settings_window(
 /// "Manage clusters…": the Settings window on the Clusters page, opened or brought forward. Unlike
 /// `Ctrl ,`, it leaves another page of an open window.
 pub(crate) fn manage_clusters(cx: &mut App) {
+    show_clusters_page(cx);
+}
+
+fn show_clusters_page(cx: &mut App) -> Option<AnyWindowHandle> {
     if let Some(open) = open_window_of(cx) {
         let _ = open
             .view
             .update(cx, |view, cx| view.show_page(SettingsPage::Clusters, cx));
     }
-    open_settings_window(SettingsPage::Clusters, SettingsSize::Standard, cx);
+    open_settings_window(SettingsPage::Clusters, SettingsSize::Standard, cx)
+}
+
+/// The two ways the first-run screen adds a cluster; both flows belong to the Clusters page.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ClusterAddition {
+    ImportFile,
+    PasteYaml,
+}
+
+/// Opens the Clusters page and starts `how` there, so the first-run screen needs no dialogs of its
+/// own.
+pub(crate) fn add_cluster(how: ClusterAddition, cx: &mut App) {
+    let Some(window) = show_clusters_page(cx) else {
+        return;
+    };
+    let Some(view) = open_window_of(cx).and_then(|open| open.view.upgrade()) else {
+        return;
+    };
+    let _ = window.update(cx, |_, window, cx| {
+        let page = view.read(cx).clusters.clone();
+        page.update(cx, |page, cx| match how {
+            ClusterAddition::ImportFile => page.import_file(window, cx),
+            ClusterAddition::PasteYaml => page.start_paste(window, cx),
+        });
+    });
 }
 
 /// "Choose on the Metrics page…": the Settings window on the Metrics page, opened or brought
