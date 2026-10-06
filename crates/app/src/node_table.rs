@@ -21,7 +21,7 @@ use crate::resource_actions::node_menu;
 use crate::resource_kind::{Align, KindColumn, column};
 use crate::row_context::TableSession;
 use crate::settings::TablePrefs;
-use crate::status_tone::{StatusTone, node_status_label, tone_color, toned_text};
+use crate::status_tone::{StatusTone, node_status_label, tone_color};
 use crate::table_filter::FilterPreset;
 use crate::table_layout::{
     ColumnPlan, TableLayout, centered_cell, clickable_row, header_cell, select_cell,
@@ -46,17 +46,19 @@ const ABSENT: &str = "—";
 
 const USAGE_BAR_WIDTH: f32 = 46.;
 
-/// Taints takes most of the spare width: it holds the longest values.
+/// The base widths add up to what a 1100 px window leaves for the table, so Memory and Age stay
+/// inside it. Taints takes most of the spare width (it holds the longest values) and is the column
+/// that gives way first; Internal IP is fixed at the width of `255.255.255.255`.
 const NODE_COLUMNS: [KindColumn; 9] = [
-    column("Name", 112., Align::Left).grows(1).up_to(200.),
-    column("Status", 110., Align::Left),
-    column("Roles", 140., Align::Left).grows(1).up_to(220.),
-    column("Taints", 190., Align::Left).grows(3),
-    column("Version", 90., Align::Left),
-    column("Internal IP", 120., Align::Left),
+    column("Name", 96., Align::Left).grows(1).up_to(200.),
+    column("Status", 76., Align::Left).grows(2).up_to(250.),
+    column("Roles", 96., Align::Left).grows(1).up_to(220.),
+    column("Taints", 90., Align::Left).grows(4).up_to(420.),
+    column("Version", 80., Align::Left),
+    column("Internal IP", 140., Align::Left),
     column("CPU", 92., Align::Left),
     column("Memory", 92., Align::Left),
-    column("Age", 60., Align::Right),
+    column("Age", 56., Align::Right),
 ];
 
 pub(crate) struct NodeTableDelegate {
@@ -314,7 +316,16 @@ impl NodeTableDelegate {
         match logical {
             NAME => truncated_text("name", node.name.clone()).into_any_element(),
             STATUS => {
-                toned_text(node_status_label(node.status, &node.conditions), cx).into_any_element()
+                // Pressure names can outgrow the column, so the full label is the tooltip.
+                let label = node_status_label(node.status, &node.conditions);
+                div()
+                    .text_color(tone_color(label.tone, cx))
+                    .child(truncated_text_with_tooltip(
+                        ("node-status", row_ix),
+                        label.text.clone(),
+                        label.text,
+                    ))
+                    .into_any_element()
             }
             ROLES => match roles_cell(&node.roles) {
                 roles if roles == ABSENT => cell_text(ABSENT, cx),
@@ -696,6 +707,21 @@ mod tests {
         assert_eq!(rows[0].usage.cpu, Some(0.5));
         assert_eq!(rows[0].usage.memory, None);
         assert_eq!(node_rows(&nodes, None)[0].usage, NodeUsage::default());
+    }
+
+    #[test]
+    fn the_base_widths_fit_a_1100_px_window_and_taints_grows_most() {
+        // The window less the 220 px sidebar, the table gutter, and the checkbox column.
+        let room = 1100. - 220. - 28. - 32.;
+        let base: f32 = NODE_COLUMNS.iter().map(|column| column.width).sum();
+        assert!(base <= room, "{base} px of columns for {room} px");
+        let ip = &NODE_COLUMNS[INTERNAL_IP];
+        assert!(
+            ip.width >= 130. && ip.weight == 0,
+            "an IP never shrinks or grows"
+        );
+        let heaviest = NODE_COLUMNS.iter().map(|column| column.weight).max();
+        assert_eq!(heaviest, Some(NODE_COLUMNS[TAINTS].weight));
     }
 
     #[test]

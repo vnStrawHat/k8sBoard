@@ -25,6 +25,8 @@
 
 ## Nodes columns (W5 without CPU/Memory)
 
+Widths are the base widths of `NODE_COLUMNS`; the sum fits a 1100 px window (Memory and Age stay inside it). Taints gets the most spare width (weight 4, up to 420 px) and gives way first; Status, Name, and Roles grow a little (Internal IP, Version, CPU, Memory, Age do not). The table above lists the original W5 widths.
+
 | Column | Width | Cell |
 |---|---|---|
 | Name | 200 | `name` |
@@ -32,7 +34,7 @@
 | Roles | 140 | `roles.join(", ")`, or "—" when empty (no `worker` inference) |
 | Taints | 300 | the first taint Display, plus a muted ` +N` when more; "—" when none |
 | Version | 100 | `kubelet_version` |
-| Internal IP | 130 | `internal_ip` or "—" |
+| Internal IP | 140, fixed | `internal_ip` or "—"; never truncates (fits `255.255.255.255`) |
 | Age | 70, right | `format_age` |
 
 ## Status tones (`status_tone.rs`, pure)
@@ -61,7 +63,7 @@ pub(crate) fn tone_color(tone: StatusTone, cx: &App) -> Hsla; // the only theme 
   - every `Main` and `Sidecar` container is `ContainerState::Running`.
 
   It shows immediately, including during a probe's initial delay. A grace period is a possible future refinement ([README](README.md)).
-- Node text: `Ready` / `NotReady` / `Unknown`, when `scheduling == Disabled` a Ready node reads `Cordoned` (Warn) and another readiness gets ` · Cordoned` after it; the node drawer adds a Scheduling row (`Schedulable` / `Cordoned`). Active pressure conditions (`MemoryPressure`, `DiskPressure`, `PIDPressure`, in that order, `True` only) are appended after it, `Ready · DiskPressure`, and turn a green label to Warn (`issue_rules` reads the same list).
+- Node text: `Ready` / `NotReady` / `Unknown`, when `scheduling == Disabled` a Ready node reads `Cordoned` (Warn) and another readiness gets ` · Cordoned` after it; the node drawer adds a Scheduling row (`Schedulable` / `Cordoned`). Active pressure conditions (`MemoryPressure`, `DiskPressure`, `PIDPressure`, in that order, `True` only) are appended after it, `Ready · DiskPressure`, and turn a green label to Warn (`issue_rules` reads the same list); the Status cell truncates with the full label as its tooltip.
 
 ## Age (`age.rs`, pure)
 
