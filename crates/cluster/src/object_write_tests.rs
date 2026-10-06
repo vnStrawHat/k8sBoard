@@ -473,3 +473,22 @@ fn a_build_that_blocks_writes_ignores_the_opt_in() {
         WritePolicy::Allowed
     );
 }
+
+#[test]
+fn a_lab_build_writes_only_on_a_kind_context_with_the_opt_in() {
+    assert_eq!(
+        WritePolicy::of_lab_build(true, Some("1"), "kind-x"),
+        WritePolicy::Allowed
+    );
+    assert_eq!(
+        WritePolicy::of_lab_build(true, None, "kind-x"),
+        WritePolicy::Blocked
+    );
+    for context in ["readonly@Monitor", "prod-kind-x", ""] {
+        assert_eq!(
+            WritePolicy::of_lab_build(true, Some("1"), context),
+            WritePolicy::Blocked,
+            "{context}"
+        );
+    }
+}

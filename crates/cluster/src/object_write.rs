@@ -279,6 +279,16 @@ pub struct ChangedField {
     pub value: Option<String>,
 }
 
+/// The `lab-writes` build: the screenshot build with the kind-lab opt-in (see `WritePolicy::of_lab_build`).
+pub(crate) const IS_LAB_BUILD: bool = cfg!(all(feature = "lab-writes", feature = "block-writes"));
+
+/// Why a write is refused, for the notice of the user.
+pub(crate) const WRITES_BLOCKED_MESSAGE: &str = if IS_LAB_BUILD {
+    "writes stay blocked outside a kind-* context (lab-writes build)"
+} else {
+    "writes are blocked in this debug build (set K8SBOARD_ALLOW_WRITES=1)"
+};
+
 /// Whether a connection may send writes at all.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WritePolicy {
@@ -300,6 +310,15 @@ impl WritePolicy {
     /// The policy of this build. A build that `blocks_writes` (the screenshot build, through the
     /// `block-writes` feature) never writes, whatever the variable says; any other build follows
     /// `resolve`.
+    /// The policy of a `lab-writes` build: the normal debug gate (`resolve`), and only for a context
+    /// named `kind-*`; any other context stays blocked, whatever the variable says.
+    pub(crate) fn of_lab_build(is_debug_build: bool, opt_in: Option<&str>, context: &str) -> Self {
+        if !context.starts_with("kind-") {
+            return Self::Blocked;
+        }
+        Self::resolve(is_debug_build, opt_in)
+    }
+
     pub(crate) fn of_build(
         blocks_writes: bool,
         is_debug_build: bool,
@@ -746,7 +765,7 @@ fn restart_stamp(timestamp: &jiff::Timestamp) -> String {
 /// A failed write, sorted by what the user can do about it.
 #[derive(Debug, thiserror::Error)]
 pub enum WriteError {
-    #[error("writes are blocked in this debug build (set K8SBOARD_ALLOW_WRITES=1)")]
+    #[error("{}", WRITES_BLOCKED_MESSAGE)]
     WritesBlocked,
     /// A 403 of the RBAC form (`is forbidden: User`).
     #[error("not permitted: {message}")]

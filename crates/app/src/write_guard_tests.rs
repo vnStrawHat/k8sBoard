@@ -157,6 +157,18 @@ fn the_screenshot_build_blocks_writes() {
 }
 
 #[test]
+fn lab_writes_only_forwards_to_the_cluster_crate() {
+    // The feature adds no other feature: without `screenshot` it does nothing, and the kind-only
+    // gate lives in the cluster crate.
+    let manifest = include_str!("../Cargo.toml");
+    let lab = manifest
+        .lines()
+        .find(|line| line.trim_start().starts_with("lab-writes = "))
+        .expect("the lab-writes feature exists");
+    assert_eq!(lab, r#"lab-writes = ["k8sboard-cluster/lab-writes"]"#);
+}
+
+#[test]
 fn privileged_risk_always_types_the_name() {
     let typed = DialogConfirm::TypeName {
         expected: "wk-03".to_owned(),

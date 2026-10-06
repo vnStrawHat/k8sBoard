@@ -14,6 +14,9 @@ path = "src/main.rs"
 [features]
 # Dev-only: lets `--screenshot` render a window to a PNG. Never a default feature.
 screenshot = ["gpui-kit/test-support", "k8sboard-cluster/block-writes"]
+# Dev-only, for the kind lab: with `screenshot`, lets a `kind-*` context write under K8SBOARD_ALLOW_WRITES=1.
+# Does nothing without `screenshot`. Never run such a build against a real cluster.
+lab-writes = ["k8sboard-cluster/lab-writes"]
 
 # Function-level time profiling with `hotpath` (spec 0055). Developer-only and off by default; see
 # docs/specs/0055-hotpath-profiling/README.md. The report goes to stdout or to `HOTPATH_OUTPUT_PATH`;

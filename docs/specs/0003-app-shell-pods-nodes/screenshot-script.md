@@ -43,5 +43,7 @@ shown. Dialog titles, menu items, and table cells are not reported; check them i
 
 The screenshot build never writes to a cluster, whatever `K8SBOARD_ALLOW_WRITES` says (spec 0030): a script can open a
 write dialog and see its failed dry-run, but cannot commit it.
+A build with `--features screenshot,lab-writes` is the one exception (spec 0030 decision 24b): it writes only on a
+`kind-*` context under `K8SBOARD_ALLOW_WRITES=1`, so scripts can commit on the kind lab. Never run it against UAT.
 
 `K8SBOARD_SCREENSHOT_HOVER` still applies to the final capture.

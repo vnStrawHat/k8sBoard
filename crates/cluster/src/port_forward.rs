@@ -152,7 +152,7 @@ pub enum ForwardControl {
 /// Why a forward ended. The texts are fixed: they name objects, never bytes.
 #[derive(Debug, thiserror::Error)]
 pub enum ForwardError {
-    #[error("writes are blocked in this debug build (set K8SBOARD_ALLOW_WRITES=1)")]
+    #[error("{}", crate::object_write::WRITES_BLOCKED_MESSAGE)]
     WritesBlocked,
     #[error("Port {0} in use")]
     PortInUse(u16),

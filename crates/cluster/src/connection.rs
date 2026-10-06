@@ -11,7 +11,7 @@ use tokio::time::error::Elapsed;
 
 use crate::kubeconfig::{Kubeconfig, KubeconfigError};
 use crate::namespace::NamespaceScope;
-use crate::object_write::{ALLOW_WRITES_VARIABLE, WritePolicy};
+use crate::object_write::{ALLOW_WRITES_VARIABLE, IS_LAB_BUILD, WritePolicy};
 use crate::proxy::{ProxyChoice, ProxyUrlError};
 use crate::traffic::TrafficCounter;
 
@@ -176,12 +176,17 @@ impl ClusterConnection {
             .map_err(|error| invalid_config(&name, error))?;
         let client = traffic.client(builder);
         // Debug builds (every agent run) cannot write unless a human sets the variable, and the
-        // screenshot build cannot write at all.
-        let write_policy = WritePolicy::of_build(
-            cfg!(feature = "block-writes"),
-            cfg!(debug_assertions),
-            std::env::var(ALLOW_WRITES_VARIABLE).ok().as_deref(),
-        );
+        // screenshot build cannot write at all (the `lab-writes` build only on a `kind-*` context).
+        let opt_in = std::env::var(ALLOW_WRITES_VARIABLE).ok();
+        let write_policy = if IS_LAB_BUILD {
+            WritePolicy::of_lab_build(cfg!(debug_assertions), opt_in.as_deref(), &name)
+        } else {
+            WritePolicy::of_build(
+                cfg!(feature = "block-writes"),
+                cfg!(debug_assertions),
+                opt_in.as_deref(),
+            )
+        };
         Ok(Self {
             client,
             context: name,
