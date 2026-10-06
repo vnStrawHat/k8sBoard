@@ -18,6 +18,7 @@ use gpui_kit::{
 
 use crate::age::format_age;
 use crate::app_shell::AppShell;
+use crate::cell_truncation::cell_tooltip;
 use crate::clipboard_copy::{copy_button, copy_text, joined_terms};
 use crate::cluster_metrics::FeedStatus;
 use crate::cluster_session::LiveList;
@@ -767,12 +768,11 @@ pub(crate) fn truncated_text_with_tooltip(
     text: impl Into<SharedString>,
     tooltip: impl Into<SharedString>,
 ) -> Stateful<Div> {
-    let tooltip_text = tooltip.into();
     div()
         .id(id)
         .truncate()
         .child(text.into())
-        .tooltip(move |window, cx| Tooltip::new(tooltip_text.clone()).build(window, cx))
+        .tooltip(cell_tooltip(tooltip.into()))
 }
 
 /// A muted dash for a value the object does not have.

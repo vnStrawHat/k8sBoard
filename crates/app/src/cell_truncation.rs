@@ -10,8 +10,9 @@ use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::component::table::Column;
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::{
-    AnyElement, App, HighlightStyle, InteractiveElement as _, IntoElement as _, ParentElement as _,
-    Pixels, SharedString, StatefulInteractiveElement as _, Styled as _, StyledText, div, font, px,
+    AnyElement, AnyView, App, AppContext as _, EmptyView, HighlightStyle, InteractiveElement as _,
+    IntoElement as _, KeyContext, ParentElement as _, Pixels, SharedString,
+    StatefulInteractiveElement as _, Styled as _, StyledText, Window, div, font, px,
 };
 
 use crate::drawer::truncated_text_with_tooltip;
@@ -21,6 +22,27 @@ use crate::drawer::truncated_text_with_tooltip;
 const CELL_PADDING: Pixels = px(24.);
 
 pub(crate) const ELLIPSIS: char = '…';
+
+/// The key context of an open popup menu, which holds the focus while it is shown.
+const POPUP_MENU_CONTEXT: &str = "PopupMenu";
+
+/// Whether a menu has the focus: the row menu opens under the pointer, so a tooltip of the cell
+/// beneath it would sit over the menu's first items.
+fn is_menu_open(contexts: &[KeyContext]) -> bool {
+    contexts
+        .iter()
+        .any(|context| context.contains(POPUP_MENU_CONTEXT))
+}
+
+/// The tooltip of a table cell: its `text`, except while a menu is open.
+pub(crate) fn cell_tooltip(text: SharedString) -> impl Fn(&mut Window, &mut App) -> AnyView {
+    move |window, cx| {
+        if is_menu_open(&window.context_stack()) {
+            return cx.new(|_| EmptyView).into();
+        }
+        Tooltip::new(text.clone()).build(window, cx)
+    }
+}
 
 /// How many characters of the mono font fit in a cell of table column `column`, at the theme font
 /// size that table cells inherit.
@@ -229,20 +251,27 @@ pub(crate) fn qualified_text<'a>(
         ..Default::default()
     };
     let highlights = vec![(0..muted_end, muted)];
-    let tooltip_text = SharedString::from(full);
     div()
         .id(id)
         .w_full()
         .truncate()
         .font_family(mono)
         .child(StyledText::new(shown).with_highlights(highlights))
-        .tooltip(move |window, cx| Tooltip::new(tooltip_text.clone()).build(window, cx))
+        .tooltip(cell_tooltip(full.into()))
         .into_any_element()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_focused_popup_menu_hides_cell_tooltips() {
+        let context = |text: &str| KeyContext::parse(text).expect("a valid key context");
+        assert!(is_menu_open(&[context("Workspace"), context("PopupMenu")]));
+        assert!(!is_menu_open(&[context("Workspace"), context("Table")]));
+        assert!(!is_menu_open(&[]));
+    }
 
     #[test]
     fn text_that_fits_is_kept() {
