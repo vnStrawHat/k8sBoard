@@ -13,7 +13,7 @@ Status: built (steps 1-3), 2026-10-03, against main `09a7a4c`; as-built notes in
 
 - **Snapshots and rollback of values** (user decision 2026-10-03: dropped).
 - Renaming a key (add + remove does it); editing binary values or uploading a file; editing `stringData` as a field (decision 2).
-- Line diffs of values; "Compare with previous" (W7 ConfigMaps); restart actions after a change.
+- Line diffs of values; "Compare with previous" (W7 ConfigMaps). Restart after a change (UX walkthrough M23): each Deployment, StatefulSet, or DaemonSet in the Used by section that reads the object through env gets a `Restart` button that opens the Restart rollout dialog (same write gate). Not built: a "Restart N consumers" action in the apply toast, because a batch carries one action per workload kind and the consumers can mix kinds.
 - Labels, annotations, `type`, `immutable` (Edit YAML, 0031); creating ConfigMaps or Secrets ("New", templates).
 - Viewing or copying a current Secret value in the editor (the drawer does it, 0016); setting a Secret value to `""` (an empty field means "keep", decision 16).
 - Helm release records (type `helm.sh/release.v1`, or label `owner=helm` on a ConfigMap or Secret), service-account-token Secrets, immutable objects: refused.

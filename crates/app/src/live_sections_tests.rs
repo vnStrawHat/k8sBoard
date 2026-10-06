@@ -1435,12 +1435,13 @@ fn can_do_coverage_warning() {
 
 // ---- Roll back buttons ----
 
-fn gate(availability: ActionAvailability) -> RollBackGate {
+fn gate(availability: ActionAvailability) -> DrawerWriteGate {
     let cluster = crate::cluster_registry::ClusterRef {
         kubeconfig: std::path::PathBuf::from("test.yaml"),
         context: "stg-b".to_owned(),
     };
-    RollBackGate {
+    DrawerWriteGate {
+        restart: Vec::new(),
         subject: ClusterObject::new(
             cluster,
             ResourceKey::Kind {
@@ -1457,7 +1458,7 @@ fn button_of(
     deployment: &DeploymentSummary,
     sets: &[ReplicaSetSummary],
     wanted: &str,
-    gate: Option<&RollBackGate>,
+    gate: Option<&DrawerWriteGate>,
 ) -> RollBackButton {
     let revisions = revision_rows(deployment, sets);
     let revision = revisions
@@ -1847,4 +1848,63 @@ fn a_node_whose_pods_are_all_ready_has_no_not_ready_section() {
     assert!(all_owned_ready(&owner, &ready));
     let broken = [on_node("a", "wk-1", 1), on_node("b", "wk-1", 0)];
     assert!(!all_owned_ready(&owner, &broken));
+}
+
+// ---- Restart buttons of Used by ----
+
+fn workload_user(kind: ResourceKind, name: &str, ways: &[&'static str]) -> UsedBy {
+    UsedBy {
+        owner: format!("{}/{name}", kind.singular()),
+        target: Some(ResourceKey::Kind {
+            kind,
+            namespace: Some("team-a".to_owned()),
+            name: name.to_owned(),
+        }),
+        ways: ways.iter().copied().collect(),
+    }
+}
+
+#[test]
+fn only_an_env_reading_workload_gets_a_restart_button_that_follows_the_gate() {
+    let mut open = gate(ActionAvailability::Enabled);
+    open.restart = vec![
+        (ObjectKind::Deployment, ActionAvailability::Enabled),
+        (
+            ObjectKind::StatefulSet,
+            ActionAvailability::Disabled {
+                reason: "stg-b is read-only".into(),
+            },
+        ),
+    ];
+    let env = workload_user(ResourceKind::Deployments, "api", &["env"]);
+    assert!(matches!(
+        restart_button(&env, Some(&open)),
+        RestartButton::Enabled(subject, ResourceAction::RestartRollout(ObjectKind::Deployment))
+            if subject.key == env.target.clone().expect("a target")
+    ));
+    // Mounted files update on their own; a bare pod or a CronJob is not restarted.
+    let mounted = workload_user(ResourceKind::Deployments, "api", &["volume"]);
+    assert!(matches!(
+        restart_button(&mounted, Some(&open)),
+        RestartButton::Absent
+    ));
+    assert!(matches!(
+        restart_button(&used_by("pod/api-0", &["env"]), Some(&open)),
+        RestartButton::Absent
+    ));
+    let cron = workload_user(ResourceKind::CronJobs, "nightly", &["env"]);
+    assert!(matches!(
+        restart_button(&cron, Some(&open)),
+        RestartButton::Absent
+    ));
+    // The gate speaks for a locked or denied kind and when nothing is connected.
+    let set = workload_user(ResourceKind::StatefulSets, "db", &["env from"]);
+    assert!(matches!(
+        restart_button(&set, Some(&open)),
+        RestartButton::Disabled(reason) if reason.as_ref() == "stg-b is read-only"
+    ));
+    assert!(matches!(
+        restart_button(&env, None),
+        RestartButton::Disabled(_)
+    ));
 }

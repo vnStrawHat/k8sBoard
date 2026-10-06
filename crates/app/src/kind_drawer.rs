@@ -3,7 +3,7 @@
 
 use std::rc::Rc;
 
-use cluster::HelmRevisionRef;
+use cluster::{HelmRevisionRef, ObjectKind};
 use gpui_kit::component::alert::Alert;
 use gpui_kit::component::menu::DropdownMenu as _;
 use gpui_kit::component::progress::Progress;
@@ -34,8 +34,8 @@ use crate::kind_diagnosis::{DiagnosisInputs, KindDiagnosis, kind_diagnosis};
 use crate::kind_join::{matching_pods, service_health_of};
 use crate::kind_row::{DetailRow, KindCell, KindObject, KindRow, LiveContent};
 use crate::live_sections::{
-    RollBackGate, all_pods_ready, helm_history_rows, live_rows, loaded_replica_sets, next_run_text,
-    owned_pods,
+    DrawerWriteGate, all_pods_ready, helm_history_rows, live_rows, loaded_replica_sets,
+    next_run_text, owned_pods,
 };
 use crate::monitor_tab::{MonitorView, monitor_tab};
 use crate::object_events::{event_subject, recent_events};
@@ -96,9 +96,19 @@ pub(crate) fn kind_drawer(
             // The Roll back buttons are gated by the cluster of the drawer's own subject.
             let roll_back = context.session.upgrade().and_then(|session| {
                 let session = session.read(cx);
-                session.guard(cx).map(|guard| RollBackGate {
+                session.guard(cx).map(|guard| DrawerWriteGate {
                     subject: ClusterObject::new(context.cluster.clone(), key.clone()),
                     availability: action_availability(ResourceAction::RollBack, &guard),
+                    restart: [
+                        ObjectKind::Deployment,
+                        ObjectKind::StatefulSet,
+                        ObjectKind::DaemonSet,
+                    ]
+                    .map(|kind| {
+                        let action = ResourceAction::RestartRollout(kind);
+                        (kind, action_availability(action, &guard))
+                    })
+                    .to_vec(),
                 })
             });
             let paint = DrawerPaint::new(kind, row, live, now)
@@ -464,7 +474,7 @@ pub(crate) struct DrawerPaint<'a> {
     /// The cluster of the drawer: the views above belong to one cluster's object.
     cluster: Option<&'a ClusterRef>,
     /// The gate of the Roll back buttons of a Deployment's revisions.
-    roll_back: Option<RollBackGate>,
+    roll_back: Option<DrawerWriteGate>,
 }
 
 impl<'a> DrawerPaint<'a> {
@@ -495,7 +505,7 @@ impl<'a> DrawerPaint<'a> {
         self
     }
 
-    fn with_roll_back(mut self, gate: Option<RollBackGate>) -> Self {
+    fn with_roll_back(mut self, gate: Option<DrawerWriteGate>) -> Self {
         self.roll_back = gate;
         self
     }

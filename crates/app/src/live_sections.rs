@@ -7,10 +7,10 @@
 use cluster::{
     AccessCheck, BindingSummary, BroadGroup, ConfigMapSummary, ConfigMapValues, CronJobSummary,
     CronSchedule, DeploymentSummary, EndpointSliceSummary, EventSummary, Identity, IngressSummary,
-    JobSummary, LimitRangeLimit, LimitRangeSummary, NodeSummary, PersistentVolumeClaimSummary,
-    PersistentVolumeSummary, PodSummary, PvcUsage, RbacSnapshot, ReplicaSetSummary,
-    ResourceQuotaSummary, RoleSummary, SecretSummary, Selector, ServiceAccountSummary,
-    ServiceSummary, Subject, SubjectKind, ValuePreview, VolumeSource,
+    JobSummary, LimitRangeLimit, LimitRangeSummary, NodeSummary, ObjectKind,
+    PersistentVolumeClaimSummary, PersistentVolumeSummary, PodSummary, PvcUsage, RbacSnapshot,
+    ReplicaSetSummary, ResourceQuotaSummary, RoleSummary, SecretSummary, Selector,
+    ServiceAccountSummary, ServiceSummary, Subject, SubjectKind, ValuePreview, VolumeSource,
 };
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::{ActiveTheme as _, Disableable as _, Sizable as _, h_flex, v_flex};
@@ -53,7 +53,7 @@ use crate::object_events::event_subject;
 use crate::permission_table::{CanDoChips, can_do_chips, permission_table};
 use crate::policy_rows::{fullest_item, quota_text};
 use crate::related_objects::{RelatedSubject, key_related_subject, related_subject};
-use crate::resource_actions::ActionAvailability;
+use crate::resource_actions::{ActionAvailability, ResourceAction, with_next_step};
 use crate::resource_kind::ResourceKind;
 use crate::revision_diff::{RevisionDiffRequest, RevisionSide, diff_request};
 use crate::secret_rows::{MASK, MaskedKeyRow, certificate_rows, secret_data_rows};
@@ -84,7 +84,7 @@ pub(crate) fn live_rows(
     row: &KindRow,
     live: &LiveCluster,
     now: jiff::Timestamp,
-    roll_back: Option<&RollBackGate>,
+    roll_back: Option<&DrawerWriteGate>,
     cx: &Context<AppShell>,
 ) -> Vec<AnyElement> {
     match (content, &row.object) {
@@ -103,9 +103,11 @@ pub(crate) fn live_rows(
             exposed_by_rows(service, kind, row, live, cx)
         }
         (LiveContent::UsedBy, KindObject::ConfigMap(config_map)) => {
-            used_by_rows(config_map, live, cx)
+            used_by_rows(config_map, live, roll_back, cx)
         }
-        (LiveContent::UsedBy, KindObject::Secret(secret)) => secret_used_by_rows(secret, live, cx),
+        (LiveContent::UsedBy, KindObject::Secret(secret)) => {
+            secret_used_by_rows(secret, live, roll_back, cx)
+        }
         (LiveContent::SecretData, KindObject::Secret(secret)) => masked_rows(secret, cx),
         (LiveContent::IngressTls, KindObject::Ingress(ingress)) => {
             ingress_tls_section(ingress, kind, row, live, now, cx)
@@ -239,12 +241,13 @@ fn revision_rows<'a>(
     revisions
 }
 
-/// What the Roll back buttons of a drawer need: the Deployment they act on, in its own cluster,
-/// and whether the gate of that cluster lets Roll back run. The drawer reads it from the session
-/// of its subject, never the primary.
-pub(crate) struct RollBackGate {
+/// What the write buttons of a drawer need, from the gate of the cluster of the drawer's subject
+/// (never the primary): the Deployment the Roll back buttons act on and whether Roll back may run,
+/// and whether Restart rollout may run on each workload kind (the Restart buttons of Used by).
+pub(crate) struct DrawerWriteGate {
     pub(crate) subject: ClusterObject,
     pub(crate) availability: ActionAvailability,
+    pub(crate) restart: Vec<(ObjectKind, ActionAvailability)>,
 }
 
 /// The ReplicaSet list the drawer watches for this row, as it stands: `None` while the drawer
@@ -277,7 +280,7 @@ fn revisions(
     deployment: &DeploymentSummary,
     live: &LiveCluster,
     now: jiff::Timestamp,
-    roll_back: Option<&RollBackGate>,
+    roll_back: Option<&DrawerWriteGate>,
     cx: &Context<AppShell>,
 ) -> Vec<AnyElement> {
     if related_subject(kind, row).is_none() {
@@ -345,7 +348,7 @@ enum RollBackButton {
 fn roll_back_button(
     deployment: &DeploymentSummary,
     revision: &Revision,
-    gate: Option<&RollBackGate>,
+    gate: Option<&DrawerWriteGate>,
 ) -> RollBackButton {
     let Some(gate) = gate else {
         return RollBackButton::Disabled("Not connected".into());
@@ -1103,6 +1106,7 @@ const MAX_LISTED_USERS: usize = 20;
 fn used_by_rows(
     config_map: &ConfigMapSummary,
     live: &LiveCluster,
+    gate: Option<&DrawerWriteGate>,
     cx: &Context<AppShell>,
 ) -> Vec<AnyElement> {
     if live.pods.is_loading() {
@@ -1126,7 +1130,7 @@ fn used_by_rows(
         .iter()
         .take(MAX_LISTED_USERS)
         .enumerate()
-        .map(|(ix, used_by)| used_by_element(ix, used_by, cx))
+        .map(|(ix, used_by)| used_by_element(ix, used_by, restart_button(used_by, gate), cx))
         .chain((hidden > 0).then(|| note(&format!("+{hidden} more"), cx)))
         .chain(restart_hint(&users).map(|hint| note(&hint, cx)))
         .chain(std::iter::once(note(&format!("From pods in {scope}"), cx)))
@@ -1164,7 +1168,53 @@ fn restart_hint(users: &[&UsedBy]) -> Option<String> {
     ))
 }
 
-fn used_by_element(ix: usize, used_by: &UsedBy, cx: &Context<AppShell>) -> AnyElement {
+/// The Restart button of a Used by row.
+enum RestartButton {
+    /// The row has nothing to restart: mounted files update on their own, and a bare pod, a Job, or
+    /// a CronJob is not restarted.
+    Absent,
+    Disabled(SharedString),
+    Enabled(ClusterObject, ResourceAction),
+}
+
+/// A Deployment, StatefulSet, or DaemonSet that reads the value through env needs a restart to see
+/// a change; the gate of the drawer's cluster decides whether it may run now.
+fn restart_button(used_by: &UsedBy, gate: Option<&DrawerWriteGate>) -> RestartButton {
+    if !(used_by.ways.contains(WAY_ENV) || used_by.ways.contains(WAY_ENV_FROM)) {
+        return RestartButton::Absent;
+    }
+    let Some(key @ ResourceKey::Kind { kind, .. }) = &used_by.target else {
+        return RestartButton::Absent;
+    };
+    let Some(object) = kind.builtin_object().filter(|object| {
+        matches!(
+            object,
+            ObjectKind::Deployment | ObjectKind::StatefulSet | ObjectKind::DaemonSet
+        )
+    }) else {
+        return RestartButton::Absent;
+    };
+    let Some(gate) = gate else {
+        return RestartButton::Disabled("Not connected".into());
+    };
+    match gate.restart.iter().find(|(kind, _)| *kind == object) {
+        Some((_, ActionAvailability::Enabled)) => RestartButton::Enabled(
+            ClusterObject::new(gate.subject.cluster.clone(), key.clone()),
+            ResourceAction::RestartRollout(object),
+        ),
+        Some((_, ActionAvailability::Disabled { reason })) => {
+            RestartButton::Disabled(reason.clone())
+        }
+        None => RestartButton::Disabled("Not connected".into()),
+    }
+}
+
+fn used_by_element(
+    ix: usize,
+    used_by: &UsedBy,
+    restart: RestartButton,
+    cx: &Context<AppShell>,
+) -> AnyElement {
     let theme = cx.theme();
     let ways = used_by.ways.iter().copied().collect::<Vec<_>>().join(", ");
     let owner = match used_by.target.clone() {
@@ -1188,6 +1238,29 @@ fn used_by_element(ix: usize, used_by: &UsedBy, cx: &Context<AppShell>) -> AnyEl
                 .text_color(theme.muted_foreground)
                 .child(ways),
         )
+        .children(match restart {
+            RestartButton::Absent => None,
+            RestartButton::Disabled(reason) => Some(
+                Button::new(("used-by-restart", ix))
+                    .label("Restart")
+                    .xsmall()
+                    .ghost()
+                    .disabled(true)
+                    .tooltip(with_next_step(&reason))
+                    .into_any_element(),
+            ),
+            RestartButton::Enabled(subject, action) => Some(
+                Button::new(("used-by-restart", ix))
+                    .label("Restart")
+                    .xsmall()
+                    .ghost()
+                    .tooltip("Restart rollout of this workload so it reads the new value")
+                    .on_click(cx.listener(move |shell, _, window, cx| {
+                        shell.start_workload_action(action, &subject, window, cx);
+                    }))
+                    .into_any_element(),
+            ),
+        })
         .into_any_element()
 }
 
@@ -1303,6 +1376,7 @@ fn unused_notes(ingresses: IngressesState) -> Vec<&'static str> {
 fn secret_used_by_rows(
     secret: &SecretSummary,
     live: &LiveCluster,
+    gate: Option<&DrawerWriteGate>,
     cx: &Context<AppShell>,
 ) -> Vec<AnyElement> {
     if live.pods.is_loading() {
@@ -1336,7 +1410,7 @@ fn secret_used_by_rows(
         .iter()
         .take(MAX_LISTED_USERS)
         .enumerate()
-        .map(|(ix, used_by)| used_by_element(ix, used_by, cx))
+        .map(|(ix, used_by)| used_by_element(ix, used_by, restart_button(used_by, gate), cx))
         .chain((hidden > 0).then(|| note(&format!("+{hidden} more"), cx)))
         .collect()
 }
