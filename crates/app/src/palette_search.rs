@@ -28,7 +28,7 @@ use crate::resource_actions::{
     needs_confirm, subject_action,
 };
 use crate::resource_kind::ResourceKind;
-use crate::settings_window::ImportKubeconfig;
+use crate::settings_window::{ImportKubeconfig, MoveClusterDown, MoveClusterUp};
 use crate::status_tone::{StatusLabel, node_status_label, pod_status_label};
 use crate::table_selection::{ClusterObject, ResourceKey};
 use crate::workload_actions::{
@@ -393,8 +393,8 @@ fn subject_text(subject: &ResourceKey) -> String {
 }
 
 /// The General and Dock rows of the shortcut sheet. Left out: the palette's own rows, the
-/// Settings window's import (its handler is not on the shell, so a dispatch would do nothing), and
-/// the 1–9 row (the clusters are listed under `@`).
+/// Settings window's import and cluster moves (their handlers are not on the shell, so a dispatch
+/// would do nothing), and the 1–9 row (the clusters are listed under `@`).
 fn command_entries(input: &PaletteInput<'_>) -> Vec<PaletteEntry> {
     shortcut_rows()
         .into_iter()
@@ -404,6 +404,8 @@ fn command_entries(input: &PaletteInput<'_>) -> Vec<PaletteEntry> {
             !(action.is::<OpenPalette>()
                 || action.is::<OpenKindPalette>()
                 || action.is::<ImportKubeconfig>()
+                || action.is::<MoveClusterUp>()
+                || action.is::<MoveClusterDown>()
                 || action.is::<SwitchToCluster1>())
         })
         .map(|row| {
@@ -1084,6 +1086,8 @@ pub(crate) fn ranked(entries: Vec<PaletteEntry>, query: &PaletteQuery<'_>) -> Ra
         more: 0,
     };
     for (group, mut bucket) in PaletteGroup::ALL.into_iter().zip(buckets) {
+        // Stable, so each half keeps its score order: what cannot run sinks below what can.
+        bucket.sort_by_key(|entry| matches!(entry.state, EntryState::Disabled { .. }));
         ranked.more += bucket.len().saturating_sub(group.cap());
         bucket.truncate(group.cap());
         ranked.entries.extend(bucket);
@@ -1105,10 +1109,12 @@ pub(crate) fn lists_name_index(query: &PaletteQuery<'_>) -> bool {
 
 /// What the list says when nothing matches: the group hint of decision 9, or why there is none.
 /// `searched_feeds` are the condition feeds that were live (`live_feed_objects`); `index` is the
-/// state of the name index.
+/// state of the name index. `has_cursor` says whether a resource is selected: the row actions
+/// are listed only for one.
 pub(crate) fn empty_text(
     mode: PaletteMode,
     has_session: bool,
+    has_cursor: bool,
     screen: Screen,
     searched_feeds: &[ResourceKind],
     index: &IndexSummary,
@@ -1127,6 +1133,9 @@ pub(crate) fn empty_text(
         PaletteMode::Kinds => "No matching kind.".to_owned(),
         PaletteMode::Clusters => "No matching cluster.".to_owned(),
         PaletteMode::Namespaces => "No matching namespace.".to_owned(),
+        PaletteMode::Actions if !has_cursor => {
+            "Select a resource first to see its actions.".to_owned()
+        }
         PaletteMode::Actions => "No matching action.".to_owned(),
     }
 }

@@ -4294,6 +4294,7 @@ impl AppShell {
             context: PaletteContext {
                 screen: self.screen,
                 has_session: live.is_some(),
+                has_cursor: input.cursor.is_some(),
                 searched_feeds: feeds.iter().map(|feed| feed.kind).collect(),
                 name_index: live
                     .map_or_else(IndexSummary::default, |live| live.name_index.summary()),

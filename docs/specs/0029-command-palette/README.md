@@ -83,7 +83,7 @@ Step 5 (local-only: no new Kubernetes calls):
 6. `ResourceKind::short_names` gives every kind one extra word (`job`, `role`, `secret`, `cr`, `rb`, `crb`, `helm`, `crd` where kubectl has none).
 7. `--palette` with a cursor row uses `--screen deployments-drawer --select <name>` (the drawer is open behind the scrim): `--select` only applies to drawer screens.
 8. The screenshot hook closes all dialogs after the capture: a focused palette query input is a handle the debug leak check reports at exit.
-9. The reason pill is an outlined span in the theme's warning tone (`tone_color`), not a kit `Tag`, whose colors wash out on a disabled row in dark.
+9. The reason pill is an outlined span, not a kit `Tag`, whose colors wash out on a disabled row in dark. UX batch 5c: a disabled reason is muted (so it does not read as a warning), only `needs confirm` keeps the warning tone, disabled entries sort below enabled ones inside their group, the Settings window's actions (Import, Move cluster up and down) are not listed, and `> text` with no resource selected says `Select a resource first to see its actions.`
 10. `PaletteInput.include_resources` (set by `lists_resources(query)`) keeps the resource entries from being built unless the query is text in `All` mode. The visible kind's rows come before pods and nodes.
 11. The palette keeps `shown`, the list the last render gave the kit, and confirms and previews against it. A shell notify or a query change only marks the ranking stale; `render` ranks once. The footer reads the kit highlight itself.
 12. Tab preview is a no-op while a drawer is open, and the hint is then hidden. After a preview the highlight is set again on the previewed row once the new ranking (with the row actions of the new cursor) has placed it.

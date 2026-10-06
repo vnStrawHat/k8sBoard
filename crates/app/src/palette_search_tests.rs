@@ -386,6 +386,8 @@ fn commands_come_from_general_and_dock_rows() {
         "Command palette",
         "Jump to a resource kind",
         "Import kubeconfig file (Settings window)",
+        "Move cluster up (Settings window)",
+        "Move cluster down (Settings window)",
         "Switch to cluster 1–9",
     ] {
         assert!(!has(excluded), "{excluded} is listed");
@@ -732,6 +734,7 @@ fn empty_text_hints_name_what_was_searched() {
         empty_text(
             PaletteMode::All,
             true,
+            true,
             Screen::Kind(ResourceKind::Deployments),
             &[],
             &IndexSummary::default()
@@ -742,6 +745,7 @@ fn empty_text_hints_name_what_was_searched() {
         empty_text(
             PaletteMode::Namespaces,
             false,
+            true,
             Screen::Pods,
             &[],
             &IndexSummary::default()
@@ -752,6 +756,7 @@ fn empty_text_hints_name_what_was_searched() {
         empty_text(
             PaletteMode::Kinds,
             true,
+            true,
             Screen::Pods,
             &[],
             &IndexSummary::default()
@@ -761,11 +766,28 @@ fn empty_text_hints_name_what_was_searched() {
 }
 
 #[test]
+fn the_actions_list_says_why_it_is_empty_without_a_selection() {
+    let empty = |has_cursor| {
+        empty_text(
+            PaletteMode::Actions,
+            true,
+            has_cursor,
+            Screen::Pods,
+            &[],
+            &IndexSummary::default(),
+        )
+    };
+    assert_eq!(empty(false), "Select a resource first to see its actions.");
+    assert_eq!(empty(true), "No matching action.");
+}
+
+#[test]
 fn empty_text_names_the_live_feeds_once() {
     let feeds = [ResourceKind::Deployments, ResourceKind::Jobs];
     assert_eq!(
         empty_text(
             PaletteMode::All,
+            true,
             true,
             Screen::Pods,
             &feeds,
@@ -777,6 +799,7 @@ fn empty_text_names_the_live_feeds_once() {
     assert_eq!(
         empty_text(
             PaletteMode::All,
+            true,
             true,
             Screen::Kind(ResourceKind::Jobs),
             &feeds,
@@ -1195,6 +1218,22 @@ fn ranked_keeps_the_order_a_fresh_score_gives() {
     for entry in &resources {
         assert_eq!(entry.score, score_of(entry, "api"));
     }
+}
+
+#[test]
+fn ranked_sinks_disabled_entries_below_enabled_ones() {
+    let mut disabled = plain_entry("Pods", None, &[]);
+    disabled.state = EntryState::Disabled {
+        reason: "Not permitted".into(),
+    };
+    // The disabled entry matches better, yet the weaker enabled one lists first.
+    let enabled = plain_entry("Pods and more", None, &[]);
+    let found = ranked(vec![disabled, enabled], &parse_query("pods"));
+    assert_eq!(found.entries[0].label.as_ref(), "Pods and more");
+    assert!(matches!(
+        found.entries[1].state,
+        EntryState::Disabled { .. }
+    ));
 }
 
 #[test]
@@ -1685,7 +1724,7 @@ fn the_empty_text_says_what_is_still_searched() {
         &[],
     );
     assert_eq!(
-        empty_text(PaletteMode::All, true, Screen::Pods, &[], &loading),
+        empty_text(PaletteMode::All, true, true, Screen::Pods, &[], &loading),
         "No matches yet. Searching Services, Ingresses, StatefulSets…"
     );
     assert_eq!(
@@ -1704,7 +1743,7 @@ fn the_empty_text_names_the_indexed_kinds_and_what_could_not_be_searched() {
         ..IndexSummary::default()
     };
     assert_eq!(
-        empty_text(PaletteMode::All, true, Screen::Pods, &[], &done),
+        empty_text(PaletteMode::All, true, true, Screen::Pods, &[], &done),
         "No matches. Searched: Pods, Nodes, Services, StatefulSets. \
          Services: first 5,000 names. Not permitted: Ingresses. Unavailable: CronJobs. \
          Type :kind for other kinds."
@@ -1713,6 +1752,7 @@ fn the_empty_text_names_the_indexed_kinds_and_what_could_not_be_searched() {
     assert_eq!(
         empty_text(
             PaletteMode::All,
+            true,
             true,
             Screen::Kind(ResourceKind::Services),
             &[],
@@ -1726,7 +1766,7 @@ fn the_empty_text_names_the_indexed_kinds_and_what_could_not_be_searched() {
 fn only_all_mode_reports_the_index() {
     let loading = summary(&[ResourceKind::Services], &[]);
     assert_eq!(
-        empty_text(PaletteMode::Kinds, true, Screen::Pods, &[], &loading),
+        empty_text(PaletteMode::Kinds, true, true, Screen::Pods, &[], &loading),
         "No matching kind."
     );
 }

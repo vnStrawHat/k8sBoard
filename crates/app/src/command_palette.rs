@@ -17,7 +17,7 @@ use gpui_kit::component::{
     v_flex,
 };
 use gpui_kit::{
-    Action, App, AppContext as _, Context, Entity, FocusHandle, HighlightStyle,
+    Action, App, AppContext as _, Context, Entity, FocusHandle, HighlightStyle, Hsla,
     InteractiveElement as _, IntoElement, KeyDownEvent, ParentElement as _, Render, SharedString,
     Styled as _, StyledText, Subscription, Task, UnderlineStyle, WeakEntity, Window, div,
     prelude::FluentBuilder as _, px,
@@ -65,6 +65,8 @@ pub(crate) struct ActiveCluster {
 pub(crate) struct PaletteContext {
     pub(crate) screen: Screen,
     pub(crate) has_session: bool,
+    /// Whether a resource is selected, which the row actions need.
+    pub(crate) has_cursor: bool,
     /// The condition feeds the Resources group searched, for the empty text.
     pub(crate) searched_feeds: Vec<ResourceKind>,
     /// What the name index is searching, searched, or could not list.
@@ -523,6 +525,7 @@ impl Render for CommandPalette {
         let empty = empty_text(
             mode,
             self.context.has_session,
+            self.context.has_cursor,
             self.context.screen,
             &self.context.searched_feeds,
             &self.context.name_index,
@@ -897,9 +900,17 @@ impl RowContent {
                         .child(health_text(cluster.health)),
                 )
             })
-            .children(self.reason.clone().map(|reason| reason_pill(reason, cx)))
+            .children(
+                self.reason
+                    .clone()
+                    .map(|reason| reason_pill(reason, muted, cx)),
+            )
             .when(self.needs_confirm, |row| {
-                row.child(reason_pill(NEEDS_CONFIRM.into(), cx))
+                row.child(reason_pill(
+                    NEEDS_CONFIRM.into(),
+                    tone_color(StatusTone::Warn, cx),
+                    cx,
+                ))
             })
             .children(keys.into_iter().take(1).map(Kbd::new))
     }
@@ -974,10 +985,10 @@ fn command_icon(action: &dyn Action) -> IconName {
 /// What an enabled entry says when its action reaches a 0030 confirm (W9 note 3).
 const NEEDS_CONFIRM: &str = "needs confirm";
 
-/// The pill of a disabled entry: its reason, outlined in the theme's warning tone (the kit tag's
-/// own colors wash out on a muted, disabled row). `needs confirm` uses it too.
-fn reason_pill(reason: SharedString, cx: &App) -> impl IntoElement {
-    let color = tone_color(StatusTone::Warn, cx);
+/// The pill of a disabled entry: its reason, outlined in `color` (the kit tag's own colors wash
+/// out on a muted, disabled row). A reason is muted, so a row that cannot run does not read as a
+/// warning; `needs confirm` is the one pill in the warning tone.
+fn reason_pill(reason: SharedString, color: Hsla, cx: &App) -> impl IntoElement {
     div()
         .flex_none()
         .px_1()
