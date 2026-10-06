@@ -22,9 +22,13 @@ pub(crate) const ELLIPSIS: char = '…';
 /// How many characters of the mono font fit in a cell of table column `column`, at the theme font
 /// size that table cells inherit.
 pub(crate) fn mono_capacity(column: Option<&Column>, cx: &App) -> usize {
-    let Some(column) = column else {
-        return usize::MAX;
-    };
+    column.map_or(usize::MAX, |column| {
+        mono_capacity_of_width(column.width, cx)
+    })
+}
+
+/// `mono_capacity` for a cell of a list that is not a kit table, given its width.
+pub(crate) fn mono_capacity_of_width(width: Pixels, cx: &App) -> usize {
     let text_system = cx.text_system();
     let font_id = text_system.resolve_font(&font(cx.theme().mono_font_family.clone()));
     let font_size = cx.theme().font_size;
@@ -34,7 +38,7 @@ pub(crate) fn mono_capacity(column: Option<&Column>, cx: &App) -> usize {
     if advance <= Pixels::ZERO {
         return usize::MAX;
     }
-    let room = (column.width - CELL_PADDING).max(Pixels::ZERO);
+    let room = (width - CELL_PADDING).max(Pixels::ZERO);
     (f32::from(room) / f32::from(advance)) as usize
 }
 

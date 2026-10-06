@@ -20,6 +20,7 @@ use gpui_kit::{
 use super::AppShell;
 use super::port_forward_dialogs::NewForwardPrefill;
 use super::port_forward_open::target_key;
+use crate::cell_truncation::{middle_truncate, mono_capacity_of_width};
 use crate::drawer::{
     DrawerBody, DrawerHeader, DrawerNavigation, DrawerSize, absent_text, drawer_frame,
     first_section_title, menu_button, section_title, truncated_text, truncated_text_with_tooltip,
@@ -31,7 +32,8 @@ use crate::resource_actions::{ActionAvailability, MenuItemIcon as _, disabled_me
 use crate::status_tone::{tone_color, toned_text};
 use crate::table_selection::ClusterObject;
 
-const TARGET_MIN_WIDTH: f32 = 220.;
+/// Fixed, so the middle cut of a long target knows how many characters fit.
+const TARGET_WIDTH: f32 = 380.;
 const PORTS_WIDTH: f32 = 200.;
 const STATUS_WIDTH: f32 = 210.;
 const CLUSTER_WIDTH: f32 = 200.;
@@ -157,11 +159,12 @@ impl AppShell {
             .gap_3()
             .px_4()
             .py_1()
-            .text_xs()
-            .text_color(theme.muted_foreground)
+            .text_sm()
+            .bg(theme.tokens.table_head)
+            .text_color(theme.table_head_foreground)
             .border_b_1()
             .border_color(theme.border)
-            .child(div().flex_1().min_w(px(TARGET_MIN_WIDTH)).child("Target"))
+            .child(cell("Target", TARGET_WIDTH))
             .child(cell("Ports", PORTS_WIDTH))
             .child(cell("Status", STATUS_WIDTH))
             .child(cell("Cluster", CLUSTER_WIDTH))
@@ -181,6 +184,9 @@ impl AppShell {
         let theme = cx.theme();
         let id = forward.id;
         let mono = theme.mono_font_family.clone();
+        let target = forward.spec.target_text();
+        let shown_target =
+            middle_truncate(&target, mono_capacity_of_width(px(TARGET_WIDTH), cx)).into_owned();
         let data = h_flex()
             .id(("forward-row", index))
             .flex_1()
@@ -195,9 +201,10 @@ impl AppShell {
                 });
             }))
             .child(
-                truncated_text(("forward-target", index), forward.spec.target_text())
-                    .flex_1()
-                    .min_w(px(TARGET_MIN_WIDTH))
+                // Cut in the middle: the end of the name tells forwards apart.
+                truncated_text_with_tooltip(("forward-target", index), shown_target, target)
+                    .w(px(TARGET_WIDTH))
+                    .flex_shrink_0()
                     .font_family(mono.clone()),
             )
             .child(

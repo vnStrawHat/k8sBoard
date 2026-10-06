@@ -57,3 +57,5 @@ All read `action_availability(PortForward, guard)` with the guard of the row's o
 ## Screenshot (`--screen port-forwards`, `screenshot` feature only)
 
 Fills `PortForwards` with the five W7 fixture rows (no subscription, no request): Active ×2, Reconnecting 2/5, `Port 3000 in use`, `Stopped · preset`, across two fixture cluster labels; opens the drawer of the first row with fixture traffic and three events. Listed in `USAGE`.
+
+- UX batch 5c: the list is not a kit table, so its header borrows the table look (`table_head` background, `table_head_foreground`, the row text size), and the Target column has a fixed width so a long `namespace/kind/name` is cut in the middle (`cell_truncation::middle_truncate`) with the whole text in the tooltip.
