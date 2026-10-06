@@ -212,13 +212,13 @@ pub(crate) fn stateful_set_row(set: &StatefulSetSummary) -> KindRow {
                 DetailRow::field("Desired", KindCell::count(set.desired)),
                 DetailRow::field("Ready", KindCell::count(set.ready)),
                 DetailRow::field("Current", KindCell::count(set.current)),
-                DetailRow::field("Updated", KindCell::count(set.updated)),
+                DetailRow::field("Up-to-date", KindCell::count(set.updated)),
                 DetailRow::field(
                     "Service",
                     KindCell::mono_or_absent(set.service_name.as_deref().unwrap_or_default()),
                 ),
                 DetailRow::field(
-                    "Update strategy",
+                    "Strategy",
                     KindCell::text_or_absent(non_empty(&set.update_strategy)),
                 ),
                 DetailRow::field(
@@ -280,7 +280,7 @@ pub(crate) fn daemon_set_row(set: &DaemonSetSummary) -> KindRow {
     };
     let mut rollout = vec![
         rollout_bar("Ready", set.ready, set.desired),
-        rollout_bar("Updated", set.up_to_date, set.desired),
+        rollout_bar("Up-to-date", set.up_to_date, set.desired),
         DetailRow::field("Desired", KindCell::count(set.desired)),
         DetailRow::field("Current", KindCell::count(set.current)),
         DetailRow::field("Ready", KindCell::count(set.ready)),
@@ -294,7 +294,7 @@ pub(crate) fn daemon_set_row(set: &DaemonSetSummary) -> KindRow {
         ));
     }
     rollout.push(DetailRow::field(
-        "Update strategy",
+        "Strategy",
         KindCell::text_or_absent(non_empty(&set.update_strategy)),
     ));
     let mut sections = vec![

@@ -314,7 +314,7 @@ fn edit_min_max_without_patch_hpa_permission_opens_no_popover(cx: &mut TestAppCo
         t.bulk_buttons(cx)
     };
     assert_eq!(
-        Clusters::state_of(&buttons, "Edit limits"),
+        Clusters::state_of(&buttons, "Edit min / max"),
         BulkState::Off("Not permitted: patch horizontalpodautoscalers".into())
     );
 }
@@ -411,7 +411,7 @@ fn the_audit_line_names_the_range(cx: &mut TestAppContext) {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-// ---- Edit limits on the ticked HPAs ----
+// ---- Edit min / max on the ticked HPAs ----
 
 const NAMES: [&str; 3] = ["api-hpa", "web-hpa", "worker-hpa"];
 
@@ -430,12 +430,12 @@ fn the_edit_limits_button_follows_the_ticks_and_the_gate(cx: &mut TestAppContext
     let t = edit_clusters("hpa-bulk-buttons", cx);
     ticked_hpas(&t, cx);
     assert_eq!(
-        Clusters::state_of(&t.bulk_buttons(cx), "Edit limits"),
+        Clusters::state_of(&t.bulk_buttons(cx), "Edit min / max"),
         BulkState::Ready(ResourceAction::EditHpaRange)
     );
     t.set_lock(&t.stg, WriteLock::Locked, cx);
     assert_eq!(
-        Clusters::state_of(&t.bulk_buttons(cx), "Edit limits"),
+        Clusters::state_of(&t.bulk_buttons(cx), "Edit min / max"),
         BulkState::Off("stg-b is read-only".into())
     );
 }
@@ -445,14 +445,14 @@ fn edit_limits_applies_one_range_and_audits_each_object(cx: &mut TestAppContext)
     let t = edit_clusters("hpa-bulk", cx);
     let dir = t.enable_audit_folder("hpa-bulk", cx);
     ticked_hpas(&t, cx);
-    t.press_bulk("Edit limits", cx);
+    t.press_bulk("Edit min / max", cx);
     let popover = t.popover(cx).expect("the popover is open");
     popover.read_with(cx, |popover, cx| {
         assert_eq!(
             popover.typed_range(cx),
             Some((String::new(), String::new()))
         );
-        assert_eq!(popover.title_text(), "Edit limits of 3 hpas");
+        assert_eq!(popover.title_text(), "Edit min / max of 3 hpas");
         assert!(!popover.can_submit(cx));
     });
     type_range(&t, &popover, ("4", "10"), cx);
@@ -515,7 +515,7 @@ fn edit_limits_applies_one_range_and_audits_each_object(cx: &mut TestAppContext)
 fn edit_limits_skips_the_rows_already_in_range(cx: &mut TestAppContext) {
     let t = edit_clusters("hpa-bulk-skip", cx);
     ticked_hpas(&t, cx);
-    t.press_bulk("Edit limits", cx);
+    t.press_bulk("Edit min / max", cx);
     let popover = t.popover(cx).expect("the popover is open");
     // web-hpa is 2-10 already.
     type_range(&t, &popover, ("2", "10"), cx);

@@ -582,7 +582,7 @@ fn daemon_set_rollout_by_node_starts_with_bars() {
     assert_eq!(
         rollout.rows[1],
         DetailRow::Bar {
-            label: "Updated".into(),
+            label: "Up-to-date".into(),
             percent: 100,
             text: "4 / 4".into(),
             tone: Some(StatusTone::Ok),
@@ -776,4 +776,31 @@ fn a_long_container_name_goes_above_its_image() {
             ),
         ]
     );
+}
+
+#[test]
+fn workload_kinds_share_one_vocabulary() {
+    let field_labels = |row: &KindRow| -> Vec<String> {
+        row.sections
+            .iter()
+            .flat_map(|section| section.rows.iter())
+            .filter_map(|row| match row {
+                DetailRow::Field { label, .. } => Some(label.to_string()),
+                _ => None,
+            })
+            .collect()
+    };
+    let stateful = field_labels(&stateful_set_row(&stateful_set()));
+    let daemon = field_labels(&daemon_set_row(&daemon_set()));
+    let deployment = field_labels(&deployment_row(&deployment()));
+    for labels in [&stateful, &daemon, &deployment] {
+        assert!(labels.iter().any(|label| label == "Strategy"));
+        assert!(!labels.iter().any(|label| label == "Update strategy"));
+        assert!(!labels.iter().any(|label| label == "Updated"));
+    }
+    let columns = |kind: ResourceKind| -> Vec<&'static str> {
+        kind.columns().iter().map(|column| column.name).collect()
+    };
+    assert!(columns(ResourceKind::StatefulSets).contains(&"Strategy"));
+    assert!(columns(ResourceKind::CronJobs).contains(&"Last run"));
 }

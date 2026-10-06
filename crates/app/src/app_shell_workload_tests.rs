@@ -1104,13 +1104,16 @@ fn bulk_buttons_follow_the_ticks_and_the_gate(cx: &mut TestAppContext) {
     t.with_ticked_deployments(&[0, 1], cx);
     let buttons = t.bulk_buttons(cx);
     let labels: Vec<&str> = buttons.iter().map(|button| button.label.as_ref()).collect();
-    assert_eq!(labels, ["Scale…", "Restart", "Roll back…", "Delete…"]);
+    assert_eq!(
+        labels,
+        ["Scale…", "Restart rollout", "Roll back…", "Delete…"]
+    );
     assert_eq!(
         Clusters::state_of(&buttons, "Scale…"),
         BulkState::Ready(ResourceAction::Scale(cluster::ObjectKind::Deployment))
     );
     assert_eq!(
-        Clusters::state_of(&buttons, "Restart"),
+        Clusters::state_of(&buttons, "Restart rollout"),
         BulkState::Ready(ResourceAction::RestartRollout(
             cluster::ObjectKind::Deployment
         ))
@@ -1134,7 +1137,7 @@ fn bulk_buttons_are_off_for_a_locked_cluster(cx: &mut TestAppContext) {
     );
     t.tick(&[0, 1], cx);
     let buttons = t.bulk_buttons(cx);
-    for label in ["Scale…", "Restart"] {
+    for label in ["Scale…", "Restart rollout"] {
         assert_eq!(
             Clusters::state_of(&buttons, label),
             BulkState::Off("prod-a is read-only".into()),
@@ -1159,7 +1162,7 @@ fn more_than_fifty_ticks_turn_every_button_off(cx: &mut TestAppContext) {
         .update(cx, |shell, cx| shell.check_rows(RowCheck::All(true), cx));
     cx.run_until_parked();
     let buttons = t.bulk_buttons(cx);
-    for label in ["Scale…", "Restart"] {
+    for label in ["Scale…", "Restart rollout"] {
         assert_eq!(
             Clusters::state_of(&buttons, label),
             BulkState::Off("Select at most 50 rows".into()),
@@ -1194,14 +1197,14 @@ impl Clusters {
 fn a_running_batch_turns_the_bulk_buttons_off_and_refuses_a_second_batch(cx: &mut TestAppContext) {
     let t = workload_clusters("bulk-in-flight", cx);
     t.with_ticked_deployments(&[0, 1, 2, 3], cx);
-    t.press_bulk("Restart", cx);
+    t.press_bulk("Restart rollout", cx);
     t.wait_for_dry_run(cx);
     assert!(!t.is_batch_running(&t.stg, cx));
     t.confirm(cx);
     // The flag is set the moment the commit starts, before any answer came back.
     assert!(t.is_batch_running(&t.stg, cx));
     let buttons = t.bulk_buttons(cx);
-    for label in ["Scale…", "Restart"] {
+    for label in ["Scale…", "Restart rollout"] {
         assert_eq!(
             Clusters::state_of(&buttons, label),
             BulkState::Off("A batch is running".into()),
@@ -1214,7 +1217,7 @@ fn a_running_batch_turns_the_bulk_buttons_off_and_refuses_a_second_batch(cx: &mu
     // Four dry-runs and four commits: the refused second batch sent nothing.
     assert_eq!(writes(&t.stg_api).len(), 8);
     assert_eq!(
-        Clusters::state_of(&t.bulk_buttons(cx), "Restart"),
+        Clusters::state_of(&t.bulk_buttons(cx), "Restart rollout"),
         BulkState::Ready(restart_deployments())
     );
 }
@@ -1223,13 +1226,13 @@ fn a_running_batch_turns_the_bulk_buttons_off_and_refuses_a_second_batch(cx: &mu
 fn a_failed_item_still_ends_the_running_batch(cx: &mut TestAppContext) {
     let t = workload_clusters_answering("bulk-in-flight-failed", web_commit_refused, cx);
     t.with_ticked_deployments(&[0, 1, 2, 3], cx);
-    t.press_bulk("Restart", cx);
+    t.press_bulk("Restart rollout", cx);
     t.wait_for_dry_run(cx);
     t.confirm(cx);
     assert!(t.is_batch_running(&t.stg, cx));
     t.wait_for("the batch to end", cx, |cx| !t.is_batch_running(&t.stg, cx));
     assert_eq!(
-        Clusters::state_of(&t.bulk_buttons(cx), "Restart"),
+        Clusters::state_of(&t.bulk_buttons(cx), "Restart rollout"),
         BulkState::Ready(restart_deployments())
     );
 }
@@ -1242,7 +1245,7 @@ fn a_batch_in_another_cluster_does_not_block_this_one(cx: &mut TestAppContext) {
         .shell
         .update(cx, |shell, _| shell.running_batches.insert(t.prod.clone()));
     assert_eq!(
-        Clusters::state_of(&t.bulk_buttons(cx), "Restart"),
+        Clusters::state_of(&t.bulk_buttons(cx), "Restart rollout"),
         BulkState::Ready(restart_deployments())
     );
 }
@@ -1252,7 +1255,7 @@ fn batch_dry_runs_are_sequential_and_unaudited(cx: &mut TestAppContext) {
     let t = workload_clusters("bulk-restart", cx);
     let dir = t.enable_audit_folder("bulk-restart", cx);
     t.with_ticked_deployments(&[0, 1, 2, 3], cx);
-    t.press_bulk("Restart", cx);
+    t.press_bulk("Restart rollout", cx);
     assert_eq!(t.dialog_label(cx), "Restart 4 deployments");
     t.dialog(cx).read_with(cx, |dialog, _| {
         assert_eq!(dialog.confirm_text().as_deref(), Some("Restart 4"));
@@ -1284,7 +1287,7 @@ fn batch_audits_each_commit(cx: &mut TestAppContext) {
     let t = workload_clusters("bulk-audit", cx);
     let dir = t.enable_audit_folder("bulk-audit", cx);
     t.with_ticked_deployments(&[0, 1, 2, 3], cx);
-    t.press_bulk("Restart", cx);
+    t.press_bulk("Restart rollout", cx);
     t.wait_for_dry_run(cx);
     t.confirm(cx);
     t.wait_for("four audit lines", cx, |_| audit_lines(&dir).len() == 4);
@@ -1315,7 +1318,7 @@ fn batch_audits_each_commit(cx: &mut TestAppContext) {
 fn batch_apply_needs_every_dry_run_to_pass(cx: &mut TestAppContext) {
     let t = workload_clusters_answering("bulk-dry-fail", web_dry_run_refused, cx);
     t.with_ticked_deployments(&[0, 1, 2, 3], cx);
-    t.press_bulk("Restart", cx);
+    t.press_bulk("Restart rollout", cx);
     t.wait_for_dry_run(cx);
     let items = t.items(cx);
     assert_eq!(items[0], ItemProgress::Passed);
@@ -1341,7 +1344,7 @@ fn batch_continues_after_a_failed_commit(cx: &mut TestAppContext) {
     let t = workload_clusters_answering("bulk-commit-fail", web_commit_refused, cx);
     let dir = t.enable_audit_folder("bulk-commit-fail", cx);
     t.with_ticked_deployments(&[0, 1, 2, 3], cx);
-    t.press_bulk("Restart", cx);
+    t.press_bulk("Restart rollout", cx);
     t.wait_for_dry_run(cx);
     t.confirm(cx);
     t.wait_for("four audit lines", cx, |_| audit_lines(&dir).len() == 4);
@@ -1366,7 +1369,7 @@ fn batch_in_production_types_the_cluster_name(cx: &mut TestAppContext) {
         cx,
     );
     t.tick(&[0, 1], cx);
-    t.press_bulk("Restart", cx);
+    t.press_bulk("Restart rollout", cx);
     t.dialog(cx).read_with(cx, |dialog, _| {
         assert_eq!(
             *dialog.tier(),
@@ -1398,7 +1401,7 @@ fn batch_in_production_types_the_cluster_name(cx: &mut TestAppContext) {
 fn a_lock_after_the_dry_runs_blocks_the_apply(cx: &mut TestAppContext) {
     let t = workload_clusters("bulk-locked-late", cx);
     t.with_ticked_deployments(&[0, 1], cx);
-    t.press_bulk("Restart", cx);
+    t.press_bulk("Restart rollout", cx);
     t.wait_for_dry_run(cx);
     t.set_lock(&t.stg, WriteLock::Locked, cx);
     assert_eq!(

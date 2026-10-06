@@ -64,7 +64,7 @@ impl AppShell {
         self.set_value_popover(popover, cx);
     }
 
-    /// The Edit limits popover for the ticked HPAs, empty: one range for all of them.
+    /// The Edit min / max popover for the ticked HPAs, empty: one range for all of them.
     pub(crate) fn open_bulk_hpa_range_popover(
         &mut self,
         window: &mut Window,

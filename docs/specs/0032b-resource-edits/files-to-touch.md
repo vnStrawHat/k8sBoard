@@ -18,7 +18,7 @@ The operations are `pub` through `WriteOperation`, so step 1 has no dead code be
 | 2 | `src/value_popover.rs` (0032, + tests) | `ValueForm::ReplicaRange { min, max }`; validation texts |
 | 2 | `src/resource_actions.rs` (+ tests), `src/keymap.rs`, `src/keyboard_navigation.rs` | `EditHpaRange` (gate `PatchHorizontalPodAutoscalers`), its `RowAction`, unbound unit action, and arm (opens the popover on the cursor row) |
 | 2 | `src/resource_edits.rs` (new) + `resource_edits_tests.rs` | `hpa_range_intent`, warnings |
-| 2 | `src/resource_kind.rs`, `src/row_selection.rs` (+ tests) | `KindAction.action` for `Edit min / max…`; HPAs selection-bar `Edit limits` |
+| 2 | `src/resource_kind.rs`, `src/row_selection.rs` (+ tests) | `KindAction.action` for `Edit min / max…`; HPAs selection-bar `Edit min / max` |
 | 3 | `src/value_popover.rs`, `src/resource_edits.rs`, `src/resource_actions.rs` | `ValueForm::Storage { input }` (trimmed); `expand_intent`; `ExpandClaim` gate and `row_block` |
 | 3 | `src/resource_kind.rs`, `src/row_selection.rs` | `Expand…` item; PVCs selection-bar `Expand` |
 | 4 | `src/resource_edits.rs`, `src/resource_actions.rs` | `default_class_intent` (two-object `Batch`), `SetDefaultStorageClass` gate and `row_block` |

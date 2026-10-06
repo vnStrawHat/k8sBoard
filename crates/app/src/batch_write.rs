@@ -103,7 +103,7 @@ pub(crate) enum BulkValue {
     Nothing,
     /// Scale: the replicas.
     Replicas(u32),
-    /// Edit limits: the HPA range.
+    /// Edit min / max: the HPA range.
     Range { min: u32, max: u32 },
     /// Expand: the storage quantity.
     Storage(String),

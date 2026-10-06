@@ -24,7 +24,7 @@ const NODE_ACTIONS: [KindAction; 3] = [
 const DEPLOYMENT_ACTIONS: [KindAction; 3] = [
     KindAction::keyed("Scale…", ResourceAction::Scale(ObjectKind::Deployment)),
     KindAction::keyed(
-        "Restart",
+        "Restart rollout",
         ResourceAction::RestartRollout(ObjectKind::Deployment),
     ),
     KindAction::keyed("Roll back…", ResourceAction::RollBack),
@@ -32,17 +32,17 @@ const DEPLOYMENT_ACTIONS: [KindAction; 3] = [
 const STATEFUL_SET_ACTIONS: [KindAction; 2] = [
     KindAction::keyed("Scale…", ResourceAction::Scale(ObjectKind::StatefulSet)),
     KindAction::keyed(
-        "Restart",
+        "Restart rollout",
         ResourceAction::RestartRollout(ObjectKind::StatefulSet),
     ),
 ];
 const DAEMON_SET_ACTIONS: [KindAction; 1] = [KindAction::keyed(
-    "Restart",
+    "Restart rollout",
     ResourceAction::RestartRollout(ObjectKind::DaemonSet),
 )];
-const JOB_ACTIONS: [KindAction; 1] = [KindAction::keyed("Re-run", ResourceAction::RerunJob)];
+const JOB_ACTIONS: [KindAction; 1] = [KindAction::keyed("Re-run job", ResourceAction::RerunJob)];
 const HPA_ACTIONS: [KindAction; 1] = [KindAction::keyed(
-    "Edit limits",
+    "Edit min / max",
     ResourceAction::EditHpaRange,
 )];
 const CLAIM_ACTIONS: [KindAction; 1] = [KindAction::keyed("Expand", ResourceAction::ExpandClaim)];

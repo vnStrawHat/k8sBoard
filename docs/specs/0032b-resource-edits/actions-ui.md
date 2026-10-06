@@ -48,7 +48,7 @@ Expected typed name: the cluster display name (0030 default).
 
 | Screen | Selection-bar button | Items |
 |---|---|---|
-| HPAs | `Edit limits` (popover `ReplicaRange`, empty) | one `SetHpaReplicaRange` per ticked HPA; HPAs already at that range → skipped `already 3–20` |
+| HPAs | `Edit min / max` (popover `ReplicaRange`, empty) | one `SetHpaReplicaRange` per ticked HPA; HPAs already at that range → skipped `already 3–20` |
 | PVCs | `Expand` (popover `Storage`, empty) | one `ExpandClaim` per ticked claim; claims with `row_block` or a request ≥ the new size → skipped with the reason |
 | StorageClasses | `Set default` | enabled with exactly one ticked class (`Tick one storage class`); same plan as the menu item |
 

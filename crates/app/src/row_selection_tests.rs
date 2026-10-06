@@ -9,14 +9,17 @@ fn bulk_actions_follow_the_wireframe() {
     assert_eq!(labels(Screen::Nodes), ["Cordon", "Uncordon", "Drain…"]);
     assert_eq!(
         labels(Screen::Kind(ResourceKind::Deployments)),
-        ["Scale…", "Restart", "Roll back…"]
+        ["Scale…", "Restart rollout", "Roll back…"]
     );
     assert_eq!(
         labels(Screen::Kind(ResourceKind::StatefulSets)),
-        ["Scale…", "Restart"]
+        ["Scale…", "Restart rollout"]
     );
-    assert_eq!(labels(Screen::Kind(ResourceKind::DaemonSets)), ["Restart"]);
-    assert_eq!(labels(Screen::Kind(ResourceKind::Jobs)), ["Re-run"]);
+    assert_eq!(
+        labels(Screen::Kind(ResourceKind::DaemonSets)),
+        ["Restart rollout"]
+    );
+    assert_eq!(labels(Screen::Kind(ResourceKind::Jobs)), ["Re-run job"]);
     assert_eq!(
         labels(Screen::Kind(ResourceKind::CronJobs)),
         ["Trigger now", "Suspend"]
@@ -41,11 +44,11 @@ fn bulk_actions_follow_the_wireframe_with_their_actions() {
         Some(ResourceAction::Scale(ObjectKind::StatefulSet))
     );
     assert_eq!(
-        action_of(Screen::Kind(ResourceKind::DaemonSets), "Restart"),
+        action_of(Screen::Kind(ResourceKind::DaemonSets), "Restart rollout"),
         Some(ResourceAction::RestartRollout(ObjectKind::DaemonSet))
     );
     assert_eq!(
-        action_of(Screen::Kind(ResourceKind::Jobs), "Re-run"),
+        action_of(Screen::Kind(ResourceKind::Jobs), "Re-run job"),
         Some(ResourceAction::RerunJob)
     );
     assert_eq!(

@@ -178,7 +178,7 @@ fn restart_warnings(object: &KindObject) -> Vec<SharedString> {
         _ => return Vec::new(),
     };
     if strategy == ON_DELETE {
-        vec![format!("Update strategy {ON_DELETE}: pods restart only when deleted").into()]
+        vec![format!("Strategy {ON_DELETE}: pods restart only when deleted").into()]
     } else {
         Vec::new()
     }

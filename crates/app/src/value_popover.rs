@@ -141,7 +141,7 @@ impl ValuePopover {
         Self::open_range(shell, targets, &min, &max, window, cx)
     }
 
-    /// An Edit limits popover for `count` ticked HPAs, empty: one range for all of them.
+    /// An Edit min / max popover for `count` ticked HPAs, empty: one range for all of them.
     pub(crate) fn hpa_range_ticked(
         shell: WeakEntity<AppShell>,
         count: usize,
@@ -364,7 +364,7 @@ impl ValuePopover {
                 format!("Scale {count} {}s", kind.name().to_ascii_lowercase())
             }
             ValueTargets::HpaOne { hpa, .. } => format!("Edit min / max of hpa/{}", hpa.name),
-            ValueTargets::HpaTicked { count } => format!("Edit limits of {count} hpas"),
+            ValueTargets::HpaTicked { count } => format!("Edit min / max of {count} hpas"),
             ValueTargets::ClaimOne { claim, .. } => format!("Expand claim {}", claim.name),
             ValueTargets::ClaimTicked { count } => format!("Expand {count} claims"),
         }

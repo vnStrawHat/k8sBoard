@@ -48,7 +48,7 @@ Every builder returns a 0030 `GuardedIntent { cluster, kind: Write(request), war
 | Action | Label | `warnings` (each only when it applies) |
 |---|---|---|
 | Scale | `Scale deployment api from 3 to 5` | `Scaling down from 3 to 1`; `HPA {name} manages replicas ({min}–{max}); it will override this` (HPA list loaded and targets the row) |
-| Restart | `Restart rollout of statefulset kafka` | `Update strategy OnDelete: pods restart only when deleted` |
+| Restart | `Restart rollout of statefulset kafka` | `Strategy OnDelete: pods restart only when deleted` |
 | Pause / Resume | `Pause rollout of deployment api` | — |
 | Roll back | `Roll back deployment api to rev 37 (2.13.4)` | — |
 | Suspend / Resume | `Suspend cronjob reconcile` | — |
@@ -88,3 +88,5 @@ No replicas input in the drawer (W7 note 4). `ValuePopover { form: ValueForm, ta
 - `Roll back to rev {n}` only from loaded revisions (no new list calls).
 - Drawer **Revisions** (0012 `revision_element`): the disabled `Roll back` button becomes gated on the drawer subject's slot (`drawer_subject()`, never the primary); click → `run_guarded(roll_back_intent(..))`. No button on the current revision. Menu `Roll back…` → open the cursor row's drawer scrolled to Revisions (`set_drawer_open(true)`).
 - No optimistic UI: rows and drawers update from the existing watches.
+
+**One vocabulary (UX walkthrough 5a):** the menu and the selection bar use the same words: `Restart rollout`, `Re-run job`, `Edit min / max`; drawers and columns say `Strategy`, `Up-to-date`, `Last run` for every workload kind.

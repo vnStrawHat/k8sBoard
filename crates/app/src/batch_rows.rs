@@ -157,7 +157,7 @@ pub(crate) fn cron_job_row(cron_job: &CronJobSummary) -> KindRow {
             DetailSection {
                 title: "Runs",
                 rows: vec![
-                    DetailRow::field("Last schedule", last_schedule),
+                    DetailRow::field("Last run", last_schedule),
                     DetailRow::field("Last success", KindCell::age(cron_job.last_success_at)),
                     DetailRow::field(
                         "Active jobs",

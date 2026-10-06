@@ -280,7 +280,7 @@ static STATEFUL_SETS: KindSpec = KindSpec {
     columns: &[
         column("Ready", 80., Align::Left),
         column("Service", 200., Align::Left).grows(1),
-        column("Update strategy", 140., Align::Left),
+        column("Strategy", 140., Align::Left),
         AGE_COLUMN,
     ],
     read_only_actions: &[
@@ -391,7 +391,7 @@ static CRON_JOBS: KindSpec = KindSpec {
         column("Schedule", 140., Align::Left),
         column("Suspend", 80., Align::Left),
         column("Active", 70., Align::Right),
-        column("Last schedule", 120., Align::Right),
+        column("Last run", 120., Align::Right),
         column("Next run", 100., Align::Right),
         AGE_COLUMN,
     ],

@@ -197,7 +197,7 @@ fn on_delete_warning_for_restart() {
         let intent = intent(restart_of(kind), &object);
         assert_eq!(
             warnings(&intent),
-            ["Update strategy OnDelete: pods restart only when deleted"]
+            ["Strategy OnDelete: pods restart only when deleted"]
         );
     }
     let rolling = KindObject::DaemonSet(daemon_set("agent", "RollingUpdate"));

@@ -6,7 +6,7 @@ Status: **built (steps 1 to 4, 2026-10-03)**, see [as-built.md](as-built.md); re
 
 ## Goal
 
-- `SetHpaReplicaRange`: HPA `Edit min / max…` (one row) and `Edit limits` (ticked rows, `Batch`).
+- `SetHpaReplicaRange`: HPA `Edit min / max…` (one row) and `Edit min / max` (ticked rows, `Batch`).
 - `ExpandClaim`: PVC `Expand…` and `Expand` (ticked rows); irreversible, needs `allowVolumeExpansion`.
 - `SetDefaultStorageClass`: `Set as default` / `Set default`, the first two-object write (set the new default, then unset the old one) as one `Batch`.
 
@@ -20,7 +20,7 @@ Status: **built (steps 1 to 4, 2026-10-03)**, see [as-built.md](as-built.md); re
 | Step | Scope | ACs |
 |---|---|---|
 | 1 | Cluster crate: three operations, three `AccessCheck`s, fake-transport tests | 1–4 |
-| 2 | `ValueForm::ReplicaRange`, HPA Edit min / max and Edit limits. Approved by the user on 2026-10-02 (one approval for all mutating specs). | 1, 2, 5, 6, 9 |
+| 2 | `ValueForm::ReplicaRange`, HPA Edit min / max (menu and selection bar). Approved by the user on 2026-10-02 (one approval for all mutating specs). | 1, 2, 5, 6, 9 |
 | 3 | PVC Expand and bulk Expand. Approved by the user on 2026-10-02 (one approval for all mutating specs). | 1, 2, 5, 7, 9 |
 | 4 | StorageClass Set default (two-object `Batch`); UAT denied path; ui-verifier. Approved by the user on 2026-10-02 (one approval for all mutating specs). | 1, 2, 5, 8–10 |
 
