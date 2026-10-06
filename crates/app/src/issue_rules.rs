@@ -19,7 +19,7 @@ use crate::issue_board::IssueInputs;
 use crate::kind_row::{JOB_KIND, pod_workload};
 use crate::node_usage::node_usage;
 use crate::pod_diagnosis::{DiagnosisCause, PodDiagnosis, is_diagnosis_skipped, pod_diagnosis};
-use crate::status_tone::{StatusTone, node_condition_tone};
+use crate::status_tone::{PRESSURE_CONDITIONS, StatusTone, active_pressures, node_condition_tone};
 use crate::usage_format::{Measure, format_percent};
 
 pub(crate) const UNSCHEDULABLE_GRACE: SignedDuration = SignedDuration::from_mins(2);
@@ -433,7 +433,6 @@ fn usage_finding(
 
 // ---- nodes ----
 
-const PRESSURE_CONDITIONS: [&str; 3] = ["MemoryPressure", "DiskPressure", "PIDPressure"];
 const READY: &str = "Ready";
 const NETWORK_UNAVAILABLE: &str = "NetworkUnavailable";
 
@@ -525,9 +524,7 @@ fn network_finding(node: &NodeSummary) -> Option<Finding> {
 }
 
 fn pressure_finding(node: &NodeSummary) -> Option<Finding> {
-    let mut pressures = PRESSURE_CONDITIONS
-        .iter()
-        .filter_map(|name| condition(node, name).filter(|condition| is_true(condition)));
+    let mut pressures = active_pressures(&node.conditions);
     let first = pressures.next()?;
     let others: Vec<&str> = pressures.map(|condition| condition.name.as_str()).collect();
     let mut cause = first

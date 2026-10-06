@@ -167,7 +167,40 @@ pub(crate) fn readiness_text(readiness: NodeReadiness) -> &'static str {
     }
 }
 
-pub(crate) fn node_status_label(status: NodeStatus) -> StatusLabel {
+/// The kubelet's resource pressure condition types, in the order they are named.
+pub(crate) const PRESSURE_CONDITIONS: [&str; 3] = ["MemoryPressure", "DiskPressure", "PIDPressure"];
+
+/// The pressure conditions that are `True` now.
+pub(crate) fn active_pressures(
+    conditions: &[NodeCondition],
+) -> impl Iterator<Item = &NodeCondition> {
+    PRESSURE_CONDITIONS.iter().filter_map(|name| {
+        conditions
+            .iter()
+            .find(|condition| condition.name == *name && condition.status == ConditionStatus::True)
+    })
+}
+
+/// The status of a node in the list and the drawer: readiness and scheduling, then the active
+/// pressure conditions (`Ready · DiskPressure`), which turn an otherwise green label to a warning.
+pub(crate) fn node_status_label(status: NodeStatus, conditions: &[NodeCondition]) -> StatusLabel {
+    let label = readiness_label(status);
+    let pressures: Vec<&str> = active_pressures(conditions)
+        .map(|condition| condition.name.as_str())
+        .collect();
+    if pressures.is_empty() {
+        return label;
+    }
+    StatusLabel {
+        text: format!("{} · {}", label.text, pressures.join(", ")).into(),
+        tone: match label.tone {
+            StatusTone::Ok => StatusTone::Warn,
+            tone => tone,
+        },
+    }
+}
+
+fn readiness_label(status: NodeStatus) -> StatusLabel {
     let readiness_tone = match status.readiness {
         NodeReadiness::Ready => StatusTone::Ok,
         NodeReadiness::NotReady => StatusTone::Bad,

@@ -41,7 +41,7 @@
 pub(crate) enum StatusTone { Ok, Warn, Bad, Info, Done }
 pub(crate) struct StatusLabel { pub(crate) text: SharedString, pub(crate) tone: StatusTone }
 pub(crate) fn pod_status_label(pod: &PodSummary) -> StatusLabel;
-pub(crate) fn node_status_label(status: NodeStatus) -> StatusLabel;
+pub(crate) fn node_status_label(status: NodeStatus, conditions: &[NodeCondition]) -> StatusLabel;
 pub(crate) fn container_state_label(container: &ContainerSummary) -> StatusLabel;
 pub(crate) fn tone_color(tone: StatusTone, cx: &App) -> Hsla; // the only theme lookup
 ```
@@ -61,7 +61,7 @@ pub(crate) fn tone_color(tone: StatusTone, cx: &App) -> Hsla; // the only theme 
   - every `Main` and `Sidecar` container is `ContainerState::Running`.
 
   It shows immediately, including during a probe's initial delay. A grace period is a possible future refinement ([README](README.md)).
-- Node text: `Ready` / `NotReady` / `Unknown`, when `scheduling == Disabled` a Ready node reads `Cordoned` (Warn) and another readiness gets ` · Cordoned` after it; the node drawer adds a Scheduling row (`Schedulable` / `Cordoned`).
+- Node text: `Ready` / `NotReady` / `Unknown`, when `scheduling == Disabled` a Ready node reads `Cordoned` (Warn) and another readiness gets ` · Cordoned` after it; the node drawer adds a Scheduling row (`Schedulable` / `Cordoned`). Active pressure conditions (`MemoryPressure`, `DiskPressure`, `PIDPressure`, in that order, `True` only) are appended after it, `Ready · DiskPressure`, and turn a green label to Warn (`issue_rules` reads the same list).
 
 ## Age (`age.rs`, pure)
 

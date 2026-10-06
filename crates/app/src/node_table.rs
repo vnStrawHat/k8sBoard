@@ -216,7 +216,7 @@ impl TableRow for NodeRow<'_> {
     }
 
     fn tone(&self) -> StatusTone {
-        node_status_label(self.node.status).tone
+        node_status_label(self.node.status, &self.node.conditions).tone
     }
 
     fn value(&self, column: usize) -> CellValue<'_> {
@@ -224,7 +224,7 @@ impl TableRow for NodeRow<'_> {
         match column {
             NAME => CellValue::Text(Cow::Borrowed(&node.name)),
             STATUS => {
-                let label = node_status_label(node.status);
+                let label = node_status_label(node.status, &node.conditions);
                 CellValue::Status {
                     tone: label.tone,
                     text: label.text,
@@ -313,7 +313,9 @@ impl NodeTableDelegate {
         let mono = cx.theme().mono_font_family.clone();
         match logical {
             NAME => truncated_text("name", node.name.clone()).into_any_element(),
-            STATUS => toned_text(node_status_label(node.status), cx).into_any_element(),
+            STATUS => {
+                toned_text(node_status_label(node.status, &node.conditions), cx).into_any_element()
+            }
             ROLES => match roles_cell(&node.roles) {
                 roles if roles == ABSENT => cell_text(ABSENT, cx),
                 roles => truncated_text(("node-roles", row_ix), roles).into_any_element(),

@@ -182,28 +182,111 @@ fn pod_completed_is_done_and_terminating_is_info() {
 
 #[test]
 fn node_ready_scheduling_disabled_reads_cordoned_in_warn() {
-    let label = node_status_label(NodeStatus {
-        readiness: NodeReadiness::Ready,
-        scheduling: NodeScheduling::Disabled,
-    });
+    let label = node_status_label(
+        NodeStatus {
+            readiness: NodeReadiness::Ready,
+            scheduling: NodeScheduling::Disabled,
+        },
+        &[],
+    );
     assert_eq!(label.text, "Cordoned");
     assert_eq!(label.tone, StatusTone::Warn);
 }
 
 #[test]
 fn node_not_ready_is_bad() {
-    let cordoned = node_status_label(NodeStatus {
-        readiness: NodeReadiness::NotReady,
-        scheduling: NodeScheduling::Disabled,
-    });
+    let cordoned = node_status_label(
+        NodeStatus {
+            readiness: NodeReadiness::NotReady,
+            scheduling: NodeScheduling::Disabled,
+        },
+        &[],
+    );
     assert_eq!(cordoned.text, "NotReady · Cordoned");
     assert_eq!(cordoned.tone, StatusTone::Bad);
-    let enabled = node_status_label(NodeStatus {
-        readiness: NodeReadiness::NotReady,
-        scheduling: NodeScheduling::Enabled,
-    });
+    let enabled = node_status_label(
+        NodeStatus {
+            readiness: NodeReadiness::NotReady,
+            scheduling: NodeScheduling::Enabled,
+        },
+        &[],
+    );
     assert_eq!(enabled.text, "NotReady");
     assert_eq!(enabled.tone, StatusTone::Bad);
+}
+
+fn node_condition(name: &str, status: ConditionStatus) -> NodeCondition {
+    NodeCondition {
+        name: name.to_owned(),
+        status,
+        reason: None,
+        message: None,
+        changed_at: None,
+    }
+}
+
+const READY_AND_SCHEDULABLE: NodeStatus = NodeStatus {
+    readiness: NodeReadiness::Ready,
+    scheduling: NodeScheduling::Enabled,
+};
+
+#[test]
+fn a_ready_node_under_pressure_reads_the_pressure_in_warn() {
+    let one = node_status_label(
+        READY_AND_SCHEDULABLE,
+        &[
+            node_condition("Ready", ConditionStatus::True),
+            node_condition("DiskPressure", ConditionStatus::True),
+        ],
+    );
+    assert_eq!(one.text, "Ready · DiskPressure");
+    assert_eq!(one.tone, StatusTone::Warn);
+    // Named in the kubelet's order, not the API's.
+    let two = node_status_label(
+        READY_AND_SCHEDULABLE,
+        &[
+            node_condition("PIDPressure", ConditionStatus::True),
+            node_condition("MemoryPressure", ConditionStatus::True),
+            node_condition("DiskPressure", ConditionStatus::False),
+        ],
+    );
+    assert_eq!(two.text, "Ready · MemoryPressure, PIDPressure");
+}
+
+#[test]
+fn pressure_that_is_not_true_leaves_the_label_alone() {
+    let label = node_status_label(
+        READY_AND_SCHEDULABLE,
+        &[
+            node_condition("MemoryPressure", ConditionStatus::False),
+            node_condition("DiskPressure", ConditionStatus::Unknown),
+        ],
+    );
+    assert_eq!(label.text, "Ready");
+    assert_eq!(label.tone, StatusTone::Ok);
+}
+
+#[test]
+fn pressure_is_appended_after_cordoned_and_never_softens_a_bad_node() {
+    let pressure = [node_condition("DiskPressure", ConditionStatus::True)];
+    let cordoned = node_status_label(
+        NodeStatus {
+            readiness: NodeReadiness::Ready,
+            scheduling: NodeScheduling::Disabled,
+        },
+        &pressure,
+    );
+    assert_eq!(cordoned.text, "Cordoned · DiskPressure");
+    assert_eq!(cordoned.tone, StatusTone::Warn);
+    let not_ready = node_status_label(
+        NodeStatus {
+            readiness: NodeReadiness::NotReady,
+            scheduling: NodeScheduling::Enabled,
+        },
+        &pressure,
+    );
+    assert_eq!(not_ready.text, "NotReady · DiskPressure");
+    assert_eq!(not_ready.tone, StatusTone::Bad);
 }
 
 #[test]

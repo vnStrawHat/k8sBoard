@@ -472,7 +472,7 @@ impl<'a> Subject<'a> {
     fn status(self) -> Option<StatusLabel> {
         match self {
             Self::Pod(pod) => Some(pod_status_label(pod)),
-            Self::Node(node) => Some(node_status_label(node.status)),
+            Self::Node(node) => Some(node_status_label(node.status, &node.conditions)),
             Self::Row(_, row) => Some(row.status.clone()),
             Self::Named { .. } => None,
         }

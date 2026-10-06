@@ -87,7 +87,10 @@ fn subtitle(node: &NodeSummary, now: jiff::Timestamp, cx: &App) -> AnyElement {
     h_flex()
         .gap_1()
         .text_sm()
-        .child(toned_text(node_status_label(node.status), cx))
+        .child(toned_text(
+            node_status_label(node.status, &node.conditions),
+            cx,
+        ))
         .child(
             div()
                 .text_color(cx.theme().muted_foreground)
@@ -152,7 +155,7 @@ fn overview(
         .child(first_section_title("Node", cx))
         .child(wide_detail_row(
             "Status",
-            toned_text(node_status_label(node.status), cx),
+            toned_text(node_status_label(node.status, &node.conditions), cx),
             cx,
         ))
         .child(wide_detail_row(
