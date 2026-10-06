@@ -1907,6 +1907,11 @@ fn skip_pdbs_run_deletes_with_uid(cx: &mut TestAppContext) {
             .and_then(|fields| fields.last()),
         Some(&json!({"path": "disable_eviction", "value": "true"}))
     );
+    // Nothing was evicted: the pods were deleted.
+    assert_eq!(
+        lines[3]["fields"][0],
+        json!({"path": "deleted", "value": "2"})
+    );
 }
 
 #[gpui_kit::test]

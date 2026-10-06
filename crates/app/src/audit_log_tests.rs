@@ -661,13 +661,12 @@ fn skip_pdbs_summary_records_disable_eviction() {
         let entry = drain_summary_entry(&identity, &line, budgets, None);
         serde_json::to_value(entry).expect("JSON")["fields"].clone()
     };
-    // The counts keep their keys and `evicted` counts the pods removed either way.
+    // A drain that respects the budgets evicted its pods and says so.
     let respect = fields(BudgetPolicy::Respect);
-    assert!(
-        respect
-            .as_array()
-            .is_some_and(|list| list.iter().all(|field| field["path"] != "disable_eviction"))
-    );
+    assert!(respect.as_array().is_some_and(|list| {
+        list.iter().all(|field| field["path"] != "disable_eviction")
+            && list.iter().any(|field| field["path"] == "evicted")
+    }));
     let skip = fields(BudgetPolicy::Skip);
     let paths: Vec<&str> = skip
         .as_array()
@@ -678,13 +677,15 @@ fn skip_pdbs_summary_records_disable_eviction() {
     assert_eq!(
         paths,
         [
-            "evicted",
+            "deleted",
             "refused",
             "failed",
             "skipped",
             "disable_eviction"
         ]
     );
+    // The count of the removed pods is the same one under its other name.
+    assert_eq!(skip[0]["value"], respect[0]["value"]);
     assert_eq!(skip[4]["value"], "true");
 }
 

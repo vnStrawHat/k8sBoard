@@ -549,7 +549,8 @@ fn the_tab_reads_states_progress_and_rows() {
     assert_eq!(run.node_states()[0].1.text(), "Evicting 1/3");
     assert_eq!(run.timeout_left(secs(60)), Some(secs(240)));
     let rows = run.pod_rows(secs(4));
-    // The warning row comes first, with its countdown and attempt.
+    // The warning row comes first, with its countdown and attempt, then the pod still waiting,
+    // and the gone one last.
     assert_eq!(rows[0].pod, "payments/two");
     assert_eq!(
         rows[0].text,
@@ -557,7 +558,7 @@ fn the_tab_reads_states_progress_and_rows() {
     );
     assert_eq!(rows[0].tone, StatusTone::Warn);
     let texts: Vec<&str> = rows.iter().map(|row| row.text.as_ref()).collect();
-    assert_eq!(texts[1..], ["Gone", "Waiting"]);
+    assert_eq!(texts[1..], ["Waiting", "Gone"]);
     run.cancel();
     assert_eq!(run.node_states()[0].1, NodeState::Cancelled);
     assert_eq!(run.timeout_left(secs(60)), None);
@@ -1118,4 +1119,55 @@ fn a_quit_while_cordoning_still_leaves_a_line_for_the_node_it_was_on() {
         .collect();
     // Nodes the run never reached have no line, as for any other end.
     assert_eq!(names, [("a", &SummaryOutcome::Abandoned)]);
+}
+
+// ---- The order of the pod rows ----
+
+#[test]
+fn the_tab_lists_refusals_and_active_pods_first_and_the_ones_it_leaves_alone_last() {
+    let mut run = DrainRun::new(input(&["wk-04"], &[]));
+    run.on_read(
+        Ok(vec![
+            DrainPod {
+                controller: Some(ControllerRef {
+                    kind: "DaemonSet".to_owned(),
+                    name: "agent".to_owned(),
+                }),
+                ..pod("agent-1")
+            },
+            pod("api-1"),
+            pod("api-2"),
+            pod("api-3"),
+            pod("api-4"),
+        ]),
+        secs(0),
+    );
+    // api-1 is gone, api-2 refused, api-3 evicted and leaving, api-4 not yet tried.
+    run.on_write(&NextStep::Evict(key("api-1")), ok(), secs(0));
+    run.on_poll(
+        Ok(vec![
+            pod("agent-1"),
+            pod("api-2"),
+            pod("api-3"),
+            pod("api-4"),
+        ]),
+        secs(1),
+    );
+    run.on_write(&NextStep::Evict(key("api-2")), refused(None), secs(1));
+    run.on_write(&NextStep::Evict(key("api-3")), ok(), secs(1));
+    let order: Vec<String> = run
+        .pod_rows(secs(2))
+        .into_iter()
+        .map(|row| row.pod.to_string())
+        .collect();
+    assert_eq!(
+        order,
+        [
+            "payments/api-2",
+            "payments/api-3",
+            "payments/api-4",
+            "payments/api-1",
+            "payments/agent-1",
+        ]
+    );
 }

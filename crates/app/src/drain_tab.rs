@@ -8,9 +8,9 @@ use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::progress::Progress;
 use gpui_kit::component::{ActiveTheme as _, Sizable as _, h_flex, v_flex};
 use gpui_kit::{
-    App, Context, Entity, InteractiveElement as _, IntoElement, ParentElement as _, Render,
-    SharedString, StatefulInteractiveElement as _, Styled as _, Subscription, WeakEntity, Window,
-    div, px,
+    AnyElement, App, Context, Entity, InteractiveElement as _, IntoElement, ParentElement as _,
+    Render, SharedString, StatefulInteractiveElement as _, Styled as _, Subscription, WeakEntity,
+    Window, div, px,
 };
 
 use crate::app_shell::AppShell;
@@ -238,7 +238,7 @@ impl DrainTab {
                 let object = ClusterObject::new(self.cluster.clone(), key);
                 let shell = self.shell.clone();
                 let shown: SharedString = name.into();
-                let separator = if index == last { "" } else { "," };
+                let separator = if index == last { " " } else { ", " };
                 h_flex()
                     .child(
                         link_style(div().id(("drain-blocker", index)), &shown, cx)
@@ -250,16 +250,19 @@ impl DrainTab {
                             .child(shown.clone()),
                     )
                     .child(separator)
+                    .into_any_element()
             });
-        div().text_sm().child(
-            h_flex()
-                .gap_1()
-                .flex_wrap()
-                .child(line.lead)
-                .child("· blocked by")
-                .children(links)
-                .children((!line.tail.is_empty()).then(|| line.tail.trim_start().to_owned())),
-        )
+        // One flowing line: every word is its own item, so the line breaks between words as plain
+        // text does, and the budget names stay links.
+        let words = |text: String| -> Vec<AnyElement> {
+            text.split_inclusive(' ')
+                .map(|word| div().child(word.to_owned()).into_any_element())
+                .collect()
+        };
+        let mut flow = words(format!("{} · blocked by ", line.lead));
+        flow.extend(links);
+        flow.extend(words(line.tail.trim_start().to_owned()));
+        div().text_sm().child(h_flex().flex_wrap().children(flow))
     }
 
     /// The nodes of this drain the cluster reports schedulable now.

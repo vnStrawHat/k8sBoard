@@ -230,6 +230,11 @@ pub(crate) fn drain_summary_entry(
         path: path.to_owned(),
         value: Some(value.to_string()),
     };
+    // A drain that skips the budgets deletes its pods directly: nothing was evicted.
+    let removed = match budgets {
+        BudgetPolicy::Respect => "evicted",
+        BudgetPolicy::Skip => "deleted",
+    };
     AuditEntry {
         at: timestamp_now(),
         cluster: identity.cluster.clone(),
@@ -242,7 +247,7 @@ pub(crate) fn drain_summary_entry(
             name: summary.node.clone(),
         }),
         fields: [
-            Some(count("evicted", summary.evicted)),
+            Some(count(removed, summary.evicted)),
             Some(count("refused", summary.refused)),
             Some(count("failed", summary.failed)),
             Some(count("skipped", summary.skipped)),

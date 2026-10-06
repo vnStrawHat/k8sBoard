@@ -939,7 +939,9 @@ impl DrainRun {
         )
     }
 
-    /// The pod lines of the current node: bad and warning rows first, then the rest in list order.
+    /// The pod lines of the current node: failed, then refused or stuck rows, then the pods still
+    /// being worked on, then the gone ones, and the pods the drain leaves alone last; list order within
+    /// each group.
     pub(crate) fn pod_rows(&self, now: Duration) -> Vec<PodRow> {
         let index = self.current.min(self.nodes.len().saturating_sub(1));
         let Some(node) = self.nodes.get(index) else {
@@ -951,11 +953,7 @@ impl DrainRun {
             .map(|pod| {
                 let (text, tone) =
                     pod_text(&pod.progress, now, self.options.budgets, self.end.is_some());
-                let rank = match tone {
-                    StatusTone::Bad => 0,
-                    StatusTone::Warn => 1,
-                    _ => 2,
-                };
+                let rank = row_rank(&pod.progress, tone);
                 (
                     rank,
                     PodRow {
@@ -1114,6 +1112,19 @@ impl NodeRun {
             })
             .count();
         (gone, total)
+    }
+}
+
+/// Where a pod's line sorts in the tab: what needs attention first, what the drain left alone last.
+fn row_rank(progress: &PodProgress, tone: StatusTone) -> u8 {
+    match progress {
+        PodProgress::Skipped(_) => 4,
+        PodProgress::Gone => 3,
+        _ => match tone {
+            StatusTone::Bad => 0,
+            StatusTone::Warn => 1,
+            _ => 2,
+        },
     }
 }
 
