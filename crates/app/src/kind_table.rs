@@ -6,10 +6,12 @@ use std::collections::{BTreeMap, HashMap};
 
 use gpui_kit::component::menu::PopupMenu;
 use gpui_kit::component::table::{Column, TableDelegate, TableState};
+use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{ActiveTheme as _, h_flex};
 use gpui_kit::{
-    AnyElement, App, Context, Div, IntoElement, ParentElement as _, Pixels, SharedString, Stateful,
-    Styled as _, WeakEntity, Window, div,
+    AnyElement, App, Context, Div, InteractiveElement as _, IntoElement, ParentElement as _,
+    Pixels, SharedString, Stateful, StatefulInteractiveElement as _, Styled as _, WeakEntity,
+    Window, div,
 };
 
 use crate::age::format_age;
@@ -20,12 +22,13 @@ use crate::cluster_registry::ClusterRef;
 use crate::custom_rows::{date_text, date_tone};
 use crate::drawer::truncated_text_with_tooltip;
 use crate::filter_bar::filtered_empty_state;
-use crate::kind_row::{KindCell, KindRow};
+use crate::kind_join::CRD_INSTANCES;
+use crate::kind_row::{KindCell, KindObject, KindRow};
 use crate::live_sections::{loaded_replica_sets, next_run_text};
 use crate::port_forward_menu::{ForwardMenu, row_subject};
 use crate::resource_actions::{
-    MenuCluster, MenuExtras, browse_instances_item, kind_menu, open_url_choice, open_url_menu_item,
-    secret_menu,
+    MenuCluster, MenuExtras, browse_instances_item, browse_target, kind_menu, open_url_choice,
+    open_url_menu_item, secret_menu,
 };
 use crate::resource_kind::{Align, NameColumn, ResourceKind, kind_columns};
 use crate::row_context::TableSession;
@@ -427,10 +430,57 @@ impl KindTableDelegate {
                     col_ix,
                     capacity,
                 };
+                if kind == ResourceKind::Crds
+                    && cell_ix == CRD_INSTANCES
+                    && let Some(link) = self.instances_link(row, cell, row_ix, mono.clone(), cx)
+                {
+                    return link;
+                }
                 cell_element(cell, slot, self.align(logical), mono, cx)
             }
             None => div().into_any_element(),
         }
+    }
+
+    /// The Instances count of a CRD as a link to the instances, when the count is known and the
+    /// kind is served.
+    fn instances_link(
+        &self,
+        row: &KindRow,
+        cell: &KindCell,
+        row_ix: usize,
+        mono: SharedString,
+        cx: &App,
+    ) -> Option<AnyElement> {
+        let (KindCell::Quantity { text, .. }, KindObject::Crd(crd)) = (cell, &row.object) else {
+            return None;
+        };
+        let live = self.session.as_ref()?.session.read(cx).live()?;
+        let target = Screen::Kind(ResourceKind::Custom(browse_target(
+            &crd.name,
+            live.crd_kinds(),
+        )?));
+        let shell = self.shell.clone();
+        let theme = cx.theme();
+        Some(
+            div()
+                .id(("crd-instances", row_ix))
+                .w_full()
+                .truncate()
+                .text_right()
+                .font_family(mono)
+                .cursor_pointer()
+                .text_color(theme.link)
+                .underline()
+                .tooltip(|window, cx| Tooltip::new("Browse instances").build(window, cx))
+                .on_click(move |_, _, cx| {
+                    // The row's own click would open the CRD drawer as well.
+                    cx.stop_propagation();
+                    let _ = shell.update(cx, |shell, cx| shell.show_screen(target, cx));
+                })
+                .child(text.clone())
+                .into_any_element(),
+        )
     }
 }
 
