@@ -1759,7 +1759,9 @@ fn container_picker_lists_running_main_and_sidecars() {
 fn a_container_that_is_not_running_cannot_take_a_shell() {
     assert_eq!(
         shell_state(vec![container("app", ContainerKind::Main, false)]),
-        ShellMenuState::Disabled("Container is not running".into())
+        ShellMenuState::Disabled(
+            "Container is not running; see Previous logs or Debug container".into()
+        )
     );
     assert_eq!(
         shell_state(vec![
@@ -2906,7 +2908,7 @@ fn container_shell_disabled_when_not_running() {
             &container("app", ContainerKind::Main, false),
             &guard
         )),
-        "Container is not running"
+        "Container is not running; see Previous logs or Debug container"
     );
 }
 
@@ -3393,7 +3395,7 @@ fn attach_block_reasons() {
     };
     assert_eq!(
         attach_block(&stopped).as_deref(),
-        Some("Container is not running")
+        Some("Container is not running; see Previous logs or Debug container")
     );
     let init = attachable("init", ContainerKind::Init);
     assert_eq!(

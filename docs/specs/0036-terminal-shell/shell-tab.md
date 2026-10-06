@@ -27,7 +27,7 @@ pub(crate) enum ShellEnd { Exited { code: Option<i32> }, Failed { reason: Shared
 
 | Where | What |
 |---|---|
-| Pod row menu and drawer ⋯ "Open shell ▸" (W4) | submenu of containers with MAIN/SIDECAR tags (W4 note 2), Init containers left out; a single container opens directly; a container not `Running` is disabled "Container is not running" |
+| Pod row menu and drawer ⋯ "Open shell ▸" (W4) | submenu of containers with MAIN/SIDECAR tags (W4 note 2), Init containers left out; a single container opens directly; a container not `Running` is disabled "Container is not running; see Previous logs or Debug container" |
 | S key (0028 `OpenShell`) | the `OpenShell` arm of `run_available_row_key` (empty on main): the cursor pod's default container (first running Main, else the first running one), in the cursor's slot |
 | Container detail ⋯ menu (W4b note 3), if 0008/0019 built it | "Open shell" for that container |
 | Palette (0029) `>` Open shell | dispatches the S key action: the same arm |

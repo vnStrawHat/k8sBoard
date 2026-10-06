@@ -2760,7 +2760,7 @@ pub(crate) fn shell_menu_state(pod: &PodSummary, guard: &ClusterGuard<'_>) -> Sh
     }
 }
 
-const NOT_RUNNING_REASON: &str = "Container is not running";
+const NOT_RUNNING_REASON: &str = "Container is not running; see Previous logs or Debug container";
 
 /// What the Debug container… item of a pod offers (spec 0037).
 #[derive(Clone, Debug, PartialEq, Eq)]

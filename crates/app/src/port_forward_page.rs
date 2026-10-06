@@ -27,7 +27,7 @@ use crate::drawer::{
     wide_detail_row,
 };
 use crate::environment::environment_badge;
-use crate::port_forwards::{Forward, ForwardId, ForwardState, byte_count_text};
+use crate::port_forwards::{Forward, ForwardFailure, ForwardId, ForwardState, byte_count_text};
 use crate::resource_actions::{ActionAvailability, MenuItemIcon as _, disabled_menu_item};
 use crate::status_tone::{tone_color, toned_text};
 use crate::table_selection::ClusterObject;
@@ -259,8 +259,9 @@ impl AppShell {
             .into_any_element()
     }
 
-    /// `■ Stop` while running, `↻ Retry` after a failure, `▶ Start` for a stopped preset. Start and
-    /// Retry read the gate of the row's own cluster.
+    /// `■ Stop` while running, `↻ Retry` after a failure, `Change port…` when the port is in use,
+    /// `▶ Start` for a stopped preset. Start, Retry, and Change port read the gate of the row's own
+    /// cluster.
     fn forward_action(&self, index: usize, forward: &Forward, cx: &Context<Self>) -> AnyElement {
         let id = forward.id;
         let button = |label: &'static str| {
@@ -274,17 +275,17 @@ impl AppShell {
                 .on_click(cx.listener(move |shell, _, _, cx| shell.stop_forward(id, cx)))
                 .into_any_element();
         }
-        let label = match forward.state {
-            ForwardState::Failed(_) => "↻ Retry",
-            _ => "▶ Start",
-        };
-        let button = button(label);
+        let restart = StoppedRowAction::of(&forward.state);
+        let button = button(restart.label());
         // A cluster that is not viewed answers on click ("Open {cluster} to start this forward").
         let button = match self.forward_start_gate(&forward.cluster, cx) {
             Some(ActionAvailability::Disabled { reason }) => button.disabled(true).tooltip(reason),
             Some(ActionAvailability::Enabled) | None => {
-                button.on_click(cx.listener(move |shell, _, window, cx| {
-                    shell.start_forward_again(id, window, cx)
+                button.on_click(cx.listener(move |shell, _, window, cx| match restart {
+                    StoppedRowAction::ChangePort => shell.open_change_local_port(id, window, cx),
+                    StoppedRowAction::Retry | StoppedRowAction::Start => {
+                        shell.start_forward_again(id, window, cx);
+                    }
                 }))
             }
         };
@@ -590,4 +591,50 @@ fn forward_menu(
             }))
             .menu_icon(IconName::X),
     )
+}
+
+/// What the button of a row without a running stream offers.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum StoppedRowAction {
+    /// The same port would fail again, so the button asks for another one.
+    ChangePort,
+    Retry,
+    Start,
+}
+
+impl StoppedRowAction {
+    fn of(state: &ForwardState) -> Self {
+        match state {
+            ForwardState::Failed(ForwardFailure::PortInUse(_)) => Self::ChangePort,
+            ForwardState::Failed(_) => Self::Retry,
+            _ => Self::Start,
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::ChangePort => "Change port…",
+            Self::Retry => "↻ Retry",
+            Self::Start => "▶ Start",
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_port_in_use_offers_change_port_instead_of_retry() {
+        let label = |state| StoppedRowAction::of(&state).label();
+        assert_eq!(
+            label(ForwardState::Failed(ForwardFailure::PortInUse(3000))),
+            "Change port…"
+        );
+        assert_eq!(
+            label(ForwardState::Failed(ForwardFailure::TargetLost)),
+            "↻ Retry"
+        );
+        assert_eq!(label(ForwardState::Stopped), "▶ Start");
+    }
 }

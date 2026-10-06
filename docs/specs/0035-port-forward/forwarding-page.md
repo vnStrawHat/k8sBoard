@@ -10,7 +10,7 @@ Not a Kubernetes kind (W7 note): a local list rendered with the 0009 table toolk
 |---|---|
 | Header | `Port Forwarding` + muted `{total} ({active} active)`; buttons `+ New forward`, `Stop all` (disabled with no running forward) |
 | Columns | Target (`{ns}/{pod|svc|deploy|sts}/{name}`), Ports (`{remote} → localhost:{local}`, local `—` before bind), Status (theme token pill, decision texts in forward-model.md), Cluster (env badge + label), Uptime (`2h 14m`, `—` when not Active), action |
-| Action cell | Active / Paused / Reconnecting / Starting → `■ Stop`; Failed → `↻ Retry`; Stopped preset → `▶ Start` (W7 rows) |
+| Action cell | Active / Paused / Reconnecting / Starting → `■ Stop`; Failed → `↻ Retry` (`Change port…` when the port is in use, opening the Change local port form); Stopped preset → `▶ Start` (W7 rows) |
 | Empty state | `No port forwards. Use Forward next to a port, or + New forward.` |
 | Sort / filter | 0009 toolkit: filter text over Target and Cluster; default sort: running first, then target |
 

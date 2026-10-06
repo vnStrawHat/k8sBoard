@@ -26,7 +26,7 @@ pub enum AttachWait { NodeShellPod, EphemeralContainer, /** 0040: a running cont
 | `ResourceAction::Attach`, `RowAction::Attach`, key action `Attach` | bound `a` in `WORKSPACE` (free today); pods only (`subject_action`: Pod → `Attach`, else `None`) |
 | `gate()` | `Mutating { checks: [GetPodAttach, CreatePodAttach], is_shipped: true }`; denied text `Not permitted: get and create pods/attach` (the existing `VERB_PAIRS` row) |
 | `action_risk`, `action_label` | `Change`, `Attach` |
-| `attach_block(container) -> Option<SharedString>` | not running → `Container is not running`; `Init` kind → `Init containers cannot be attached`; `terminal == None` → `The container has no terminal (stdin and tty); use View logs` |
+| `attach_block(container) -> Option<SharedString>` | not running → `Container is not running; see Previous logs or Debug container`; `Init` kind → `Init containers cannot be attached`; `terminal == None` → `The container has no terminal (stdin and tty); use View logs` |
 | `default_attach_container(pod) -> Result<&ContainerSummary, SharedString>` | first running Main with a terminal, else first running Sidecar with one; else `No running container has a terminal (stdin and tty); use View logs` |
 | `key_availability_of` | `Attach` on a pod: the gate first, then `default_attach_container` (its `Err` is the disabled reason) |
 
