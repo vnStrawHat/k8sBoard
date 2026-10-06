@@ -759,7 +759,13 @@ mod tests {
     fn the_base_widths_fit_a_1100_px_window_and_taints_grows_most() {
         // The window less the 220 px sidebar, the table gutter, and the checkbox column.
         let room = 1100. - 220. - 28. - 32.;
-        let base: f32 = NODE_COLUMNS.iter().map(|column| column.width).sum();
+        // The request columns are hidden by default, so they take no room until asked for.
+        let base: f32 = NODE_COLUMNS
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| !HIDDEN_BY_DEFAULT.contains(index))
+            .map(|(_, column)| column.width)
+            .sum();
         assert!(base <= room, "{base} px of columns for {room} px");
         let ip = &NODE_COLUMNS[INTERNAL_IP];
         assert!(
