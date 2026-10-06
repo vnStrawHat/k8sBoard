@@ -57,3 +57,4 @@ Known ceiling: words that merely start with `prod`/`dev` (`products`, `device`) 
 - **Switcher menu**: one item per context with `profile.display_name`, checked = active. Badges and env groups in the menu are 0026.
 - **Notices button** (decision 30): when `AppSettings::notice` or the shell's kubeconfig notices are non-empty, a ghost small icon button (a kit warning/alert icon), `theme.warning` icon color, before the Read-only badge. Tooltip: one notice per line. Click: `AppSettings::dismiss_notice` and clear the shell notices.
 - The Read-only badge is unchanged (its env-colored dashed border and toggle are 0030).
+- **Built-in rows of Settings › Environments** (J6, 2026-10-06): Production reads `Opens read-only. Confirms by typing the object name (one object) or the cluster name (several)`; the others read `Click Confirm`. The same wording is the Change and Destructive cell of the Safety table.

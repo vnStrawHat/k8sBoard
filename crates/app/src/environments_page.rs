@@ -377,7 +377,18 @@ fn muted_text(text: impl Into<SharedString>, cx: &App) -> gpui_kit::Div {
         .child(text.into())
 }
 
-/// The four built-ins, read-only: badge, name, and how a change to the cluster is confirmed.
+/// What a built-in environment does: Production also opens read-only (`profile.read_only`), and its
+/// typed name is the object's for one object and the cluster's for several (spec 0030).
+fn tier_description(tier: EnvironmentTier) -> String {
+    match tier {
+        EnvironmentTier::Production => "Opens read-only. Confirms by typing the object name (one object) or the cluster name (several)".to_owned(),
+        EnvironmentTier::Staging | EnvironmentTier::Development | EnvironmentTier::Local => {
+            tier_cell(ConfirmMode::for_tier(tier), ActionRisk::Change)
+        }
+    }
+}
+
+/// The four built-ins, read-only: badge, name, and how they open and how a change is confirmed.
 fn built_in_rows(cx: &App) -> Vec<AnyElement> {
     EnvironmentTier::ALL
         .into_iter()
@@ -398,10 +409,7 @@ fn built_in_rows(cx: &App) -> Vec<AnyElement> {
                         .text_sm()
                         .child(tier.name()),
                 )
-                .child(muted_text(
-                    tier_cell(ConfirmMode::for_tier(tier), ActionRisk::Change),
-                    cx,
-                ))
+                .child(muted_text(tier_description(tier), cx).flex_1().min_w_0())
                 .into_any_element()
         })
         .collect()

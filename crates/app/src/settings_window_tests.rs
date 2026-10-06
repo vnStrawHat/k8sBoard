@@ -427,8 +427,11 @@ fn the_tier_table_groups_environments_by_tier() {
         [
             TierRow {
                 environments: "Production".to_owned(),
-                change: "Type the cluster name".to_owned(),
-                destructive: "Type the cluster name, danger button".to_owned(),
+                change: "Type the object name (one object) or the cluster name (several)"
+                    .to_owned(),
+                destructive:
+                    "Type the object name (one object) or the cluster name (several), danger button"
+                        .to_owned(),
                 privileged: "Type the node name, danger button".to_owned(),
             },
             TierRow {

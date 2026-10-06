@@ -14,7 +14,9 @@ use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::radio::{Radio, RadioGroup};
-use gpui_kit::component::{ActiveTheme as _, Disableable as _, Sizable as _, h_flex, v_flex};
+use gpui_kit::component::{
+    ActiveTheme as _, Disableable as _, Sizable as _, StyledExt as _, h_flex, v_flex,
+};
 use gpui_kit::{
     AnyElement, App, AppContext as _, Context, Div, Entity, FocusHandle, Focusable as _,
     InteractiveElement as _, IntoElement, KeyDownEvent, ParentElement as _, Render, SharedString,
@@ -64,6 +66,36 @@ const ITEMS_VISIBLE: usize = 8;
 /// Destructive and privileged actions confirm with the danger button.
 fn has_danger_button(risk: ActionRisk) -> bool {
     matches!(risk, ActionRisk::Destructive | ActionRisk::Privileged)
+}
+
+/// The words around the exact text of the typed-name prompt, shared by every dialog that asks
+/// for one so they read the same.
+const TYPED_PROMPT_BEFORE: &str = "Type";
+const TYPED_PROMPT_AFTER: &str = "to confirm";
+
+/// `Type api to confirm`: the prompt as plain text, also the reason of the disabled button.
+pub(crate) fn typed_prompt_text(expected: &str) -> String {
+    format!("{TYPED_PROMPT_BEFORE} {expected} {TYPED_PROMPT_AFTER}")
+}
+
+/// The prompt with `expected` bold in the monospace face: the exact text, not the
+/// kind of name it is.
+pub(crate) fn typed_prompt(expected: &str, cx: &App) -> AnyElement {
+    let theme = cx.theme();
+    h_flex()
+        .gap_1()
+        .text_sm()
+        .text_color(theme.muted_foreground)
+        .child(TYPED_PROMPT_BEFORE)
+        .child(
+            div()
+                .font_semibold()
+                .font_family(theme.mono_font_family.clone())
+                .text_color(theme.foreground)
+                .child(expected.to_owned()),
+        )
+        .child(TYPED_PROMPT_AFTER)
+        .into_any_element()
 }
 
 /// What the dialog asks about.
@@ -167,7 +199,9 @@ pub(crate) struct ConfirmDialog {
 
 impl ConfirmDialog {
     pub(crate) fn new(inputs: DialogInputs, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let typed = cx.new(|cx| InputState::new(window, cx).placeholder("Type here"));
+        // The prompt above the field names the exact text; the placeholder says what kind of name it is.
+        let hint = inputs.kind.typed_hint();
+        let typed = cx.new(|cx| InputState::new(window, cx).placeholder(hint));
         let note = cx.new(|cx| InputState::new(window, cx).placeholder("Note"));
         // The block and the match line follow the field as it is typed.
         let subscription = cx.subscribe_in(&typed, window, |_, _, event: &InputEvent, _, cx| {
@@ -989,17 +1023,11 @@ impl ConfirmDialog {
         if matches!(self.live_tier(cx), DialogConfirm::Click) {
             return None;
         }
-        let theme = cx.theme();
         let matches = self.typed_match(cx) == TypedMatch::Matches;
         Some(
             v_flex()
                 .gap_1()
-                .child(
-                    div()
-                        .text_sm()
-                        .text_color(theme.muted_foreground)
-                        .child(format!("Type {} to confirm", self.kind.typed_hint())),
-                )
+                .child(typed_prompt(self.kind.expected(), cx))
                 .child(
                     h_flex()
                         .gap_2()
@@ -1110,7 +1138,7 @@ impl Render for ConfirmDialog {
         // The block text explains a disabled button when the dry-run line does not: after a pass, it
         // is the lock, a reconnect, or the name. The typed-name hint above the field already says
         // what is missing, so it is not repeated.
-        let typed_reason = format!("Type {} to confirm", self.kind.expected());
+        let typed_reason = typed_prompt_text(self.kind.expected());
         let block_text = block
             .as_ref()
             .filter(|reason| reason.as_ref() != typed_reason)
@@ -1245,6 +1273,20 @@ mod eviction_line_tests {
         assert_eq!(
             eviction_line("grace 30s"),
             "Eviction request · grace period 30s"
+        );
+    }
+}
+
+#[cfg(test)]
+mod typed_prompt_tests {
+    use super::typed_prompt_text;
+
+    #[test]
+    fn the_prompt_names_the_exact_text() {
+        assert_eq!(typed_prompt_text("api"), "Type api to confirm");
+        assert_eq!(
+            typed_prompt_text("uat-monitor"),
+            "Type uat-monitor to confirm"
         );
     }
 }

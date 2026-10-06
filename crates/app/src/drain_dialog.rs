@@ -41,6 +41,7 @@ use super::write_flow::{
 };
 use crate::cluster_registry::ClusterRef;
 use crate::cluster_runtime::ClusterRuntime;
+use crate::confirm_dialog::{typed_prompt, typed_prompt_text};
 use crate::drain_plan::{
     BudgetPolicy, CordonCheck, DrainOption, DrainOptions, GRACE_CHOICES, NodePlan, OptionCounts,
     PodCheck, PodKey, PreviewLine, TIMEOUT_CHOICES, bypass_note, drain_blocker, drain_dry_run,
@@ -715,13 +716,6 @@ impl DrainDialog {
         }
     }
 
-    fn typed_hint(&self) -> &'static str {
-        match self.nodes.len() {
-            1 => "the node name",
-            _ => "the cluster name",
-        }
-    }
-
     /// The tier of `button` now: the one the dialog opened with, or the live one of the cluster when
     /// the user made it stricter since (Settings), whichever asks for more. A drain that skips the
     /// budgets types the name in every tier; a cordon never touches budgets, so `Cordon only` keeps
@@ -1259,17 +1253,11 @@ impl DrainDialog {
         if matches!(self.live_tier(DrainButton::Drain, cx), DialogConfirm::Click) {
             return None;
         }
-        let theme = cx.theme();
         let matches = self.typed_match(DrainButton::Drain, cx) == TypedMatch::Matches;
         Some(
             v_flex()
                 .gap_1()
-                .child(
-                    div()
-                        .text_sm()
-                        .text_color(theme.muted_foreground)
-                        .child(format!("Type {} to confirm", self.typed_hint())),
-                )
+                .child(typed_prompt(self.expected(), cx))
                 .child(
                     h_flex()
                         .gap_2()
@@ -1380,7 +1368,7 @@ impl Render for DrainDialog {
         let muted = cx.theme().muted_foreground;
         let (drain_block, cordon_block) = (self.drain_block(cx), self.cordon_block(cx));
         // The reason a button is off, when the lines above do not already say it.
-        let typed_reason = format!("Type {} to confirm", self.expected());
+        let typed_reason = typed_prompt_text(self.expected());
         let block_text = drain_block
             .clone()
             .filter(|reason| reason.as_ref() != typed_reason)

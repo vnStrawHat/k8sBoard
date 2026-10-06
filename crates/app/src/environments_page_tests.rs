@@ -284,3 +284,12 @@ fn skipped_row_shows_its_error(cx: &mut TestAppContext) {
         Some("'Prod' is used by a built-in environment.")
     );
 }
+
+#[test]
+fn production_says_it_opens_read_only_and_which_name_it_asks_for() {
+    assert_eq!(
+        tier_description(EnvironmentTier::Production),
+        "Opens read-only. Confirms by typing the object name (one object) or the cluster name (several)"
+    );
+    assert_eq!(tier_description(EnvironmentTier::Staging), "Click Confirm");
+}

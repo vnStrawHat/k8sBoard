@@ -732,7 +732,9 @@ fn tier_rows(custom: &[CustomEnvironment]) -> Vec<TierRow> {
 pub(crate) fn tier_cell(mode: ConfirmMode, risk: ActionRisk) -> String {
     let expected = match risk {
         ActionRisk::Privileged => "the node name",
-        ActionRisk::Change | ActionRisk::Destructive => "the cluster name",
+        ActionRisk::Change | ActionRisk::Destructive => {
+            "the object name (one object) or the cluster name (several)"
+        }
     };
     let how = match confirm_step(mode, risk, expected) {
         DialogConfirm::TypeName { expected } => format!("Type {expected}"),
