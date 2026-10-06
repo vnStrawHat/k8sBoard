@@ -21,7 +21,8 @@ pub(crate) struct TableFilter {
 pub(crate) enum FilterChip {
     /// Tone Warn, Bad, or Info.
     Unhealthy,
-    /// The text of a column equals `value`: `Node: wk-03` on Pods, `Reason: BackOff` on Events.
+    /// The text of a column equals `value`: `Node: wk-03` on Pods, `Reason: BackOff` on Events,
+    /// `Status: Completed` on Pods and Jobs.
     Equals {
         column: usize,
         title: &'static str,
@@ -164,6 +165,7 @@ fn chip_matches<T: TableRow>(row: &T, chip: &FilterChip) -> bool {
         FilterChip::Equals { column, value, .. } => match row.value(*column) {
             CellValue::Text(text) => text == value.as_ref(),
             CellValue::Qualified { text, .. } => text == value.as_ref(),
+            CellValue::Status { text, .. } => text == *value,
             _ => false,
         },
         FilterChip::Label(query) => query.passes(row.labels()),

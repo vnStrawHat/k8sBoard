@@ -8,7 +8,7 @@
 ┌ header ─────────────────────────────────────────────────────────────────────┐
 │ Pods   38 of 1,284 match                          [Warnings only] [Pause …] │
 ├ filter bar ─────────────────────────────────────────────────────────────────┤
-│ [Status: not Running ×] [label:app=api ×] [+ Filter ▾]   [⌕ Filter  /] [Columns ▾] │
+│ [Status: unhealthy ×] [label:app=api ×] [+ Filter ▾]   [⌕ Filter  /] [Columns ▾] │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -26,15 +26,16 @@
 ## Chips
 
 - Each active chip is `Button::new(("filter-chip", ix)).small().outline().label(text).child(Icon::new(IconName::X))` (the × follows the label) with tooltip "Remove filter"; a click removes it (`update_view`). No hardcoded colors.
-- Texts: `Status: not Running` (Pods) or `Status: unhealthy` (others); `{title}: {value}` for `Equals` (`Node: wk-03`, `Reason: BackOff`); `label:…` for a label chip.
+- Texts: `Status: unhealthy` everywhere (it matches Warn, Bad, and Info rows, so finished pods are hidden: UX walk H15); `{title}: {value}` for `Equals` (`Node: wk-03`, `Reason: BackOff`); `label:…` for a label chip.
 
 ## + Filter (`DropdownMenu` on a ghost small button "+ Filter")
 
 | Screen | Items |
 |---|---|
-| Pods | `Status: not Running` (checked when on), `Label…` |
+| Pods | `Status: unhealthy`, `Status: Completed` (checked when on), `Label…` |
 | Nodes | `Label…` (the summary chips cover status and version) |
-| Kinds except Events | `Status: unhealthy`, `Label…` |
+| Jobs | `Status: unhealthy`, `Status: Complete`, `Label…` |
+| Kinds except Events | `Status: unhealthy`, `Label…`; ReplicaSets add a checkable `Hide inactive` |
 | Events | no + Filter (Warnings only and Filter similar cover it) |
 
 `Label…` focuses the quick filter and sets its value to `label:` (the menu handler has the window).

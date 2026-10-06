@@ -17,10 +17,23 @@ use gpui_kit::{
 use crate::app_shell::{AppShell, Screen};
 use crate::namespace_picker::{PickerAnchor, namespace_picker};
 use crate::node_summary::{NodeCounts, NodeGroup};
+use crate::pod_table::STATUS as POD_STATUS_COLUMN;
 use crate::resource_kind::ResourceKind;
 use crate::status_tone::{StatusTone, tone_color};
 use crate::table_filter::{FilterChip, FilterPreset};
 use crate::table_view::{FilteredTable, TableView};
+
+/// The Status column of the Jobs table: the Name column is 0.
+const JOBS_STATUS_COLUMN: usize = 1;
+
+/// The Status column and text that mean finished OK: pods read `Completed`, jobs `Complete`.
+fn completed_status(screen: Screen) -> Option<(usize, &'static str)> {
+    match screen {
+        Screen::Pods => Some((POD_STATUS_COLUMN, "Completed")),
+        Screen::Kind(ResourceKind::Jobs) => Some((JOBS_STATUS_COLUMN, "Complete")),
+        _ => None,
+    }
+}
 
 const QUICK_FILTER_WIDTH: gpui_kit::Pixels = px(220.);
 
@@ -73,10 +86,10 @@ impl ToolkitState {
     }
 }
 
-/// `Status: not Running` on Pods, `Status: unhealthy` elsewhere, or the label query.
-fn chip_text(chip: &FilterChip, screen: Screen) -> String {
+/// `Status: unhealthy` (rows toned Warn, Bad, or Info; finished pods and jobs are not matched), an
+/// `Equals` chip such as `Status: Completed`, or the label query.
+fn chip_text(chip: &FilterChip) -> String {
     match chip {
-        FilterChip::Unhealthy if screen == Screen::Pods => "Status: not Running".to_owned(),
         FilterChip::Unhealthy => "Status: unhealthy".to_owned(),
         FilterChip::Equals { title, value, .. } => format!("{title}: {value}"),
         FilterChip::Label(query) => query.text(),
@@ -94,7 +107,7 @@ pub(crate) fn filter_bar(
         Button::new(("filter-chip", index))
             .small()
             .outline()
-            .label(chip_text(chip, state.screen))
+            .label(chip_text(chip))
             .child(Icon::new(IconName::X).size_3())
             .tooltip("Remove filter")
             .on_click(cx.listener(move |shell, _, _, cx| shell.remove_chip(index, cx)))
@@ -282,6 +295,12 @@ fn add_filter_button(state: &ToolkitState, cx: &Context<AppShell>) -> Option<Any
     let shell = cx.weak_entity();
     let screen = state.screen;
     let has_unhealthy = state.chips.contains(&FilterChip::Unhealthy);
+    let has_completed = completed_status(screen).is_some_and(|(column, value)| {
+        state.chips.iter().any(|chip| {
+            matches!(chip, FilterChip::Equals { column: other, value: shown, .. }
+                if *other == column && shown.as_ref() == value)
+        })
+    });
     let hides_inactive = state.preset == Some(FilterPreset::HideInactive);
     Some(
         Button::new("add-filter")
@@ -296,12 +315,32 @@ fn add_filter_button(state: &ToolkitState, cx: &Context<AppShell>) -> Option<Any
                 } else {
                     let shell = shell.clone();
                     menu.item(
-                        PopupMenuItem::new(chip_text(&FilterChip::Unhealthy, screen))
+                        PopupMenuItem::new(chip_text(&FilterChip::Unhealthy))
                             .checked(has_unhealthy)
                             .on_click(move |_, _, cx| {
                                 let _ = shell.update(cx, |shell, cx| shell.toggle_unhealthy(cx));
                             }),
                     )
+                };
+                let menu = match completed_status(screen) {
+                    Some((column, value)) => {
+                        let shell = shell.clone();
+                        let chip = FilterChip::Equals {
+                            column,
+                            title: "Status",
+                            value: value.into(),
+                        };
+                        menu.item(
+                            PopupMenuItem::new(chip_text(&chip))
+                                .checked(has_completed)
+                                .on_click(move |_, _, cx| {
+                                    let _ = shell.update(cx, |shell, cx| {
+                                        shell.toggle_equals(column, "Status", value, cx);
+                                    });
+                                }),
+                        )
+                    }
+                    None => menu,
                 };
                 // The chip removes the filter; this is the way back once it is gone.
                 let menu = if screen == Screen::Kind(ResourceKind::ReplicaSets) {
@@ -399,19 +438,36 @@ mod tests {
     use super::*;
 
     #[test]
-    fn chip_text_reads_by_screen() {
-        assert_eq!(
-            chip_text(&FilterChip::Unhealthy, Screen::Pods),
-            "Status: not Running"
-        );
-        assert_eq!(
-            chip_text(&FilterChip::Unhealthy, Screen::Kind(ResourceKind::Jobs)),
-            "Status: unhealthy"
-        );
+    fn chip_text_names_what_the_chip_matches() {
+        // The same text on every screen: it hides finished pods too, so it must not say Running.
+        assert_eq!(chip_text(&FilterChip::Unhealthy), "Status: unhealthy");
+        let completed = FilterChip::Equals {
+            column: POD_STATUS_COLUMN,
+            title: "Status",
+            value: "Completed".into(),
+        };
+        assert_eq!(chip_text(&completed), "Status: Completed");
         let label = FilterChip::Label(LabelQuery {
             key: "app".to_owned(),
             test: LabelTest::Equals("api".to_owned()),
         });
-        assert_eq!(chip_text(&label, Screen::Pods), "label:app=api");
+        assert_eq!(chip_text(&label), "label:app=api");
+    }
+
+    #[test]
+    fn completed_chip_is_offered_for_pods_and_jobs_only() {
+        assert_eq!(
+            completed_status(Screen::Pods),
+            Some((POD_STATUS_COLUMN, "Completed"))
+        );
+        assert_eq!(
+            completed_status(Screen::Kind(ResourceKind::Jobs)),
+            Some((JOBS_STATUS_COLUMN, "Complete"))
+        );
+        assert_eq!(completed_status(Screen::Nodes), None);
+        assert_eq!(
+            completed_status(Screen::Kind(ResourceKind::Deployments)),
+            None
+        );
     }
 }

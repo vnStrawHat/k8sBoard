@@ -30,7 +30,7 @@ use crate::table_view::{CellValue, FilteredTable, RowCheck, TableRow, TableView,
 use crate::usage_format::Measure;
 
 const NAME: usize = 0;
-const STATUS: usize = 1;
+pub(crate) const STATUS: usize = 1;
 const READY: usize = 2;
 const RESTARTS: usize = 3;
 const CPU: usize = 4;

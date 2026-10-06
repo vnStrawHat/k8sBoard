@@ -239,6 +239,15 @@ fn equals_compares_a_column_value() {
     // A qualified column compares its text, not the prefix.
     assert!(passes(&row, &equals(2, "owner-name")));
     assert!(!passes(&row, &equals(2, "owner-ns")));
+    // A status column compares its text, whatever the tone.
+    assert!(passes(&row, &equals(1, "Running")));
+    assert!(!passes(&row, &equals(1, "Completed")));
+    let completed = Row {
+        status: "Completed",
+        tone: StatusTone::Done,
+        ..Row::default()
+    };
+    assert!(passes(&completed, &equals(1, "Completed")));
     // Numbers and absent columns never equal.
     assert!(!passes(&row, &equals(3, "42")));
     assert!(!passes(&row, &equals(9, "")));

@@ -4480,6 +4480,29 @@ impl AppShell {
         });
     }
 
+    /// Adds the `Equals` chip of `column`, or removes it when it is already that one.
+    pub(crate) fn toggle_equals(
+        &mut self,
+        column: usize,
+        title: &'static str,
+        value: &'static str,
+        cx: &mut Context<Self>,
+    ) {
+        self.update_view(cx, |view| {
+            let is_on = view.filter.chips.iter().any(|chip| {
+                matches!(chip, FilterChip::Equals { column: other, value: shown, .. }
+                    if *other == column && shown.as_ref() == value)
+            });
+            if is_on {
+                view.filter.chips.retain(
+                    |chip| !matches!(chip, FilterChip::Equals { column: other, .. } if *other == column),
+                );
+            } else {
+                view.filter.set_equals(column, title, value);
+            }
+        });
+    }
+
     pub(crate) fn toggle_column(&mut self, column: usize, cx: &mut Context<Self>) {
         self.update_view(cx, |view| {
             if !view.hidden.remove(&column) {
