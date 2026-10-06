@@ -470,7 +470,7 @@ static CONFIG_MAPS: KindSpec = KindSpec {
     },
     columns: &[
         column("Data", 70., Align::Right),
-        column("Used by", 220., Align::Left).grows(2),
+        column("Used by", 170., Align::Left).grows(2).up_to(300.),
         AGE_COLUMN,
     ],
     read_only_actions: &[KindAction::keyed(
@@ -801,9 +801,9 @@ static SECRETS: KindSpec = KindSpec {
         access_check: AccessCheck::ListSecrets,
     },
     columns: &[
-        column("Type", 220., Align::Left),
+        column("Type", 190., Align::Left),
         column("Keys", 70., Align::Right),
-        column("Used by", 220., Align::Left).grows(2),
+        column("Used by", 170., Align::Left).grows(2).up_to(300.),
         AGE_COLUMN,
     ],
     read_only_actions: &[KindAction::keyed(

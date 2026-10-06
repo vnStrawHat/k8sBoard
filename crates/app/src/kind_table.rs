@@ -16,7 +16,7 @@ use gpui_kit::{
 
 use crate::age::format_age;
 use crate::app_shell::{AppShell, Screen};
-use crate::cell_truncation::{mono_capacity, qualified_text};
+use crate::cell_truncation::{Sibling, mono_capacity, qualified_text};
 use crate::certificate_expiry::expiry_label;
 use crate::cluster_registry::ClusterRef;
 use crate::custom_rows::{date_text, date_tone};
@@ -183,6 +183,18 @@ impl KindTableDelegate {
             return Vec::new();
         };
         table_rows(session_kind_rows(session, kind, cx), kind.name_column())
+    }
+
+    /// The rows of the shown kind that the table shows, in row order.
+    fn shown_rows<'a>(&'a self, cx: &'a App) -> impl Iterator<Item = &'a KindRow> {
+        let rows = match (&self.session, self.kind) {
+            (Some(session), Some(kind)) => session_kind_rows(session, kind, cx),
+            _ => &[],
+        };
+        self.view()
+            .map_or(&[][..], TableView::rows)
+            .iter()
+            .filter_map(|&item| rows.get(item))
     }
 
     /// The row shown at table row `row_ix`, and the session it belongs to.
@@ -421,7 +433,10 @@ impl KindTableDelegate {
         };
         let mono = cx.theme().mono_font_family.clone();
         let Some(cell_ix) = cell_index(kind.name_column(), logical) else {
-            return name_cell(row, row_ix, capacity, cx);
+            let siblings = self
+                .shown_rows(cx)
+                .map(|row| (row.namespace.as_deref(), row.name.as_str()));
+            return name_cell(row, row_ix, capacity, siblings, cx);
         };
         match row.cells.get(cell_ix) {
             Some(cell) => {
@@ -436,7 +451,15 @@ impl KindTableDelegate {
                 {
                     return link;
                 }
-                cell_element(cell, slot, self.align(logical), mono, cx)
+                let siblings = self
+                    .shown_rows(cx)
+                    .filter_map(|row| match row.cells.get(cell_ix) {
+                        Some(KindCell::Qualified { prefix, text }) => {
+                            Some((prefix.as_deref(), text.as_str()))
+                        }
+                        _ => None,
+                    });
+                cell_element(cell, slot, self.align(logical), mono, siblings, cx)
             }
             None => div().into_any_element(),
         }
@@ -650,12 +673,19 @@ fn empty_text(kind: ResourceKind, scope_label: &str) -> String {
 }
 
 /// `{namespace}/` is muted so the name stands out.
-fn name_cell(row: &KindRow, row_ix: usize, capacity: usize, cx: &App) -> AnyElement {
+fn name_cell<'a>(
+    row: &KindRow,
+    row_ix: usize,
+    capacity: usize,
+    siblings: impl IntoIterator<Item = Sibling<'a>>,
+    cx: &App,
+) -> AnyElement {
     qualified_text(
         ("kind-name", row_ix),
         row.namespace.as_deref(),
         &row.name,
         capacity,
+        siblings,
         cx,
     )
 }
@@ -669,11 +699,12 @@ struct CellSlot {
     capacity: usize,
 }
 
-fn cell_element(
+fn cell_element<'a>(
     cell: &KindCell,
     slot: CellSlot,
     align: Align,
     mono: SharedString,
+    siblings: impl IntoIterator<Item = Sibling<'a>>,
     cx: &App,
 ) -> AnyElement {
     let CellSlot {
@@ -714,6 +745,7 @@ fn cell_element(
                 prefix.as_deref(),
                 text,
                 capacity,
+                siblings,
                 cx,
             );
         }
@@ -899,6 +931,17 @@ mod tests {
         assert!(deployments.fit_width(px(1400.)));
         let name_width = deployments.layout.columns.columns.get(1).map(|c| c.width);
         assert!(name_width > Some(px(NAME_COLUMN.width)));
+    }
+
+    #[test]
+    fn secrets_name_holds_the_victoria_names_at_1320_px() {
+        let mut secrets = delegate(Some(ResourceKind::Secrets));
+        // A 1320 px window less the 220 px sidebar, drawer closed.
+        secrets.fit_width(px(1100.));
+        let name = secrets.layout.columns.columns.get(1).map(|c| c.width);
+        // 37 mono characters of about 9.6 px each, plus the cell padding: the least at which
+        // `tls-assets-vmagent-` and `tls-assets-vmalert-` are told apart.
+        assert!(name >= Some(px(380.)), "{name:?}");
     }
 
     #[test]

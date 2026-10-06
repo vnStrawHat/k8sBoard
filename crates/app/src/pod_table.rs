@@ -38,15 +38,17 @@ const MEMORY: usize = 5;
 pub(crate) const NODE: usize = 6;
 const AGE: usize = 7;
 
-/// Name takes most of the spare width, up to a cap: pod names are the longest values.
+/// Name takes most of the spare width, up to a cap: pod names are the longest values. Status is
+/// sized to its longest label (`CrashLoopBackOff`) and Node to a short host name, so the width
+/// they would keep unused goes to Name.
 const POD_COLUMNS: [KindColumn; 8] = [
-    column("Name", 160., Align::Left).grows(3).up_to(640.),
-    column("Status", 170., Align::Left),
+    column("Name", 200., Align::Left).grows(4).up_to(640.),
+    column("Status", 160., Align::Left),
     column("Ready", 70., Align::Left),
     column("Restarts", 80., Align::Right),
     column("CPU", 70., Align::Right),
     column("Memory", 80., Align::Right),
-    column("Node", 180., Align::Left).grows(1).up_to(260.),
+    column("Node", 110., Align::Left).grows(1).up_to(260.),
     column("Age", 70., Align::Right),
 ];
 
@@ -152,6 +154,16 @@ impl PodTableDelegate {
         let live = session.session.read(cx).live()?;
         let item = self.view.item_index(row_ix)?;
         Some((session, live.pods.items().get(item)?))
+    }
+
+    /// The pods the table shows, in row order.
+    fn shown_pods<'a>(&'a self, cx: &'a App) -> impl Iterator<Item = &'a PodSummary> {
+        let pods = self
+            .session
+            .as_ref()
+            .and_then(|session| session.session.read(cx).live())
+            .map_or(&[][..], |live| live.pods.items());
+        self.view.rows().iter().filter_map(|&item| pods.get(item))
     }
 
     fn scope_label(&self, cx: &App) -> String {
@@ -293,6 +305,8 @@ impl PodTableDelegate {
                 Some(&pod.namespace),
                 &pod.name,
                 capacity,
+                self.shown_pods(cx)
+                    .map(|pod| (Some(pod.namespace.as_str()), pod.name.as_str())),
                 cx,
             ),
             STATUS => toned_text(pod_status_label(pod), cx).into_any_element(),
