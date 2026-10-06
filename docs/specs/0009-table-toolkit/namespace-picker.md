@@ -74,3 +74,9 @@ A click on `×` sets the scope to the remaining namespaces through `of_namespace
 - `set_scope` already drops and restarts pods and the explorer; nothing else changes. The status bar keeps counting resource types, not HTTP watches.
 - `kind_availability` uses the AND-combined report; its `Several` reason text is in [cluster-scope.md](cluster-scope.md).
 - `Copy kubectl command` (0008) and logs use the row's own namespace, so they are unaffected.
+
+## Filter and row note (UX batch 5c)
+
+- A `Filter namespaces…` input sits at the top of the popover and gets the focus on open (`Popover::track_focus`); it is cleared on every open. It keeps the names that contain the text, ignoring case; the list says `No namespace matches` when none does.
+- A muted line under the list says what the two targets of a row do: `Click a name to switch · tick boxes to combine`. The footer keeps `N selected (max 5)`.
+- `--screen namespace-picker` opens the title-bar picker once the session is live (screenshot builds).

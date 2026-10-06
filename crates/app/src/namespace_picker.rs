@@ -6,13 +6,14 @@ use std::collections::BTreeSet;
 use cluster::NamespaceScope;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::checkbox::Checkbox;
+use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::component::popover::Popover;
 use gpui_kit::component::{ActiveTheme as _, Disableable as _, Selectable as _, Sizable as _};
 use gpui_kit::component::{h_flex, v_flex};
 use gpui_kit::{
-    AnyElement, Context, InteractiveElement as _, IntoElement, ParentElement as _, Pixels,
-    SharedString, StatefulInteractiveElement as _, Styled as _, WeakEntity, div,
-    prelude::FluentBuilder as _, px,
+    AnyElement, Context, Entity, Focusable as _, InteractiveElement as _, IntoElement,
+    ParentElement as _, Pixels, SharedString, StatefulInteractiveElement as _, Styled as _,
+    WeakEntity, div, prelude::FluentBuilder as _, px,
 };
 
 use crate::app_shell::AppShell;
@@ -23,6 +24,8 @@ pub(crate) const MAX_NAMESPACES: usize = 5;
 
 const MAX_LIST_HEIGHT: Pixels = px(360.);
 const PICKER_WIDTH: Pixels = px(280.);
+/// Says what the two click targets of a row do, since nothing else on the row does.
+const ROW_NOTE: &str = "Click a name to switch · tick boxes to combine";
 
 /// Which trigger opened the picker.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -103,6 +106,8 @@ struct PickerContent {
     scope: NamespaceScope,
     namespaces: NamespaceRows,
     draft: NamespacePickerState,
+    filter: Entity<InputState>,
+    filter_text: String,
     shell: WeakEntity<AppShell>,
 }
 
@@ -129,10 +134,10 @@ pub(crate) fn namespace_picker(
     let weak = cx.weak_entity();
     let on_open_change = {
         let weak = weak.clone();
-        move |open: &bool, _: &mut gpui_kit::Window, cx: &mut gpui_kit::App| {
+        move |open: &bool, window: &mut gpui_kit::Window, cx: &mut gpui_kit::App| {
             let _ = weak.update(cx, |shell, cx| {
                 if *open {
-                    shell.open_namespace_picker(anchor, cx);
+                    shell.open_namespace_picker(anchor, window, cx);
                 } else {
                     shell.close_namespace_picker(anchor, cx);
                 }
@@ -148,6 +153,8 @@ pub(crate) fn namespace_picker(
     })
     .open(is_open)
     .on_open_change(on_open_change)
+    // The kit focuses the filter while the popover opens.
+    .track_focus(&shell.namespace_filter().read(cx).focus_handle(cx))
     .trigger(trigger)
     .when_some(content, |popover, content| {
         popover.content(move |_, _, cx| render_content(&content, cx))
@@ -182,6 +189,8 @@ fn content_of(
             anchor: state.anchor,
             draft: state.draft.clone(),
         },
+        filter: shell.namespace_filter().clone(),
+        filter_text: shell.namespace_filter().read(cx).value().to_string(),
         shell: weak,
     })
 }
@@ -205,9 +214,16 @@ fn render_content(content: &PickerContent, cx: &gpui_kit::App) -> AnyElement {
     v_flex()
         .w(PICKER_WIDTH)
         .gap_2()
+        .child(Input::new(&content.filter).small().cleanable(true))
         .child(all)
         .child(separator(cx))
         .child(namespace_list(content))
+        .child(
+            div()
+                .text_xs()
+                .text_color(cx.theme().muted_foreground)
+                .child(ROW_NOTE),
+        )
         .child(separator(cx))
         .child(footer(content))
         .into_any_element()
@@ -232,15 +248,31 @@ fn namespace_list(content: &PickerContent) -> AnyElement {
             .child(div().px_2().text_xs().child(message.clone()))
             .child(namespace_row(0, default, content))
             .into_any_element(),
-        NamespaceRows::Ready(names) => list
-            .children(
-                names
-                    .iter()
+        NamespaceRows::Ready(names) => {
+            let shown = matching_namespaces(names, &content.filter_text);
+            if shown.is_empty() {
+                return list
+                    .child(div().px_2().child("No namespace matches"))
+                    .into_any_element();
+            }
+            list.children(
+                shown
+                    .into_iter()
                     .enumerate()
                     .map(|(index, name)| namespace_row(index, name, content)),
             )
-            .into_any_element(),
+            .into_any_element()
+        }
     }
+}
+
+/// The names that contain `filter`, ignoring case; all of them for a blank filter.
+fn matching_namespaces<'a>(names: &'a [String], filter: &str) -> Vec<&'a String> {
+    let needle = filter.trim().to_lowercase();
+    names
+        .iter()
+        .filter(|name| name.to_lowercase().contains(&needle))
+        .collect()
 }
 
 /// A checkbox that toggles the draft, and the name as a button that picks only this namespace.
@@ -326,6 +358,14 @@ mod tests {
 
     fn several(names: &[&str]) -> NamespaceScope {
         NamespaceScope::of_namespaces(names.iter().map(|name| (*name).to_owned()))
+    }
+
+    #[test]
+    fn the_filter_keeps_names_containing_it_ignoring_case() {
+        let names: Vec<String> = ["kube-system", "Payments", "web"].map(str::to_owned).into();
+        assert_eq!(matching_namespaces(&names, "  PAY "), [&names[1]]);
+        assert_eq!(matching_namespaces(&names, "").len(), 3);
+        assert!(matching_namespaces(&names, "zzz").is_empty());
     }
 
     #[test]

@@ -27,7 +27,7 @@ Options:
   --color-theme default|zed-one
                          colour family (default: the saved one, else zed-one)
   --config-dir <path>    settings folder (default: K8SBOARD_CONFIG_DIR, else the OS config folder)
-  --screen overview|switcher|cordon-confirm|unlock-confirm|scale-popover|scale-confirm|restart-bulk-confirm|delete-confirm|delete-bulk-confirm|restart-pod-confirm|evict-confirm|edit-yaml-diff|edit-yaml-history|values-edit|new-config-map|revision-diff|hpa-range-popover|expand-confirm|default-class-confirm|renew-confirm|pods|nodes|issues|issues-drawer|topology|topology-problems|topology-rbac|topology-selected|topology-traffic|topology-traffic-fixture|topology-traffic-fixture-selected|pod-drawer|pod-containers|pod-events|pod-monitor|pod-monitor-source-fixture|node-drawer|node-events|node-monitor|pod-yaml|node-yaml|logs-dock|logs-zoomed|logs-popout|logs-workload|shell-fixture|shell-dock-fixture|shell-paste-fixture|shell-picker-fixture|shell-confirm-fixture|attach-confirm|node-shell-confirm|node-shell-options|debug-container-options|node-shell-confirm-staging|leftover-sweep-fixture|node-shell-tab-fixture|debug-shell-tab-fixture|shell-find-fixture|port-forwards|port-forwards-list|port-forward-new-fixture|port-forward-confirm-fixture|port-forward-remove-fixture|pods-selected|nodes-selected|shortcuts|pods-cursor|
+  --screen overview|switcher|namespace-picker|cordon-confirm|unlock-confirm|scale-popover|scale-confirm|restart-bulk-confirm|delete-confirm|delete-bulk-confirm|restart-pod-confirm|evict-confirm|edit-yaml-diff|edit-yaml-history|values-edit|new-config-map|revision-diff|hpa-range-popover|expand-confirm|default-class-confirm|renew-confirm|pods|nodes|issues|issues-drawer|topology|topology-problems|topology-rbac|topology-selected|topology-traffic|topology-traffic-fixture|topology-traffic-fixture-selected|pod-drawer|pod-containers|pod-events|pod-monitor|pod-monitor-source-fixture|node-drawer|node-events|node-monitor|pod-yaml|node-yaml|logs-dock|logs-zoomed|logs-popout|logs-workload|shell-fixture|shell-dock-fixture|shell-paste-fixture|shell-picker-fixture|shell-confirm-fixture|attach-confirm|node-shell-confirm|node-shell-options|debug-container-options|node-shell-confirm-staging|leftover-sweep-fixture|node-shell-tab-fixture|debug-shell-tab-fixture|shell-find-fixture|port-forwards|port-forwards-list|port-forward-new-fixture|port-forward-confirm-fixture|port-forward-remove-fixture|pods-selected|nodes-selected|shortcuts|pods-cursor|
            node-taints-editor|node-taints-editor-invalid|node-labels-editor|node-labels-bulk-editor|drain-dialog|drain-dialog-skip-pdbs|drain-progress|drain-progress-stuck|
            namespaces|events|deployments|statefulsets|daemonsets|replicasets|jobs|cronjobs|
            services|ingresses|configmaps|<kind>-drawer|<kind>-events|<kind>-monitor|<kind>-yaml|releases-values|releases-manifest|
@@ -170,6 +170,9 @@ pub(crate) enum LaunchScreen {
     /// `--screen switcher`: Overview with the cluster switcher popover open once the session is live
     /// and the probes of the other clusters have answered.
     Switcher,
+    /// `--screen namespace-picker`: Pods with the title-bar namespace picker open once the
+    /// session is live.
+    NamespacePicker,
     /// `--screen cordon-confirm`: Nodes with the Cordon dialog of the first node open, in a fixed
     /// state (the dry-run passed in 412 ms). Screenshot builds only; it never reaches a cluster.
     CordonConfirm,
@@ -265,6 +268,7 @@ impl LaunchScreen {
     pub(crate) fn screen(self) -> Screen {
         match self {
             Self::Overview | Self::Switcher => Screen::Overview,
+            Self::NamespacePicker => Screen::Pods,
             Self::CordonConfirm
             | Self::UnlockConfirm
             | Self::NodeShellConfirm
@@ -612,6 +616,7 @@ impl LaunchScreen {
         match text {
             "overview" => Some(Self::Overview),
             "switcher" => Some(Self::Switcher),
+            "namespace-picker" => Some(Self::NamespacePicker),
             "cordon-confirm" => Some(Self::CordonConfirm),
             "unlock-confirm" => Some(Self::UnlockConfirm),
             "scale-popover" => Some(Self::ScalePopover),

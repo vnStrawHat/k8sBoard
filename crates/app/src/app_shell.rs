@@ -490,6 +490,8 @@ pub(crate) struct AppShell {
     _switcher_filter_events: Subscription,
     /// `--screen switcher`: the popover opens once the session is live.
     pending_switcher_launch: bool,
+    /// `--screen namespace-picker`: the picker opens once the session is live.
+    pending_picker_launch: bool,
     /// `--palette`: the query the palette opens with once the session is live.
     pending_palette_launch: Option<String>,
     /// Test hook: whether the old session was gone each time a deferred connect started.
@@ -562,6 +564,8 @@ pub(crate) struct AppShell {
     overview: OverviewState,
     /// The picker popover: which trigger is open, and the draft.
     namespace_picker: NamespacePickerState,
+    /// The picker's type-to-filter input, shared by its two triggers.
+    namespace_filter: Entity<InputState>,
     /// Whether Reveal and Copy work: decided once from the launch options, and the only thing the
     /// values view and the menus read (`value_access`).
     secret_value_access: ValueAccess,
@@ -652,6 +656,13 @@ impl AppShell {
             cx.new(|cx| InputState::new(window, cx).placeholder("Filter clusters…"));
         let switcher_filter_events =
             cx.subscribe_in(&switcher_filter, window, Self::on_switcher_filter_event);
+        let namespace_filter =
+            cx.new(|cx| InputState::new(window, cx).placeholder("Filter namespaces…"));
+        // Typing redraws the picker; the subscription ends with the two entities.
+        cx.subscribe_in(&namespace_filter, window, |_, _, _: &InputEvent, _, cx| {
+            cx.notify();
+        })
+        .detach();
         let focus_handle = cx.focus_handle();
         window.focus(&focus_handle, cx);
         // A focused input or editor that leaves the tree (a drawer closing, a screen change)
@@ -754,6 +765,7 @@ impl AppShell {
             switcher: ClusterSwitcherState::new(switcher_filter),
             _switcher_filter_events: switcher_filter_events,
             pending_switcher_launch: options.screen == LaunchScreen::Switcher,
+            pending_picker_launch: options.screen == LaunchScreen::NamespacePicker,
             pending_palette_launch: options.palette.clone(),
             #[cfg(test)]
             old_session: None,
@@ -809,6 +821,7 @@ impl AppShell {
             _quick_filter_events: quick_filter_events,
             _focus_lost: focus_lost,
             namespace_picker: NamespacePickerState::default(),
+            namespace_filter,
             secret_value_access,
             overview: OverviewState::default(),
             clipboard_clear: None,
@@ -1579,12 +1592,23 @@ impl AppShell {
         &self.namespace_picker
     }
 
-    /// Opens the picker from `anchor`, with the current scope ticked.
-    pub(crate) fn open_namespace_picker(&mut self, anchor: PickerAnchor, cx: &mut Context<Self>) {
+    pub(crate) fn namespace_filter(&self) -> &Entity<InputState> {
+        &self.namespace_filter
+    }
+
+    /// Opens the picker from `anchor`, with the current scope ticked and an empty filter.
+    pub(crate) fn open_namespace_picker(
+        &mut self,
+        anchor: PickerAnchor,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let Some(scope) = self.live(cx).map(|live| live.scope.clone()) else {
             return;
         };
         self.namespace_picker.open(anchor, &scope);
+        self.namespace_filter
+            .update(cx, |input, cx| input.set_value("", window, cx));
         cx.notify();
     }
 
@@ -1994,6 +2018,15 @@ impl AppShell {
         }
         self.pending_switcher_launch = false;
         self.open_cluster_switcher(window, cx);
+    }
+
+    /// `--screen namespace-picker`: opens the picker once the session is live.
+    fn open_pending_namespace_picker(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.pending_picker_launch || self.live(cx).is_none() {
+            return;
+        }
+        self.pending_picker_launch = false;
+        self.open_namespace_picker(PickerAnchor::TitleBar, window, cx);
     }
 
     /// Opens the `--screen` dialog once the session is live. It runs from `render` because a
@@ -4122,6 +4155,7 @@ impl AppShell {
             ),
             is_log_pending,
             is_switcher_pending: self.pending_switcher_launch
+                || self.pending_picker_launch
                 || self.switcher.health().is_probing(),
             is_change_feed_pending: self
                 .session()
@@ -4711,6 +4745,7 @@ impl Render for AppShell {
         self.sync_kubelet_demand(cx);
         self.sync_quick_filter(window, cx);
         self.open_pending_switcher(window, cx);
+        self.open_pending_namespace_picker(window, cx);
         self.open_pending_pick(window, cx);
         self.open_pending_palette(window, cx);
         let theme = cx.theme();
@@ -4729,8 +4764,8 @@ impl Render for AppShell {
             .on_action(cx.listener(|_, _: &ShowShortcuts, window, cx| {
                 open_shortcut_sheet(window, cx);
             }))
-            .on_action(cx.listener(|shell, _: &OpenNamespacePicker, _, cx| {
-                shell.open_namespace_picker(PickerAnchor::TitleBar, cx);
+            .on_action(cx.listener(|shell, _: &OpenNamespacePicker, window, cx| {
+                shell.open_namespace_picker(PickerAnchor::TitleBar, window, cx);
             }))
             .on_action(cx.listener(|shell, _: &OpenPalette, window, cx| {
                 shell.open_palette("", window, cx);
