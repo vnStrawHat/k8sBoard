@@ -26,10 +26,11 @@ fn is_scaling_disabled(hpa: &HorizontalPodAutoscalerSummary) -> bool; // Scaling
 
 | Column | Width | Cell |
 |---|---|---|
-| Target | 220 | `Text("{kind lowercased}/{name}")` (0005 owner format) |
+| Target | 200, grows 1, up to 320 | `Text("{kind lowercased}/{name}")` (0005 owner format); capped so Name keeps the spare width |
 | Min / Max | 90 | `Text("{min} / {max}")` |
-| Replicas | 80 r | `current`; `Toned(Bad)` when `is_at_max`, else `Text` |
-| Metrics | 200 | first metric's text, plus ` +{n}` for more; Bad when at max, Warn when above target or unknown, else `Text`; no metrics → `Absent` |
+| Replicas | 80 r | `current`; `Toned(Bad)` when `is_at_max`, `Toned(Warn)` when `current >= max` whatever the conditions say, else `Text` |
+| Status | 135 | `Toned(hpa_status)`: `Scaling inactive`, `At max replicas`, `3 replicas`, and the others of the table below |
+| Metrics | 170, grows 1, up to 320 | first metric's text, plus ` +{n}` for more; Bad when at max, Warn when above target or unknown, else `Text`; no metrics → `Absent` |
 | Age | 70 r | |
 
 ### Status (first match)

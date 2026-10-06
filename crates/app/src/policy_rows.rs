@@ -197,6 +197,19 @@ pub(crate) fn is_above_target(metric: &HpaMetric) -> Option<bool> {
     }
 }
 
+/// The tone of the Replicas cell: Bad when the controller says the metrics want more than
+/// `maxReplicas`, Warn when the HPA sits at its maximum whatever its conditions say (no room
+/// is left to scale up).
+fn replicas_tone(hpa: &HorizontalPodAutoscalerSummary) -> Option<StatusTone> {
+    if is_at_max(hpa) {
+        Some(StatusTone::Bad)
+    } else if hpa.current_replicas >= hpa.max_replicas {
+        Some(StatusTone::Warn)
+    } else {
+        None
+    }
+}
+
 /// The controller's own verdict that the metrics want more than `maxReplicas`.
 pub(crate) fn is_at_max(hpa: &HorizontalPodAutoscalerSummary) -> bool {
     find_condition(&hpa.conditions, SCALING_LIMITED).is_some_and(|condition| {
@@ -222,13 +235,12 @@ fn target_text(hpa: &HorizontalPodAutoscalerSummary) -> String {
 
 pub(crate) fn horizontal_pod_autoscaler_row(hpa: &HorizontalPodAutoscalerSummary) -> KindRow {
     let at_max = is_at_max(hpa);
-    let replicas = if at_max {
-        KindCell::Toned(StatusLabel {
+    let replicas = match replicas_tone(hpa) {
+        Some(tone) => KindCell::Toned(StatusLabel {
             text: hpa.current_replicas.to_string().into(),
-            tone: StatusTone::Bad,
-        })
-    } else {
-        KindCell::count(hpa.current_replicas)
+            tone,
+        }),
+        None => KindCell::count(hpa.current_replicas),
     };
     let mut sections = vec![DetailSection {
         title: "Scaling",
@@ -262,6 +274,7 @@ pub(crate) fn horizontal_pod_autoscaler_row(hpa: &HorizontalPodAutoscalerSummary
             KindCell::Text(target_text(hpa).into()),
             KindCell::Text(format!("{} / {}", hpa.min_replicas, hpa.max_replicas).into()),
             replicas,
+            KindCell::Toned(hpa_status(hpa)),
             metrics_cell(hpa, at_max),
             KindCell::age(hpa.created_at),
         ],

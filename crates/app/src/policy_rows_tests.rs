@@ -227,7 +227,57 @@ fn hpa_row_cells_match_column_count() {
     assert_eq!(row.cells[1], KindCell::Text("2 / 10".into()));
     assert_eq!(row.cells[2], KindCell::Text("3".into()));
     let none = horizontal_pod_autoscaler_row(&hpa(3, 3, Vec::new()));
-    assert_eq!(none.cells[3], KindCell::Absent);
+    assert_eq!(
+        row.cells[3],
+        KindCell::Toned(StatusLabel {
+            text: "3 replicas".into(),
+            tone: StatusTone::Ok,
+        })
+    );
+    assert_eq!(none.cells[4], KindCell::Absent);
+}
+
+#[test]
+fn hpa_status_cell_names_the_condition_a_list_row_hides() {
+    let mut inactive = hpa(6, 6, vec![cpu(None, 70)]);
+    inactive.conditions = vec![cond("ScalingActive", false, "FailedGetResourceMetric")];
+    let row = horizontal_pod_autoscaler_row(&inactive);
+    assert_eq!(
+        row.cells[3],
+        KindCell::Toned(StatusLabel {
+            text: "Scaling inactive".into(),
+            tone: StatusTone::Bad,
+        })
+    );
+    let mut capped = hpa(10, 12, Vec::new());
+    capped.conditions = at_max_conditions();
+    assert_eq!(
+        horizontal_pod_autoscaler_row(&capped).cells[3],
+        KindCell::Toned(StatusLabel {
+            text: "At max replicas".into(),
+            tone: StatusTone::Bad,
+        })
+    );
+}
+
+#[test]
+fn hpa_replicas_cell_is_warn_at_max_whatever_the_conditions_say() {
+    let toned = |current, conditions| {
+        let mut item = hpa(current, current, Vec::new());
+        item.conditions = conditions;
+        horizontal_pod_autoscaler_row(&item).cells[2].clone()
+    };
+    let label = |text: &str, tone| {
+        KindCell::Toned(StatusLabel {
+            text: text.into(),
+            tone,
+        })
+    };
+    // The fixture HPA has a maximum of 10, and no condition: at the maximum is still a warning.
+    assert_eq!(toned(10, Vec::new()), label("10", StatusTone::Warn));
+    // The controller saying the metrics want more is the stronger tone.
+    assert_eq!(toned(10, at_max_conditions()), label("10", StatusTone::Bad));
+    assert_eq!(toned(9, Vec::new()), KindCell::Text("9".into()));
 }
 
 #[test]

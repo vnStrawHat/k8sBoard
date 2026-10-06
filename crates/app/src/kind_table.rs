@@ -902,21 +902,25 @@ mod tests {
     }
 
     #[test]
-    fn hpa_target_and_metrics_fit_their_text_at_1320_px() {
-        let mut hpas = delegate(Some(ResourceKind::HorizontalPodAutoscalers));
-        // A 1320 px window less the 220 px sidebar, drawer closed.
-        hpas.fit_width(px(1100.));
-        let width = |name: &str| {
+    fn hpa_name_keeps_the_widest_share_next_to_target_and_metrics() {
+        let width_at = |table_width: f32, name: &str| {
+            let mut hpas = delegate(Some(ResourceKind::HorizontalPodAutoscalers));
+            hpas.fit_width(px(table_width));
             hpas.layout
                 .columns
                 .columns
                 .iter()
                 .find(|column| column.name.as_ref() == name)
                 .map(|column| column.width)
+                .expect("a column of that name")
         };
-        // `deployment/opentelemetry-collector` and `s0-prometheus <unknown> / 27k` of the UAT rows.
-        assert!(width("Target") >= Some(px(280.)), "{:?}", width("Target"));
-        assert!(width("Metrics") >= Some(px(260.)), "{:?}", width("Metrics"));
+        // A 1320 px window less the 220 px sidebar, drawer closed: Status shows `Scaling inactive`
+        // whole, and Name (the longest text of the row on UAT) is wider than Target.
+        assert!(width_at(1100., "Status") >= px(130.));
+        assert!(width_at(1100., "Name") > width_at(1100., "Target"));
+        // Target stops growing, so a wide table gives the rest to Name.
+        assert_eq!(width_at(2000., "Target"), px(320.));
+        assert!(width_at(2000., "Name") > width_at(2000., "Target"));
     }
 
     #[test]

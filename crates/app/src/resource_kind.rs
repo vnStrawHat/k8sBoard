@@ -543,10 +543,12 @@ static HORIZONTAL_POD_AUTOSCALERS: KindSpec = KindSpec {
         access_check: AccessCheck::ListHorizontalPodAutoscalers,
     },
     columns: &[
-        column("Target", 250., Align::Left).grows(4),
+        // Capped, so the Name column (the widest weight) gets the spare width of a wide table.
+        column("Target", 200., Align::Left).grows(1).up_to(320.),
         column("Min / Max", 90., Align::Left),
         column("Replicas", 80., Align::Right),
-        column("Metrics", 240., Align::Left).grows(4),
+        column("Status", 135., Align::Left),
+        column("Metrics", 170., Align::Left).grows(1).up_to(320.),
         AGE_COLUMN,
     ],
     read_only_actions: &[KindAction::keyed(
