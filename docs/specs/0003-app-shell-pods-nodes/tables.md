@@ -49,8 +49,8 @@ pub(crate) fn tone_color(tone: StatusTone, cx: &App) -> Hsla; // the only theme 
 | Tone | Theme token | Pod status | Node / container |
 |---|---|---|---|
 | Ok | `success` | `Running` | `Ready`; container `Running` and ready |
-| Warn | `warning` | **Readiness failed**, `Pending`, `SchedulingGated`, `NotReady`, `Unknown`, `Other(_)` | `Ready · SchedulingDisabled`, `Unknown`; container `Running` not ready |
-| Bad | `danger` | `CrashLoopBackOff`, `ImagePullBackOff`, `ErrImagePull`, `CreateContainerConfigError`, `OOMKilled`, `Error`, `ContainerCannotRun`, `Failed`, `Evicted`, `Signal:n`, `ExitCode:n` | `NotReady` (+ ` · SchedulingDisabled`); container waiting with a Bad reason, or terminated with a non-zero exit |
+| Warn | `warning` | **Readiness failed**, `Pending`, `SchedulingGated`, `NotReady`, `Unknown`, `Other(_)` | `Cordoned`, `Unknown`; container `Running` not ready |
+| Bad | `danger` | `CrashLoopBackOff`, `ImagePullBackOff`, `ErrImagePull`, `CreateContainerConfigError`, `OOMKilled`, `Error`, `ContainerCannotRun`, `Failed`, `Evicted`, `Signal:n`, `ExitCode:n` | `NotReady` (+ ` · Cordoned`); container waiting with a Bad reason, or terminated with a non-zero exit |
 | Info | `info` | `ContainerCreating`, `PodInitializing`, `Init:n/m`, `Terminating` | container waiting with no or other reason |
 | Done | `muted_foreground` | `Completed`, `Succeeded` | container terminated with exit 0; not reported |
 
@@ -61,7 +61,7 @@ pub(crate) fn tone_color(tone: StatusTone, cx: &App) -> Hsla; // the only theme 
   - every `Main` and `Sidecar` container is `ContainerState::Running`.
 
   It shows immediately, including during a probe's initial delay. A grace period is a possible future refinement ([README](README.md)).
-- Node text: `Ready` / `NotReady` / `Unknown`, plus ` · SchedulingDisabled` when `scheduling == Disabled`.
+- Node text: `Ready` / `NotReady` / `Unknown`, when `scheduling == Disabled` a Ready node reads `Cordoned` (Warn) and another readiness gets ` · Cordoned` after it; the node drawer adds a Scheduling row (`Schedulable` / `Cordoned`).
 
 ## Age (`age.rs`, pure)
 

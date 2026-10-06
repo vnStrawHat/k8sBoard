@@ -33,7 +33,8 @@ use crate::resource_actions::node_menu;
 use crate::resource_kind::NODE_ICON;
 use crate::row_context::RowContext;
 use crate::status_tone::{
-    StatusLabel, condition_status_text, node_condition_tone, node_status_label, toned_text,
+    StatusLabel, condition_status_text, node_condition_tone, node_status_label, scheduling_label,
+    toned_text,
 };
 use crate::table_selection::ResourceKey;
 use crate::usage_bar::{UsageBar, usage_bar};
@@ -152,6 +153,11 @@ fn overview(
         .child(wide_detail_row(
             "Status",
             toned_text(node_status_label(node.status), cx),
+            cx,
+        ))
+        .child(wide_detail_row(
+            "Scheduling",
+            toned_text(scheduling_label(node.status.scheduling), cx),
             cx,
         ))
         .child(wide_detail_row(

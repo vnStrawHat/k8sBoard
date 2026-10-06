@@ -42,7 +42,7 @@ Unit tests cover the pure logic, inline (`mod tests`) or in a sibling `*_tests.r
 | `pod_bad_reasons_are_bad` | table-driven over the Bad list |
 | `pod_init_reason_takes_reason_tone` | `Init:CrashLoopBackOff` is Bad; `Init:1/2` is Info |
 | `pod_completed_is_done_and_terminating_is_info` | |
-| `node_ready_scheduling_disabled_is_warn_with_suffix` | "Ready · SchedulingDisabled" |
+| `node_ready_scheduling_disabled_reads_cordoned_in_warn` | "Cordoned" |
 | `node_not_ready_is_bad` | |
 | `container_terminated_exit_zero_is_done_nonzero_is_bad` | |
 

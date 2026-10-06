@@ -179,14 +179,29 @@ pub(crate) fn node_status_label(status: NodeStatus) -> StatusLabel {
             text: readiness_text.into(),
             tone: readiness_tone,
         },
+        // A cordoned but healthy node is a warning; an unhealthy one stays as bad. Readiness is
+        // spelled out only when it is the worse news, so the plain word fits a narrow column.
+        NodeScheduling::Disabled if readiness_tone == StatusTone::Ok => StatusLabel {
+            text: "Cordoned".into(),
+            tone: StatusTone::Warn,
+        },
         NodeScheduling::Disabled => StatusLabel {
-            text: format!("{readiness_text} · SchedulingDisabled").into(),
-            // A cordoned but healthy node is a warning; an unhealthy one stays as bad.
-            tone: if readiness_tone == StatusTone::Ok {
-                StatusTone::Warn
-            } else {
-                readiness_tone
-            },
+            text: format!("{readiness_text} · Cordoned").into(),
+            tone: readiness_tone,
+        },
+    }
+}
+
+/// The drawer's Scheduling row: whether new pods may land on the node.
+pub(crate) fn scheduling_label(scheduling: NodeScheduling) -> StatusLabel {
+    match scheduling {
+        NodeScheduling::Enabled => StatusLabel {
+            text: "Schedulable".into(),
+            tone: StatusTone::Ok,
+        },
+        NodeScheduling::Disabled => StatusLabel {
+            text: "Cordoned".into(),
+            tone: StatusTone::Warn,
         },
     }
 }

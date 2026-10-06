@@ -20,7 +20,7 @@
 | Field | Rule |
 |---|---|
 | readiness | Condition `type == "Ready"`: `"True"` → `Ready`, `"False"` → `NotReady`. `"Unknown"`, any other value, or a missing condition → `Unknown`. |
-| scheduling | `spec.unschedulable == Some(true)` → `Disabled`, otherwise `Enabled`. The UI renders `Ready · SchedulingDisabled`. |
+| scheduling | `spec.unschedulable == Some(true)` → `Disabled`, otherwise `Enabled`. The UI renders `Cordoned` (`NotReady · Cordoned` when also NotReady). |
 | roles | kubectl `findNodeRoles`. Take the non-empty suffix of each `node-role.kubernetes.io/<role>` label key, plus the non-empty value of the `kubernetes.io/role` label. Deduplicate and sort. If there are none, return an empty `Vec`. The UI shows "—" and does **not** infer `worker`. |
 | taints | `spec.taints` in API order. `Display` is `key=value:effect`, or `key:effect` when the value is `None` or empty. |
 | kubelet_version | `status.nodeInfo.kubeletVersion`, or `""` if missing. |

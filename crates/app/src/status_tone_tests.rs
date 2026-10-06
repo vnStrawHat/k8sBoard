@@ -181,12 +181,12 @@ fn pod_completed_is_done_and_terminating_is_info() {
 }
 
 #[test]
-fn node_ready_scheduling_disabled_is_warn_with_suffix() {
+fn node_ready_scheduling_disabled_reads_cordoned_in_warn() {
     let label = node_status_label(NodeStatus {
         readiness: NodeReadiness::Ready,
         scheduling: NodeScheduling::Disabled,
     });
-    assert_eq!(label.text, "Ready · SchedulingDisabled");
+    assert_eq!(label.text, "Cordoned");
     assert_eq!(label.tone, StatusTone::Warn);
 }
 
@@ -196,7 +196,7 @@ fn node_not_ready_is_bad() {
         readiness: NodeReadiness::NotReady,
         scheduling: NodeScheduling::Disabled,
     });
-    assert_eq!(cordoned.text, "NotReady · SchedulingDisabled");
+    assert_eq!(cordoned.text, "NotReady · Cordoned");
     assert_eq!(cordoned.tone, StatusTone::Bad);
     let enabled = node_status_label(NodeStatus {
         readiness: NodeReadiness::NotReady,
@@ -375,4 +375,18 @@ fn chart_text_color_moves_toward_the_foreground_on_both_themes() {
     let dark_blue = gpui_kit::hsla(0.62, 0.7, 0.3, 1.);
     let white = gpui_kit::hsla(0., 0., 0.95, 1.);
     assert!(chart_text_color(dark_blue, white, true).l > dark_blue.l);
+}
+
+#[test]
+fn scheduling_label_names_schedulable_and_cordoned() {
+    let schedulable = scheduling_label(NodeScheduling::Enabled);
+    assert_eq!(
+        (schedulable.text.as_ref(), schedulable.tone),
+        ("Schedulable", StatusTone::Ok)
+    );
+    let cordoned = scheduling_label(NodeScheduling::Disabled);
+    assert_eq!(
+        (cordoned.text.as_ref(), cordoned.tone),
+        ("Cordoned", StatusTone::Warn)
+    );
 }
