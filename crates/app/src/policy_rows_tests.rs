@@ -477,6 +477,7 @@ fn quota_row_cells_match_column_count() {
             tone: None,
         }
     );
+    assert_eq!(row.cells[3], KindCell::Text("pods 30%".into()));
     let titles: Vec<&str> = row.sections.iter().map(|section| section.title).collect();
     assert_eq!(titles, ["Usage", "Blocked creations"]);
 }
@@ -555,5 +556,36 @@ fn quota_status_names_highest_item() {
     assert_eq!(
         status(vec![item("pods", "10", Some("10"))]),
         ("pods at quota".to_owned(), StatusTone::Bad)
+    );
+}
+
+#[test]
+fn quota_fullest_cell_names_a_limit_the_usage_columns_do_not_show() {
+    let row = resource_quota_row(&quota(vec![
+        item("requests.cpu", "4", Some("1")),
+        item("pods", "10", Some("3")),
+        item("limits.memory", "8Gi", Some("7600Mi")),
+    ]));
+    assert_eq!(
+        row.cells[3],
+        KindCell::Toned(StatusLabel {
+            text: "limits.memory 93%".into(),
+            tone: StatusTone::Warn,
+        })
+    );
+    let full = resource_quota_row(&quota(vec![item("services", "2", Some("2"))]));
+    assert_eq!(
+        full.cells[3],
+        KindCell::Toned(StatusLabel {
+            text: "services 100%".into(),
+            tone: StatusTone::Bad,
+        })
+    );
+    // Before the controller reports usage, and for a quota without limits, there is none.
+    let unreported = resource_quota_row(&quota(vec![item("pods", "10", None)]));
+    assert_eq!(unreported.cells[3], KindCell::Absent);
+    assert_eq!(
+        resource_quota_row(&quota(Vec::new())).cells[3],
+        KindCell::Absent
     );
 }

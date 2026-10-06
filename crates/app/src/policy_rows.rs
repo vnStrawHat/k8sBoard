@@ -517,6 +517,22 @@ fn quota_cell(quota: &ResourceQuotaSummary, resources: &[&str]) -> KindCell {
     }
 }
 
+/// The most used limit of the quota with its share, such as `limits.memory 95%`, for a resource
+/// the three usage columns do not show; toned like them.
+fn fullest_cell(quota: &ResourceQuotaSummary) -> KindCell {
+    let Some((item, ratio)) = fullest_item(quota) else {
+        return KindCell::Absent;
+    };
+    let text = format!("{} {}", item.resource, format_percent(ratio));
+    match quota_tone(ratio) {
+        Some(tone) => KindCell::Toned(StatusLabel {
+            text: text.into(),
+            tone,
+        }),
+        None => KindCell::Text(text.into()),
+    }
+}
+
 /// The name a status uses for a limited resource.
 fn short_name(item: &QuotaItem) -> String {
     if quota_measure(&item.resource) == QuotaMeasure::Cpu {
@@ -572,6 +588,7 @@ pub(crate) fn resource_quota_row(quota: &ResourceQuotaSummary) -> KindRow {
             quota_cell(quota, &["requests.cpu", "cpu"]),
             quota_cell(quota, &["requests.memory", "memory"]),
             quota_cell(quota, &["pods"]),
+            fullest_cell(quota),
             KindCell::age(quota.created_at),
         ],
         sections,

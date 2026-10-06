@@ -86,6 +86,7 @@ fn quota_tone(ratio: f64) -> Option<StatusTone>;  // decision 16
 | CPU req | 130 r | `requests.cpu`, else `cpu` | `Quantity { quota_text, permille of ratio, quota_tone }`; no ratio → `Text(quota_text)`; missing → `Absent` |
 | Memory req | 150 r | `requests.memory`, else `memory` | same |
 | Pods | 100 r | `pods` | same |
+| Fullest | 160 | `fullest_item` | `{resource} {pct}` (`limits.memory 95%`), `Toned(quota_tone)` when ≥ 90 %, else `Text`; no ratio → `Absent` |
 | Age | 70 r | | |
 
 Status: the item with the highest ratio: ≥ 1 → Bad "{short} at quota"; ≥ 0.9 → Warn "{pct} {short} used" (`format_percent`); else Ok "Within quota"; no items → Done "No limits". `{short}`: CPU for cpu items, memory for memory items, else the resource name.
