@@ -32,7 +32,7 @@
 | Field | Content |
 |---|---|
 | Target container | select of running containers (Main and Sidecar tags), default the first running Main or the prefilled one |
-| Image | input, default `profile.debug_image` or `DEFAULT_DEBUG_IMAGE` (digest-pinned busybox); validated (decision 25) |
+| Image | input, default `profile.debug_image` or `DEFAULT_DEBUG_IMAGE` (digest-pinned busybox); validated (decision 25); an image with a digest gets a muted line `digest sha256:73aa…62` under it (tooltip: the whole image), one without gets none |
 | Warning (warning token) | `Ephemeral containers cannot be removed. It stays in the pod spec until the pod is deleted. Each Reconnect adds another container.` |
 | Note (muted) | `Closing the tab ends the shell and everything started from it.` |
 | Buttons | `Cancel` / `Continue` |

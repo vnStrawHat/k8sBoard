@@ -59,13 +59,13 @@ const HIDDEN_BY_DEFAULT: [usize; 3] = [CPU_REQUESTED, MEMORY_REQUESTED, LABELS];
 /// at the width of `255.255.255.255`, and Version at that of `v1.29.5`.
 const NODE_COLUMNS: [KindColumn; 12] = [
     column("Name", 110., Align::Left).grows(8).up_to(300.),
-    column("Status", 76., Align::Left),
+    column("Status", 84., Align::Left),
     column("Roles", 106., Align::Left),
-    column("Taints", 56., Align::Left).grows(2).up_to(420.),
+    column("Taints", 52., Align::Left).grows(2).up_to(420.),
     column("Version", 90., Align::Left),
     column("Internal IP", 140., Align::Left),
-    column("CPU", 92., Align::Left),
-    column("Memory", 92., Align::Left),
+    column("CPU", 90., Align::Left),
+    column("Memory", 90., Align::Left),
     column("CPU req", 92., Align::Left),
     column("Mem req", 92., Align::Left),
     column("Age", 56., Align::Right),
@@ -554,27 +554,38 @@ fn roles_cell(roles: &[String]) -> String {
     roles.join(", ")
 }
 
-/// The first taint, plus how many more there are.
+/// The first taint as the cell spells it, how many more there are, and every taint for the tooltip.
 struct TaintsSummary {
     first: String,
     more: usize,
+    all: String,
 }
 
 fn taints_summary(taints: &[NodeTaint]) -> Option<TaintsSummary> {
     let (first, rest) = taints.split_first()?;
     Some(TaintsSummary {
-        first: first.to_string(),
+        first: short_taint(first),
         more: rest.len(),
+        all: taints
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n"),
     })
 }
 
-/// A taint without the domain of its key (`control-plane:NoSchedule` for
-/// `node-role.kubernetes.io/control-plane:NoSchedule`); the tooltip keeps the whole taint.
-fn short_taint(taint: &str) -> &str {
-    let key_end = taint.find(['=', ':']).unwrap_or(taint.len());
-    taint[..key_end]
-        .rfind('/')
-        .map_or(taint, |at| &taint[at + 1..])
+/// A taint as `key:effect` in the cell: no key domain (`control-plane` for
+/// `node-role.kubernetes.io/control-plane`), no value, and the effect cut short (`NoSched`). The
+/// tooltip keeps the whole taints.
+fn short_taint(taint: &NodeTaint) -> String {
+    let key = taint.key.rsplit('/').next().unwrap_or(&taint.key);
+    let effect = match taint.effect.as_str() {
+        "NoSchedule" => "NoSched",
+        "PreferNoSchedule" => "PreferNoSched",
+        "NoExecute" => "NoExec",
+        other => other,
+    };
+    format!("{key}:{effect}")
 }
 
 fn taints_cell(
@@ -604,12 +615,8 @@ fn taints_cell(
         .child(
             truncated_text_with_tooltip(
                 "taints",
-                middle_truncate(
-                    short_taint(&summary.first),
-                    capacity.saturating_sub(more_width),
-                )
-                .into_owned(),
-                summary.first,
+                middle_truncate(&summary.first, capacity.saturating_sub(more_width)).into_owned(),
+                summary.all,
             )
             .min_w_0(),
         )
@@ -698,17 +705,28 @@ mod tests {
     }
 
     #[test]
-    fn short_taint_drops_the_key_domain_only() {
+    fn short_taint_drops_the_key_domain_and_the_value_and_cuts_the_effect() {
+        let spelled = |key: &str, value: Option<&str>, effect: &str| {
+            short_taint(&NodeTaint {
+                key: key.to_owned(),
+                value: value.map(str::to_owned),
+                effect: effect.to_owned(),
+                time_added: None,
+            })
+        };
         assert_eq!(
-            short_taint("node-role.kubernetes.io/control-plane:NoSchedule"),
-            "control-plane:NoSchedule"
+            spelled("node-role.kubernetes.io/control-plane", None, "NoSchedule"),
+            "control-plane:NoSched"
         );
         assert_eq!(
-            short_taint("dedicated=a/b:NoSchedule"),
-            "dedicated=a/b:NoSchedule"
+            spelled("workload", Some("ingress"), "NoSchedule"),
+            "workload:NoSched"
         );
-        assert_eq!(short_taint("a:NoSchedule"), "a:NoSchedule");
+        assert_eq!(spelled("a", None, "NoExecute"), "a:NoExec");
+        assert_eq!(spelled("a", None, "PreferNoSchedule"), "a:PreferNoSched");
+        assert_eq!(spelled("a", None, "Odd"), "a:Odd");
     }
+
     #[test]
     fn taints_cell_shows_first_and_plus_count() {
         let taints = [
@@ -717,8 +735,10 @@ mod tests {
             taint("c", "NoSchedule"),
         ];
         let summary = taints_summary(&taints).expect("has taints");
-        assert_eq!(summary.first, "a:NoSchedule");
+        assert_eq!(summary.first, "a:NoSched");
         assert_eq!(summary.more, 2);
+        // The tooltip lists every taint whole, one a line.
+        assert_eq!(summary.all, "a:NoSchedule\nb:NoExecute\nc:NoSchedule");
         assert!(taints_summary(&[]).is_none());
         assert_eq!(taints_summary(&taints[..1]).expect("one taint").more, 0);
     }
@@ -854,6 +874,7 @@ mod tests {
             "an IP never shrinks or grows"
         );
         assert!(NODE_COLUMNS[VERSION].width >= 90., "v1.29.5 shows whole");
+        assert!(NODE_COLUMNS[STATUS].width >= 84., "Cordoned shows whole");
         let heaviest = NODE_COLUMNS.iter().map(|column| column.weight).max();
         assert_eq!(heaviest, Some(NODE_COLUMNS[NAME].weight));
         assert!(NODE_COLUMNS[TAINTS].width < NODE_COLUMNS[NAME].width);

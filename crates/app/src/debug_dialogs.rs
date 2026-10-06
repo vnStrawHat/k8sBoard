@@ -22,7 +22,6 @@ use gpui_kit::{
 };
 
 use crate::app_shell::AppShell;
-use crate::cell_truncation::middle_truncate;
 use crate::fresh_enter::{confirms, is_enter};
 use crate::keymap::FORWARD_FORM;
 use crate::port_forwards::is_dns_subdomain;
@@ -148,25 +147,35 @@ pub(crate) fn first_selected(choices: &[DebugChoice], preselected: Option<&str>)
         .unwrap_or(0)
 }
 
-/// How many characters of an image the Image field shows before its text runs out of room.
-const IMAGE_FIELD_CHARS: usize = 54;
+/// The digest characters kept at each end of the digest line.
+const DIGEST_HEAD_CHARS: usize = 4;
+const DIGEST_TAIL_CHARS: usize = 2;
 
-/// The image cut in the middle, so the registry and the end (a tag or a digest) show, when it is
-/// longer than its field. The field itself keeps the start only.
-fn image_summary(image: &str) -> Option<String> {
-    let image = image.trim();
-    (image.chars().count() > IMAGE_FIELD_CHARS)
-        .then(|| middle_truncate(image, IMAGE_FIELD_CHARS).into_owned())
+/// `digest sha256:73aa…62` for an image pinned by digest, else `None`: the line under an Image
+/// field says which content the image is, because the field shows only the start of a long text.
+fn digest_summary(image: &str) -> Option<String> {
+    let (_, digest) = image.trim().rsplit_once('@')?;
+    let (algorithm, hex) = digest.split_once(':')?;
+    if algorithm.is_empty() || hex.is_empty() {
+        return None;
+    }
+    let count = hex.chars().count();
+    if count <= DIGEST_HEAD_CHARS + DIGEST_TAIL_CHARS {
+        return Some(format!("digest {algorithm}:{hex}"));
+    }
+    let head: String = hex.chars().take(DIGEST_HEAD_CHARS).collect();
+    let tail: String = hex.chars().skip(count - DIGEST_TAIL_CHARS).collect();
+    Some(format!("digest {algorithm}:{head}…{tail}"))
 }
 
-/// The line under an Image field that shows the end of a long image; its tooltip has all of it.
-fn image_summary_line(image: &str, cx: &gpui_kit::App) -> Option<AnyElement> {
-    let summary = image_summary(image)?;
+/// The digest line under an Image field, muted; its tooltip has the whole image.
+fn digest_line(image: &str, cx: &gpui_kit::App) -> Option<AnyElement> {
+    let summary = digest_summary(image)?;
     let theme = cx.theme();
     let full = SharedString::from(image.trim().to_owned());
     Some(
         div()
-            .id("image-summary")
+            .id("image-digest")
             .text_xs()
             .font_family(theme.mono_font_family.clone())
             .text_color(theme.muted_foreground)
@@ -299,7 +308,7 @@ impl Render for DebugBody {
                 v_flex()
                     .gap_1()
                     .child(Input::new(&self.image).small())
-                    .children(image_summary_line(&self.image.read(cx).value(), cx)),
+                    .children(digest_line(&self.image.read(cx).value(), cx)),
                 self.errors.image,
                 cx,
             ))
@@ -375,7 +384,7 @@ impl Render for NodeShellBody {
                 v_flex()
                     .gap_1()
                     .child(Input::new(&self.image).small())
-                    .children(image_summary_line(&self.image.read(cx).value(), cx))
+                    .children(digest_line(&self.image.read(cx).value(), cx))
                     .child(
                         div()
                             .text_xs()

@@ -25,14 +25,14 @@
 
 ## Nodes columns (W5 without CPU/Memory)
 
-Widths are the base widths of `NODE_COLUMNS`; the sum fits a 1100 px window (Memory and Age stay inside it). Name takes most of the spare width (weight 8, up to 300 px = 28 mono characters), so the lab node names stay whole at 1320 px; Taints (weight 2, up to 420 px) gives way first. Name is cut with the sibling-aware rule of `cell_truncation.rs` (0009), as is the Pods Node column. Roles, Status, Internal IP, Version (90), CPU, Memory, and Age do not grow. The table above lists the original W5 widths.
+Widths are the base widths of `NODE_COLUMNS`; the sum fits a 1100 px window (Memory and Age stay inside it). Name takes most of the spare width (weight 8, up to 300 px = 28 mono characters), so the lab node names stay whole at 1320 px; Taints (weight 2, up to 420 px) gives way first. Name is cut with the sibling-aware rule of `cell_truncation.rs` (0009), as is the Pods Node column. Roles, Status (84, so `Cordoned` shows whole), Internal IP, Version (90), CPU, Memory, and Age do not grow. The table above lists the original W5 widths.
 
 | Column | Width | Cell |
 |---|---|---|
 | Name | 200 | `name` |
 | Status | 200 | label + tone (below) |
 | Roles | 140 | `roles.join(", ")`, or "—" when empty (no `worker` inference) |
-| Taints | 300 | the first taint Display, plus a muted ` +N` when more; "—" when none |
+| Taints | 300 | the first taint as `key:effect` (key domain and value dropped, effect cut to `NoSched`, `PreferNoSched`, `NoExec`; `workload:NoSched +1`), plus a muted ` +N` when more; tooltip lists every taint whole; "—" when none |
 | Version | 100 | `kubelet_version` |
 | Internal IP | 140, fixed | `internal_ip` or "—"; never truncates (fits `255.255.255.255`) |
 | Age | 70, right | `format_age` |

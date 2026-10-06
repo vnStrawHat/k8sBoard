@@ -95,18 +95,28 @@ fn the_dialog_texts_are_the_spec_texts() {
 }
 
 #[test]
-fn a_long_image_is_summarised_with_its_end_kept() {
-    let digest = "docker.io/library/busybox:1.36.1@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662";
-    let summary = image_summary(digest).expect("the image is longer than the field");
-    assert!(summary.chars().count() <= IMAGE_FIELD_CHARS);
-    assert!(summary.contains('…'));
-    // The tail of the digest is what tells two images apart.
-    assert!(summary.ends_with("b11662"));
-    assert!(summary.starts_with("docker.io"));
+fn an_image_pinned_by_digest_gets_a_short_digest_line() {
+    let image = "docker.io/library/busybox:1.36.1@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662";
+    assert_eq!(
+        digest_summary(image).as_deref(),
+        Some("digest sha256:73aa…62")
+    );
+    assert_eq!(
+        digest_summary("  busybox@sha256:abcdef  ").as_deref(),
+        Some("digest sha256:abcdef"),
+        "a digest this short is shown whole"
+    );
 }
 
 #[test]
-fn a_short_image_needs_no_summary() {
-    assert_eq!(image_summary("busybox:1.36"), None);
-    assert_eq!(image_summary("  busybox:1.36  "), None);
+fn an_image_without_a_digest_has_no_digest_line() {
+    for image in [
+        "busybox:1.36",
+        "  busybox:1.36  ",
+        "reg.io:5000/a/b:v1",
+        "a@",
+        "a@sha256:",
+    ] {
+        assert_eq!(digest_summary(image), None, "{image}");
+    }
 }
