@@ -40,7 +40,7 @@ Status: **draft 2026-10-05, revised after advisor review**, from the task-based 
 - [x] B4 Ingress Backends, NetworkPolicy Pods (AC 15, 18); as built: `selected_pods_rows(namespace, selector)` serves PDB and NetworkPolicy, and `INGRESS_TLS` moved to cell 4
 - [x] C1 palette searches the live condition feeds in scope (AC 23)
 - [x] C2 `list_object_names` (AC 24; AC 27 for the cluster half)
-- [ ] C3 name index in the palette (AC 25-30)
+- [x] C3 name index in the palette (AC 25-30); as built: `NameListState::Denied` / `Failed` carry no payload (the error is logged per kind), a run waits while the access review is `Checking`, a ready list stays searchable while the next run loads, and the footer shows `Searching …` in place of the syntax hints
 - [ ] General (AC 31-33)
 
 ## Cost summary

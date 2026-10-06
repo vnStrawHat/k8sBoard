@@ -1,7 +1,8 @@
 //! The command palette (Ctrl K, `:`, the title-bar search box): a kit `Dialog` hosting the kit
 //! `Command` list. Ranking is done here (`filterable(false)`), the entries come from
 //! `palette_search`, and a confirmed entry runs after the dialog has closed. The palette reads
-//! memory only: no list, watch, or request starts while it opens or while the user types.
+//! memory only: opening it starts no list, watch, or request. A query of two or more characters
+//! asks the session for the name index (spec 0056), which lists at most once per 120 s.
 
 use std::ops::Range;
 use std::time::{Duration, Instant};
@@ -31,10 +32,11 @@ use crate::keymap::{
     CloseDockTab, LeavePaletteArgument, NextDockTab, OpenNamespacePicker, PALETTE_LIST,
     PalettePreview, PreviousDockTab, ScaleCursorRow, ShowShortcuts, ToggleDock, ToggleDockZoom,
 };
+use crate::name_index::IndexSummary;
 use crate::navigation::screen_icon;
 use crate::palette_search::{
-    EntryRanges, EntryState, PaletteEntry, PaletteGroup, PaletteTarget, empty_text,
-    entry_match_ranges, parse_query, ranked,
+    EntryRanges, EntryState, PaletteEntry, PaletteGroup, PaletteMode, PaletteTarget, empty_text,
+    entry_match_ranges, lists_name_index, parse_query, ranked, searching_text,
 };
 use crate::resource_actions::RowAction;
 use crate::resource_kind::{NODE_ICON, POD_ICON, ResourceKind};
@@ -65,6 +67,8 @@ pub(crate) struct PaletteContext {
     pub(crate) has_session: bool,
     /// The condition feeds the Resources group searched, for the empty text.
     pub(crate) searched_feeds: Vec<ResourceKind>,
+    /// What the name index is searching, searched, or could not list.
+    pub(crate) name_index: IndexSummary,
     /// `None` without a profile.
     pub(crate) cluster: Option<ActiveCluster>,
     /// The `ns: …` chip text; `None` without a session.
@@ -224,6 +228,13 @@ impl CommandPalette {
             _shell_observer: shell_observer,
         };
         palette.rank(snapshot);
+        // The shell is mid-update while it opens the palette, so the request waits for it.
+        if lists_name_index(&parse_query(initial)) {
+            let this = cx.weak_entity();
+            cx.defer(move |cx| {
+                let _ = this.update(cx, |palette, cx| palette.request_name_index(cx));
+            });
+        }
         palette
     }
 
@@ -302,7 +313,16 @@ impl CommandPalette {
         }
         self.query = text.to_owned();
         self.is_stale = true;
+        self.request_name_index(cx);
         cx.notify();
+    }
+
+    /// A query of two or more characters asks the session to list the names of the kinds no feed
+    /// holds; the session starts at most one run per 120 s.
+    fn request_name_index(&self, cx: &mut Context<Self>) {
+        if lists_name_index(&parse_query(&self.query)) {
+            self.update_shell(cx, |shell, cx| shell.request_name_index(cx));
+        }
     }
 
     /// The entries the kit draws, one list per non-empty group in `PaletteGroup::ALL` order: the
@@ -505,7 +525,10 @@ impl Render for CommandPalette {
             self.context.has_session,
             self.context.screen,
             &self.context.searched_feeds,
+            &self.context.name_index,
         );
+        let searching = (mode == PaletteMode::All && !self.context.name_index.searching.is_empty())
+            .then(|| searching_text(&self.context.name_index));
         let header = HeaderChips::of(&self.context);
         let more = self.more;
         let mut command = Command::new(&self.state)
@@ -522,7 +545,7 @@ impl Render for CommandPalette {
                     let can_preview = palette
                         .read_with(&*cx, |palette, cx| palette.can_preview(selected, cx))
                         .unwrap_or(false);
-                    footer(can_preview, more, cx)
+                    footer(can_preview, more, searching.as_deref(), cx)
                 }
             })
             .empty(move |_, _, cx| {
@@ -709,8 +732,15 @@ impl CommandPalette {
 }
 
 /// The syntax footer (W9 note 5), with `Tab preview` only while it applies and "+N more" when a
-/// cap cut a group.
-fn footer(can_preview: bool, more: usize, cx: &App) -> impl IntoElement + use<> {
+/// cap cut a group. While the name index loads, `searching` says what is still being listed in
+/// place of the syntax line.
+fn footer(
+    can_preview: bool,
+    more: usize,
+    searching: Option<&str>,
+    cx: &App,
+) -> impl IntoElement + use<> {
+    let searching = searching.map(str::to_owned);
     let keys = if can_preview {
         "↑↓ select · Tab preview · Esc close"
     } else {
@@ -726,7 +756,10 @@ fn footer(can_preview: bool, more: usize, cx: &App) -> impl IntoElement + use<> 
         .border_color(cx.theme().border)
         .text_xs()
         .text_color(cx.theme().muted_foreground)
-        .children(SYNTAX_HINTS.map(|hint| div().child(hint)))
+        .when(searching.is_none(), |footer| {
+            footer.children(SYNTAX_HINTS.map(|hint| div().child(hint)))
+        })
+        .children(searching.map(|text| div().child(text)))
         .when(more > 0, |footer| {
             footer.child(div().child(format!("+{more} more")))
         })

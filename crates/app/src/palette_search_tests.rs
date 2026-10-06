@@ -12,6 +12,7 @@ use crate::cluster_registry::ClusterRef;
 use crate::cluster_session::AccessState;
 use crate::environment::Environment;
 use crate::kind_row::KindObject;
+use crate::name_index::{NAME_INDEX_KINDS, NameListResult, name_index_plan};
 use crate::status_tone::StatusTone;
 use crate::table_selection::ClusterObject;
 use crate::write_guard::{WriteLock, test_guard};
@@ -161,6 +162,7 @@ struct World {
     kind_rows: Option<(ResourceKind, Vec<KindRow>)>,
     replica_sets: Option<Vec<ReplicaSetSummary>>,
     feeds: Vec<FeedObjects<'static>>,
+    name_index: NameIndex,
     sections: Vec<SwitcherSection>,
 }
 
@@ -175,6 +177,7 @@ impl World {
             kind_rows: None,
             replica_sets: None,
             feeds: Vec::new(),
+            name_index: NameIndex::default(),
             sections: Vec::new(),
         }
     }
@@ -200,6 +203,7 @@ impl World {
                     .map(|(kind, rows)| (*kind, rows.as_slice())),
                 replica_sets: self.replica_sets.as_deref(),
                 feeds: &self.feeds,
+                name_index: &self.name_index,
             }),
             clusters: &self.sections,
         }
@@ -729,16 +733,29 @@ fn empty_text_hints_name_what_was_searched() {
             PaletteMode::All,
             true,
             Screen::Kind(ResourceKind::Deployments),
-            &[]
+            &[],
+            &IndexSummary::default()
         ),
         "No matches. Searched: Pods, Nodes, Deployments. Type :kind for other kinds."
     );
     assert_eq!(
-        empty_text(PaletteMode::Namespaces, false, Screen::Pods, &[]),
+        empty_text(
+            PaletteMode::Namespaces,
+            false,
+            Screen::Pods,
+            &[],
+            &IndexSummary::default()
+        ),
         "No matches. Cluster not connected."
     );
     assert_eq!(
-        empty_text(PaletteMode::Kinds, true, Screen::Pods, &[]),
+        empty_text(
+            PaletteMode::Kinds,
+            true,
+            Screen::Pods,
+            &[],
+            &IndexSummary::default()
+        ),
         "No matching kind."
     );
 }
@@ -747,7 +764,13 @@ fn empty_text_hints_name_what_was_searched() {
 fn empty_text_names_the_live_feeds_once() {
     let feeds = [ResourceKind::Deployments, ResourceKind::Jobs];
     assert_eq!(
-        empty_text(PaletteMode::All, true, Screen::Pods, &feeds),
+        empty_text(
+            PaletteMode::All,
+            true,
+            Screen::Pods,
+            &feeds,
+            &IndexSummary::default()
+        ),
         "No matches. Searched: Pods, Nodes, Deployments, Jobs. Type :kind for other kinds."
     );
     // The visible kind is named once, in its own place.
@@ -756,7 +779,8 @@ fn empty_text_names_the_live_feeds_once() {
             PaletteMode::All,
             true,
             Screen::Kind(ResourceKind::Jobs),
-            &feeds
+            &feeds,
+            &IndexSummary::default()
         ),
         "No matches. Searched: Pods, Nodes, Jobs, Deployments. Type :kind for other kinds."
     );
@@ -1501,4 +1525,262 @@ fn feed_objects_of_other_summaries_are_ignored() {
     world.feeds = vec![feed_of(ResourceKind::Deployments, vec![KindObject::Plain])];
     let found = search(&mut world.input(Screen::Pods, None), "plain");
     assert!(resource_labels(&found).is_empty());
+}
+
+// ---- Name index (spec 0056 C3) ----
+
+/// An index with `results` delivered for `scope`, after a run that planned `access`.
+fn index_of(
+    scope: &NamespaceScope,
+    access: &AccessState,
+    results: Vec<NameListResult>,
+) -> NameIndex {
+    let mut index = NameIndex::default();
+    index.begin(
+        scope.clone(),
+        &name_index_plan(access),
+        gpui_kit::Task::ready(()),
+    );
+    index.finish(scope, results, std::time::Instant::now());
+    index
+}
+
+fn names_of(namespace: &str, names: &[&str]) -> cluster::NameList {
+    cluster::NameList {
+        names: names
+            .iter()
+            .map(|name| cluster::ObjectName {
+                namespace: Some(namespace.to_owned()),
+                name: (*name).to_owned(),
+            })
+            .collect(),
+        is_truncated: false,
+    }
+}
+
+fn world_with_services(names: &[&str]) -> World {
+    let mut world = World::new();
+    world.name_index = index_of(
+        &world.scope,
+        &known_denying(&[]),
+        vec![(ResourceKind::Services, Ok(names_of("shop", names)))],
+    );
+    world
+}
+
+#[test]
+fn an_indexed_service_is_found_by_name_without_a_status() {
+    let world = world_with_services(&["kong-proxy", "cart"]);
+    let found = search(&mut world.input(Screen::Pods, None), "kong");
+    assert_eq!(resource_labels(&found), ["kong-proxy"]);
+    let entry = found
+        .entries
+        .iter()
+        .find(|entry| entry.group == PaletteGroup::Resources)
+        .expect("the service is listed");
+    assert_eq!(entry.detail.as_deref(), Some("shop/kong-proxy"));
+    assert!(entry.status.is_none());
+    assert!(matches!(
+        &entry.target,
+        PaletteTarget::Resource(object) if object.key == ResourceKey::Kind {
+            kind: ResourceKind::Services,
+            namespace: Some("shop".to_owned()),
+            name: "kong-proxy".to_owned(),
+        }
+    ));
+    // The kind words narrow to the kind.
+    let by_kind = search(&mut world.input(Screen::Pods, None), "svc kong");
+    assert_eq!(resource_labels(&by_kind), ["kong-proxy"]);
+}
+
+#[test]
+fn the_visible_kind_rows_win_over_the_indexed_copy() {
+    let mut world = world_with_services(&["kong-proxy"]);
+    world.kind_rows = Some((
+        ResourceKind::Services,
+        vec![kind_row(Some("shop"), "kong-proxy")],
+    ));
+    let found = search(
+        &mut world.input(Screen::Kind(ResourceKind::Services), None),
+        "kong",
+    );
+    assert_eq!(resource_labels(&found), ["kong-proxy"]);
+    assert!(found.entries.iter().any(|entry| entry.status.is_some()));
+}
+
+#[test]
+fn an_indexed_kind_is_kept_while_its_screen_has_no_rows() {
+    let mut world = world_with_services(&["kong-proxy"]);
+    world.kind_rows = Some((ResourceKind::Services, Vec::new()));
+    let found = search(
+        &mut world.input(Screen::Kind(ResourceKind::Services), None),
+        "kong",
+    );
+    assert_eq!(resource_labels(&found), ["kong-proxy"]);
+}
+
+#[test]
+fn lists_that_are_denied_or_failed_are_not_searched() {
+    let mut world = World::new();
+    let access = known_denying(&[cluster::AccessCheck::ListIngresses]);
+    world.name_index = index_of(
+        &world.scope,
+        &access,
+        vec![
+            (ResourceKind::Services, Err("forbidden".to_owned())),
+            (ResourceKind::StatefulSets, Ok(names_of("shop", &["db"]))),
+        ],
+    );
+    let found = search(&mut world.input(Screen::Pods, None), "db");
+    assert_eq!(resource_labels(&found), ["db"]);
+    let none = search(&mut world.input(Screen::Pods, None), "web");
+    assert!(resource_labels(&none).is_empty());
+}
+
+#[test]
+fn indexed_names_carry_no_action_pairs() {
+    let world = world_with_services(&["kong-proxy"]);
+    let found = search(&mut world.input(Screen::Pods, None), "delete kong");
+    assert!(
+        found
+            .entries
+            .iter()
+            .all(|entry| !matches!(entry.target, PaletteTarget::ObjectAction(..)))
+    );
+}
+
+#[test]
+fn only_a_query_of_two_characters_in_all_mode_starts_the_index() {
+    for (raw, starts) in [
+        ("", false),
+        ("k", false),
+        (" k ", false),
+        ("kong", true),
+        ("ko", true),
+        (":ko", false),
+        ("#ko", false),
+        ("@ko", false),
+        (">ko", false),
+    ] {
+        assert_eq!(lists_name_index(&parse_query(raw)), starts, "query {raw:?}");
+    }
+}
+
+fn summary(searching: &[ResourceKind], searched: &[ResourceKind]) -> IndexSummary {
+    IndexSummary {
+        searching: searching.to_vec(),
+        searched: searched.to_vec(),
+        ..IndexSummary::default()
+    }
+}
+
+#[test]
+fn the_empty_text_says_what_is_still_searched() {
+    let loading = summary(
+        &[
+            ResourceKind::Services,
+            ResourceKind::Ingresses,
+            ResourceKind::StatefulSets,
+        ],
+        &[],
+    );
+    assert_eq!(
+        empty_text(PaletteMode::All, true, Screen::Pods, &[], &loading),
+        "No matches yet. Searching Services, Ingresses, StatefulSets…"
+    );
+    assert_eq!(
+        searching_text(&loading),
+        "Searching Services, Ingresses, StatefulSets…"
+    );
+}
+
+#[test]
+fn the_empty_text_names_the_indexed_kinds_and_what_could_not_be_searched() {
+    let done = IndexSummary {
+        searched: vec![ResourceKind::Services, ResourceKind::StatefulSets],
+        not_permitted: vec![ResourceKind::Ingresses],
+        unavailable: vec![ResourceKind::CronJobs],
+        truncated: vec![ResourceKind::Services],
+        ..IndexSummary::default()
+    };
+    assert_eq!(
+        empty_text(PaletteMode::All, true, Screen::Pods, &[], &done),
+        "No matches. Searched: Pods, Nodes, Services, StatefulSets. \
+         Services: first 5,000 names. Not permitted: Ingresses. Unavailable: CronJobs. \
+         Type :kind for other kinds."
+    );
+    // The visible kind is named once.
+    assert_eq!(
+        empty_text(
+            PaletteMode::All,
+            true,
+            Screen::Kind(ResourceKind::Services),
+            &[],
+            &summary(&[], &[ResourceKind::Services])
+        ),
+        "No matches. Searched: Pods, Nodes, Services. Type :kind for other kinds."
+    );
+}
+
+#[test]
+fn only_all_mode_reports_the_index() {
+    let loading = summary(&[ResourceKind::Services], &[]);
+    assert_eq!(
+        empty_text(PaletteMode::Kinds, true, Screen::Pods, &[], &loading),
+        "No matching kind."
+    );
+}
+
+/// 3,000 pods, 1,000 feed Deployments, and 5,000 indexed names (1,000 per index kind): about
+/// 9,000 subjects.
+fn large_world() -> World {
+    let mut world = World::new();
+    world.pods = (0..3_000)
+        .map(|index| pod("shop", &format!("worker-{index}-abcde")))
+        .collect();
+    let deployments = (0..1_000)
+        .map(|index| feed_deployment("shop", &format!("deploy-{index}")))
+        .collect();
+    world.feeds = vec![feed_of(ResourceKind::Deployments, deployments)];
+    let results = NAME_INDEX_KINDS
+        .into_iter()
+        .map(|kind| {
+            let names: Vec<String> = (0..1_000)
+                .map(|index| format!("{}-{index}", kind.singular()))
+                .collect();
+            let names: Vec<&str> = names.iter().map(String::as_str).collect();
+            (kind, Ok(names_of("shop", &names)))
+        })
+        .collect();
+    world.name_index = index_of(&world.scope, &known_denying(&[]), results);
+    world
+}
+
+#[test]
+fn a_large_fixture_ranks_the_exact_name_first() {
+    let world = large_world();
+    let found = search(&mut world.input(Screen::Pods, None), "ingress-512");
+    assert_eq!(resource_labels(&found).first(), Some(&"ingress-512"));
+    assert!(resource_labels(&found).len() <= RESOURCES_CAP);
+}
+
+/// The 4 ms budget of the `palette ranked` trace (0029) over about 9,000 subjects. Timing only
+/// means something with optimizations (`--release` refuses the cluster crate's `test-support`
+/// feature): `CARGO_PROFILE_TEST_OPT_LEVEL=3 CARGO_PROFILE_DEV_OPT_LEVEL=3 cargo test -p k8sboard --
+/// --ignored large_fixture`.
+#[test]
+#[ignore = "timing budget: run with optimizations"]
+fn large_fixture_ranks_within_the_budget() {
+    let world = large_world();
+    for raw in ["ingress-512", "worker 77", "deploy"] {
+        let mut input = world.input(Screen::Pods, None);
+        let started = std::time::Instant::now();
+        let found = search(&mut input, raw);
+        let elapsed = started.elapsed();
+        assert!(!found.entries.is_empty(), "query {raw:?} found nothing");
+        assert!(
+            elapsed < std::time::Duration::from_millis(4),
+            "query {raw:?} took {elapsed:?}"
+        );
+    }
 }

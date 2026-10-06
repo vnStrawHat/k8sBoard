@@ -35,6 +35,7 @@ use crate::kind_join::{JoinInputs, join_rows};
 use crate::kind_row::{KindObject, KindRow};
 use crate::kubelet_metrics::KubeletDemand;
 use crate::live_sections::CanDoCell;
+use crate::name_index::{NameIndex, NameListResult, name_index_plan};
 use crate::related_objects::RelatedSubject;
 use crate::resource_kind::ResourceKind;
 use crate::settings::AppSettings;
@@ -148,6 +149,8 @@ pub(crate) struct LiveCluster {
     related: Option<RelatedObjects>,
     /// The sidebar numbers of kinds without a running watch.
     kind_counts: KindCounts,
+    /// The names of the palette-only kinds (spec 0056), listed while the user types in the palette.
+    pub(crate) name_index: NameIndex,
     /// The watches only the Issues engine reads, running for the whole session.
     pub(crate) issue_feeds: IssueFeeds,
     /// The Overview's change feeds: `Some` exactly while Overview is visible (`Denied` included).
@@ -1863,6 +1866,8 @@ impl ClusterSession {
         }
         // The numbers are for the old scope; the review for the new one counts again.
         live.kind_counts = KindCounts::default();
+        // The names are for the old scope; dropping the index aborts a run that is still listing.
+        live.name_index = NameIndex::default();
         // The fallback namespaces and so the coverage may differ in the new scope.
         live.rbac.reset_for_scope_change();
         // The answers are for the old scope; the screen asks again for the new one.
@@ -2109,6 +2114,80 @@ impl ClusterSession {
         live.kind_counts.scope = Some(scope);
         live.kind_counts.refreshed_at = Some(now);
         live.kind_counts.task = Some(task);
+    }
+
+    /// Lists the names of the index kinds for the palette's name search, one metadata-only list
+    /// per kind and namespace on the cluster runtime. It starts only when `NameIndex::wants_run`
+    /// says so, and not while the access review is still running: the report decides which kinds
+    /// are asked for. The names arrive in one update.
+    pub(crate) fn request_name_index(&mut self, cx: &mut Context<Self>) {
+        let runtime = cx.global::<ClusterRuntime>().clone();
+        let Some(live) = self.live_mut() else {
+            return;
+        };
+        if matches!(live.access, AccessState::Checking { .. })
+            || !live.name_index.wants_run(&live.scope, Instant::now())
+        {
+            return;
+        }
+        let plan = name_index_plan(&live.access);
+        let kinds: Vec<ResourceKind> = plan
+            .iter()
+            .filter(|(_, denied)| denied.is_none())
+            .map(|(kind, _)| *kind)
+            .collect();
+        let connection = live.connection.clone();
+        let scope = live.scope.clone();
+        let listing = {
+            let scope = scope.clone();
+            runtime.spawn(async move {
+                futures::stream::iter(kinds)
+                    .map(|kind| {
+                        let connection = connection.clone();
+                        let scope = scope.clone();
+                        async move {
+                            let Some(object) = kind.builtin_object() else {
+                                return (kind, Err("not a built-in kind".to_owned()));
+                            };
+                            let names = connection.list_object_names(object, &scope).await;
+                            (kind, names.map_err(|error| error_text(&error)))
+                        }
+                    })
+                    .buffer_unordered(KIND_COUNT_CONCURRENCY)
+                    .collect::<Vec<NameListResult>>()
+                    .await
+            })
+        };
+        let run_scope = scope.clone();
+        let task = cx.spawn(async move |this, cx| {
+            let result = listing.await;
+            let _ = this.update(cx, |session, cx| {
+                session.finish_name_index(&run_scope, result, cx);
+            });
+        });
+        live.name_index.begin(scope, &plan, task);
+    }
+
+    fn finish_name_index(
+        &mut self,
+        scope: &NamespaceScope,
+        result: Result<Vec<NameListResult>, tokio::task::JoinError>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(live) = self.live_mut() else {
+            return;
+        };
+        // A run that stopped answers nothing, so every list still loading fails.
+        let results = result.unwrap_or_default();
+        for (kind, names) in &results {
+            if let Err(message) = names {
+                tracing::warn!(kind = kind.label(), %message, "listing object names failed");
+            }
+        }
+        // A scope change drops the index with its run; the scope check is the second gate.
+        if live.name_index.finish(scope, results, Instant::now()) {
+            cx.notify();
+        }
     }
 
     /// Counts the instances of every served custom kind whose list is not denied, cluster-wide,
@@ -3058,6 +3137,7 @@ impl LiveCluster {
             object_events: None,
             related: None,
             kind_counts: KindCounts::default(),
+            name_index: NameIndex::default(),
             issue_feeds,
             change_events: None,
             topology: None,

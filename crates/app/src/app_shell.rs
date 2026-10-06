@@ -64,6 +64,7 @@ use crate::launch_options::{LaunchOptions, LaunchScreen};
 use crate::live_sections::loaded_replica_sets;
 use crate::log_target::{LogTarget, NoLogTarget, check_logs_access};
 use crate::monitor_data::{MonitorInput, MonitorSubject, monitor_data};
+use crate::name_index::IndexSummary;
 use crate::namespace_picker::{NamespacePickerState, PickerAnchor};
 use crate::navigation::{NavigationCounts, issue_counts, sidebar};
 use crate::navigation_history::NavigationHistory;
@@ -4066,6 +4067,7 @@ impl AppShell {
             || self.pending_custom_launch.is_some()
             || (self.screen == Screen::Kind(ResourceKind::Crds) && live.is_counting_instances())
             || live.kind_counts().is_running()
+            || live.name_index.is_running()
             || session.is_issues_pending()
             || (matches!(self.screen, Screen::Kind(_)) && live.is_join_loading())
         {
@@ -4214,6 +4216,16 @@ impl AppShell {
         }
     }
 
+    /// Asks the open session to list the names of the palette-only kinds (spec 0056). The palette
+    /// calls it from a query of two or more characters; the session decides whether a run starts.
+    pub(crate) fn request_name_index(&self, cx: &mut Context<Self>) {
+        let Some(open) = &self.active_session else {
+            return;
+        };
+        open.session
+            .update(cx, |session, cx| session.request_name_index(cx));
+    }
+
     /// What the palette lists now, read from memory only: no list, watch, or request starts here.
     pub(crate) fn palette_snapshot(&self, query: &PaletteQuery<'_>, cx: &App) -> PaletteSnapshot {
         let sections = self.all_switcher_sections(cx);
@@ -4242,6 +4254,7 @@ impl AppShell {
                 // Only the cursor Deployment has revisions to offer, and only once its drawer
                 // has loaded them.
                 feeds: &feeds,
+                name_index: &live.name_index,
                 replica_sets: self
                     .selected
                     .as_ref()
@@ -4282,6 +4295,8 @@ impl AppShell {
                 screen: self.screen,
                 has_session: live.is_some(),
                 searched_feeds: feeds.iter().map(|feed| feed.kind).collect(),
+                name_index: live
+                    .map_or_else(IndexSummary::default, |live| live.name_index.summary()),
                 cluster: self.active_profile(cx).map(|profile| ActiveCluster {
                     environment: profile.environment.clone(),
                     name: profile.display_name.into(),

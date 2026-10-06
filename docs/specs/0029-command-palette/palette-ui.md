@@ -40,7 +40,7 @@ Each `CommandItem` uses `.label(label)` and `.child(..)` (custom content, so the
 ## Header and footer
 
 - Header (W9 note 2, always visible): right-aligned chips: active cluster with its 0024 `environment_badge` (theme env color) and display label; `ns: …` with the title-bar label rules (`namespaces_label`). No session → "No cluster".
-- Footer (W9 note 5): `:po resource kind` · `@ cluster` · `# namespace` · `> action`, then right-aligned `↑↓ select · Tab preview · Esc close` (`Tab preview` only while it applies), plus "+N more" when a cap cut a group (decision 17).
+- Footer (W9 note 5): `:po resource kind` · `@ cluster` · `# namespace` · `> action`, then right-aligned `↑↓ select · Tab preview · Esc close` (`Tab preview` only while it applies), plus "+N more" when a cap cut a group (decision 17). While the name index loads (0056 C3) the syntax hints give way to `Searching Services, Ingresses…`.
 - Empty: "No matches" plus the Resources hint from [entries.md](entries.md).
 
 ## Keys (0028 reserved keys, now bound)

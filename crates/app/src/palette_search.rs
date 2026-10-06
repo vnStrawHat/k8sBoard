@@ -21,6 +21,7 @@ use crate::fuzzy_score::{fuzzy_ranges, fuzzy_score};
 use crate::issue_feeds::IssueFeeds;
 use crate::keymap::{OpenKindPalette, OpenPalette, ShortcutGroup, shortcut_rows};
 use crate::kind_row::{KindObject, KindRow};
+use crate::name_index::{IndexSummary, NAME_INDEX_MIN_CHARS, NameIndex};
 use crate::navigation::{KindAvailability, kind_availability};
 use crate::resource_actions::{
     KeyAvailability, ResourceAction, RowAction, action_label, is_planned, key_availability_of,
@@ -250,6 +251,8 @@ pub(crate) struct PaletteSession<'a> {
     /// The condition feeds that are live and loaded, searched by name (spec 0056); none of them
     /// starts a request.
     pub(crate) feeds: &'a [FeedObjects<'a>],
+    /// The names the session listed for the palette (spec 0056); searched like a feed.
+    pub(crate) name_index: &'a NameIndex,
 }
 
 /// Everything the palette may show, borrowed from the shell. No session means no resources, no
@@ -426,7 +429,8 @@ enum Subject<'a> {
     Pod(&'a PodSummary),
     Node(&'a NodeSummary),
     Row(ResourceKind, &'a KindRow),
-    /// An object known by its name only: a condition feed object, no status, no action pairs.
+    /// An object known by its name only: a condition feed object or a name index entry, no status,
+    /// no action pairs.
     Named {
         kind: ResourceKind,
         namespace: Option<&'a str>,
@@ -616,11 +620,18 @@ fn object_tokens(tokens: &[&str]) -> Vec<bool> {
 }
 
 /// The visible explorer kind first (it is what the user is looking at), then pods, then nodes, then
-/// the objects of the live condition feeds that the scope includes. A feed of the visible kind is
-/// left out once that list has rows: they hold the same objects, with their status.
+/// the objects of the live condition feeds that the scope includes, then the name index. A feed or
+/// index list of the visible kind is left out once that list has rows: they hold the same objects,
+/// with their status. The index was listed for the session's scope, so it needs no scope filter.
 fn subjects<'a>(session: &PaletteSession<'a>) -> impl Iterator<Item = Subject<'a>> + use<'a> {
     // The slices are copied out, so the iterator borrows the lists and not the session value.
-    let (pods, nodes, scope, feeds) = (session.pods, session.nodes, session.scope, session.feeds);
+    let (pods, nodes, scope, feeds, name_index) = (
+        session.pods,
+        session.nodes,
+        session.scope,
+        session.feeds,
+        session.name_index,
+    );
     let shown_kind = session
         .kind_rows
         .filter(|(_, rows)| !rows.is_empty())
@@ -642,9 +653,18 @@ fn subjects<'a>(session: &PaletteSession<'a>) -> impl Iterator<Item = Subject<'a
                 })
             })
         });
+    let indexed = name_index
+        .ready_names()
+        .filter(move |(kind, _)| Some(*kind) != shown_kind)
+        .map(|(kind, object)| Subject::Named {
+            kind,
+            namespace: object.namespace.as_deref(),
+            name: &object.name,
+        });
     rows.chain(pods.iter().map(Subject::Pod))
         .chain(nodes.iter().map(Subject::Node))
         .chain(fed)
+        .chain(indexed)
 }
 
 /// The namespace and name a condition feed summary carries.
@@ -1077,19 +1097,33 @@ pub(crate) fn lists_resources(query: &PaletteQuery<'_>) -> bool {
     query.mode == PaletteMode::All && !query.text.is_empty()
 }
 
+/// Whether `query` starts the name index (spec 0056): `All` mode with at least two characters, so
+/// opening the palette, one character, and the `:` `#` `@` `>` modes list nothing.
+pub(crate) fn lists_name_index(query: &PaletteQuery<'_>) -> bool {
+    query.mode == PaletteMode::All && query.text.chars().count() >= NAME_INDEX_MIN_CHARS
+}
+
 /// What the list says when nothing matches: the group hint of decision 9, or why there is none.
-/// `searched_feeds` are the condition feeds that were live (`live_feed_objects`).
+/// `searched_feeds` are the condition feeds that were live (`live_feed_objects`); `index` is the
+/// state of the name index.
 pub(crate) fn empty_text(
     mode: PaletteMode,
     has_session: bool,
     screen: Screen,
     searched_feeds: &[ResourceKind],
+    index: &IndexSummary,
 ) -> String {
     if !has_session && matches!(mode, PaletteMode::All | PaletteMode::Namespaces) {
         return "No matches. Cluster not connected.".to_owned();
     }
     match mode {
-        PaletteMode::All => format!("No matches. {}", resources_hint(screen, searched_feeds)),
+        PaletteMode::All if !index.searching.is_empty() => {
+            format!("No matches yet. {}", searching_text(index))
+        }
+        PaletteMode::All => format!(
+            "No matches. {}",
+            resources_hint(screen, searched_feeds, index)
+        ),
         PaletteMode::Kinds => "No matching kind.".to_owned(),
         PaletteMode::Clusters => "No matching cluster.".to_owned(),
         PaletteMode::Namespaces => "No matching namespace.".to_owned(),
@@ -1097,22 +1131,52 @@ pub(crate) fn empty_text(
     }
 }
 
-/// Which lists the Resources group searched (decision 9): Pods, Nodes, the visible kind, then the
-/// live condition feeds. A feed that is loading or off is not named, for it was not searched.
-fn resources_hint(screen: Screen, searched_feeds: &[ResourceKind]) -> String {
+/// `Searching Services, Ingresses…`: the index kinds whose names are still loading. Also the
+/// footer text while they load.
+pub(crate) fn searching_text(index: &IndexSummary) -> String {
+    format!("Searching {}…", kind_labels(&index.searching))
+}
+
+fn kind_labels(kinds: &[ResourceKind]) -> String {
+    kinds
+        .iter()
+        .map(|kind| kind.label())
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// Which lists the Resources group searched (decision 9): Pods, Nodes, the visible kind, the live
+/// condition feeds, then the name index lists that loaded. A feed or list that is loading or off
+/// is not named, for it was not searched; a denied, failed, or cut list is said apart.
+fn resources_hint(screen: Screen, searched_feeds: &[ResourceKind], index: &IndexSummary) -> String {
     let visible = screen.kind();
     let mut searched = vec!["Pods", "Nodes"];
     searched.extend(visible.map(ResourceKind::label));
     searched.extend(
         searched_feeds
             .iter()
+            .chain(&index.searched)
             .filter(|kind| Some(**kind) != visible)
             .map(|kind| kind.label()),
     );
-    format!(
-        "Searched: {}. Type :kind for other kinds.",
-        searched.join(", ")
-    )
+    let mut parts = vec![format!("Searched: {}.", searched.join(", "))];
+    if !index.truncated.is_empty() {
+        parts.push(format!(
+            "{}: first 5,000 names.",
+            kind_labels(&index.truncated)
+        ));
+    }
+    if !index.not_permitted.is_empty() {
+        parts.push(format!(
+            "Not permitted: {}.",
+            kind_labels(&index.not_permitted)
+        ));
+    }
+    if !index.unavailable.is_empty() {
+        parts.push(format!("Unavailable: {}.", kind_labels(&index.unavailable)));
+    }
+    parts.push("Type :kind for other kinds.".to_owned());
+    parts.join(" ")
 }
 
 #[cfg(test)]

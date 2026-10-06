@@ -40,7 +40,7 @@ pub(crate) fn ranked(entries: Vec<PaletteEntry>, query: &PaletteQuery<'_>) -> Ve
 - `@` is a **single** switch through 0026; k8sBoard views one cluster at a time (0046, user decision 2026-10-03), so there is no multi-select.
 
 - No session (kubeconfig missing, connecting): only the commands and the screens are listed; Resources and namespaces show the group's empty text "Cluster not connected".
-- The Resources group says, under its heading when the text matches nothing, "Searched: Pods, Nodes{, visible kind}{, live condition feeds}. Type :kind for other kinds." (decision 9, widened by 0056 C1: the Issues condition feeds that are live and loaded are searched too, scope-filtered, with no new request).
+- The Resources group says, under its heading when the text matches nothing, "Searched: Pods, Nodes{, visible kind}{, live condition feeds}. Type :kind for other kinds." (decision 9, widened by 0056 C1: the Issues condition feeds that are live and loaded are searched too, scope-filtered, with no new request). 0056 C3 adds the name index (Services, Ingresses, StatefulSets, CronJobs, NetworkPolicies): the lists that loaded are named too, then `Services: first 5,000 names.`, `Not permitted: …`, `Unavailable: …`; while a run loads and nothing matches, the text is "No matches yet. Searching …".
 
 ## Running an entry (on confirm)
 
@@ -73,6 +73,8 @@ impl RowAction { pub(crate) fn key_action(self) -> Box<dyn Action>; }   // 0032 
 - When 0030–0036 enable an action, its entry is `Enabled` and shows the pill "needs confirm" when the 0030 confirmation rule applies to it (the rule is 0030's, not 0029's). 0029 adds no confirmation dialog.
 
 ## Data rules (C1, read-only, no new list calls)
+
+0056 C3 is the one exception: a query of two or more characters in `All` mode asks the session for the name index (`ClusterSession::request_name_index`, at most one run per 120 s, failed runs included). `palette_entries` stays pure; it only reads the finished lists. Opening the palette, `:` `#` `@` `>` modes, and one character start nothing.
 
 - An entry holds only kind, namespace, name, and a `StatusLabel`. It never reads `KindRow.cells`, `sections`, `labels`, `event`, `object`, Env values, or YAML.
 - Note (not an AC): a Secret row (0016) will therefore show its name and status label only; C1 summaries hold no values anyway.

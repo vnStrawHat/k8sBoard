@@ -90,6 +90,7 @@ mod monitor_data;
 mod monitor_notices;
 mod monitor_source;
 mod monitor_tab;
+mod name_index;
 mod namespace_picker;
 mod namespace_rows;
 mod navigation;
