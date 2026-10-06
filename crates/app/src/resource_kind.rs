@@ -622,11 +622,13 @@ static PERSISTENT_VOLUMES: KindSpec = KindSpec {
     },
     columns: &[
         // Status and Claim lead: with a drawer open the table is cut at the drawer, and they matter
-        // more than the access mode and the reclaim policy.
-        column("Status", 110., Align::Left),
-        column("Claim", 240., Align::Left).grows(2),
+        // more than the access mode and the reclaim policy. At 1320 px the drawer leaves 550 px, so
+        // the select box, Name, Status, and Claim add up to less than that, and the width this takes
+        // from Status and Claim goes to Class: the table has no spare width there for Name to take.
+        column("Status", 90., Align::Left),
+        column("Claim", 220., Align::Left).grows(2),
         column("Capacity", 90., Align::Right),
-        column("Class", 150., Align::Left).grows(1),
+        column("Class", 190., Align::Left).grows(1),
         column("Access", 90., Align::Left),
         column("Reclaim", 90., Align::Left),
         AGE_COLUMN,

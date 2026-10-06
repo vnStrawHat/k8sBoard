@@ -920,6 +920,21 @@ mod tests {
     }
 
     #[test]
+    fn pv_claim_is_whole_left_of_a_half_width_drawer_at_1320_px() {
+        let mut volumes = delegate(Some(ResourceKind::PersistentVolumes));
+        // A 1320 px window less the 220 px sidebar; the standard drawer covers its right half.
+        volumes.fit_width(px(1100.));
+        let mut right_edge = px(0.);
+        for column in &volumes.layout.columns.columns {
+            right_edge += column.width;
+            if column.name.as_ref() == "Claim" {
+                break;
+            }
+        }
+        assert!(right_edge <= px(550.), "{right_edge:?}");
+    }
+
+    #[test]
     fn fit_width_does_nothing_without_a_kind() {
         assert!(!delegate(None).fit_width(px(1400.)));
     }
