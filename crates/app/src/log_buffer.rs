@@ -110,6 +110,9 @@ pub(crate) struct LogBuffer {
     /// The level of the last pushed line per source, for indented continuation lines.
     last_levels: Vec<Option<LogLevel>>,
     revision: u64,
+    /// The earliest timestamp pushed since the last clear; it does not move forward when that
+    /// line is evicted, so the date column never shrinks under the reader.
+    oldest_timestamp: Option<jiff::Timestamp>,
 }
 
 /// How the visible list changed, applied to the scroller as `splice(0..removed_visible, 0)`
@@ -131,6 +134,7 @@ impl LogBuffer {
             visible: None,
             last_levels: Vec::new(),
             revision: 0,
+            oldest_timestamp: None,
         }
     }
 
@@ -150,6 +154,10 @@ impl LogBuffer {
                 kind: sourced.kind,
                 level,
                 line: sourced.line,
+            };
+            self.oldest_timestamp = match (self.oldest_timestamp, line.line.timestamp) {
+                (Some(oldest), Some(time)) => Some(oldest.min(time)),
+                (oldest, time) => oldest.or(time),
             };
             self.bytes += line.line.text.len();
             let is_visible = self.view.shows(&line);
@@ -226,6 +234,7 @@ impl LogBuffer {
         self.first_seq = 0;
         self.dropped = 0;
         self.last_levels.clear();
+        self.oldest_timestamp = None;
         if let Some(visible) = &mut self.visible {
             visible.clear();
         }
@@ -298,6 +307,11 @@ impl LogBuffer {
         self.lines.len()
     }
 
+    /// The earliest timestamp pushed since the last clear.
+    pub(crate) fn oldest_timestamp(&self) -> Option<jiff::Timestamp> {
+        self.oldest_timestamp
+    }
+
     pub(crate) fn has_dropped(&self) -> bool {
         self.dropped > 0
     }
@@ -350,6 +364,27 @@ pub(crate) fn format_log_time(timestamp: jiff::Timestamp, zone: &TimeZone) -> St
         .to_zoned(zone.clone())
         .strftime("%H:%M:%S%.3f")
         .to_string()
+}
+
+/// `MM-DD ` for a time that is not on `today` in `zone`, so a line from another day does not read
+/// as a line from now.
+pub(crate) fn log_date_prefix(
+    timestamp: jiff::Timestamp,
+    zone: &TimeZone,
+    today: jiff::civil::Date,
+) -> Option<String> {
+    let zoned = timestamp.to_zoned(zone.clone());
+    (zoned.date() != today).then(|| zoned.strftime("%m-%d ").to_string())
+}
+
+/// Whether the oldest kept line is from another day than `today`; the time column then reserves
+/// room for the date on every row, so the times stay in line.
+pub(crate) fn spans_other_day(
+    oldest: Option<jiff::Timestamp>,
+    zone: &TimeZone,
+    today: jiff::civil::Date,
+) -> bool {
+    oldest.is_some_and(|oldest| log_date_prefix(oldest, zone, today).is_some())
 }
 
 /// The zone's IANA name, such as `Asia/Ho_Chi_Minh`; a zone without one shows its offset now, such

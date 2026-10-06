@@ -8,7 +8,7 @@ use gpui_kit::{
 use jiff::tz::TimeZone;
 
 use crate::line_matcher::LineMatcher;
-use crate::log_buffer::{BufferedLine, LineKind, format_log_time};
+use crate::log_buffer::{BufferedLine, LineKind, format_log_time, log_date_prefix};
 use crate::log_json::{JsonLine, json_line};
 use crate::log_level::LogLevel;
 use crate::status_tone::{StatusTone, tone_color};
@@ -16,6 +16,8 @@ use crate::status_tone::{StatusTone, tone_color};
 /// 13 characters of the mono `text_xs` font (0.75 rem at about 0.6 em per character).
 const TIME_COLUMN_WIDTH: Rems = rems(5.85);
 /// `ERROR` plus a little air.
+/// `MM-DD ` is six characters of the same font.
+const DATE_PREFIX_WIDTH: Rems = rems(2.7);
 const LEVEL_COLUMN_WIDTH: Rems = rems(2.9);
 /// `x2k4q/container` fits for the usual names; longer ones are cut.
 const PREFIX_COLUMN_WIDTH: Rems = rems(9.);
@@ -32,6 +34,10 @@ pub(crate) struct RowStyle<'a> {
     pub(crate) shows_timestamps: bool,
     /// The zone the timestamp column reads in.
     pub(crate) time_zone: &'a TimeZone,
+    /// The date in `time_zone`; a line from another day carries its `MM-DD`.
+    pub(crate) today: jiff::civil::Date,
+    /// Whether the time column has room for the date, so the times of every row stay in line.
+    pub(crate) reserves_date: bool,
     pub(crate) wraps_lines: bool,
     pub(crate) shows_json: bool,
     pub(crate) matcher: Option<&'a LineMatcher>,
@@ -75,8 +81,17 @@ pub(crate) fn log_row(line: &BufferedLine, style: &RowStyle, cx: &App) -> AnyEle
     let time = line
         .line
         .timestamp
-        .map(|timestamp| format_log_time(timestamp, style.time_zone))
+        .map(|timestamp| {
+            let date = log_date_prefix(timestamp, style.time_zone, style.today);
+            let clock = format_log_time(timestamp, style.time_zone);
+            format!("{}{clock}", date.unwrap_or_default())
+        })
         .unwrap_or_default();
+    let time_width = if style.reserves_date {
+        TIME_COLUMN_WIDTH + DATE_PREFIX_WIDTH
+    } else {
+        TIME_COLUMN_WIDTH
+    };
     let text_column = v_flex()
         .flex_1()
         .min_w_0()
@@ -103,8 +118,9 @@ pub(crate) fn log_row(line: &BufferedLine, style: &RowStyle, cx: &App) -> AnyEle
         .when(style.shows_timestamps, |row| {
             row.child(
                 div()
-                    .w(TIME_COLUMN_WIDTH)
+                    .w(time_width)
                     .flex_shrink_0()
+                    .text_right()
                     .text_color(theme.muted_foreground)
                     .child(time),
             )

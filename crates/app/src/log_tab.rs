@@ -30,7 +30,8 @@ use crate::file_export::{ExportState, export_file_name, start_export};
 use crate::kind_row::PodOwner;
 use crate::line_matcher::{FilterMode, InvalidRegex, LineMatcher};
 use crate::log_buffer::{
-    LineKind, LineTime, LineView, LogBuffer, SourceId, SourcedLine, TimeWindow, zone_label,
+    LineKind, LineTime, LineView, LogBuffer, SourceId, SourcedLine, TimeWindow, spans_other_day,
+    zone_label,
 };
 use crate::log_legend::{LegendChip, legend_row, pod_color};
 use crate::log_level::{LevelSet, LogLevel};
@@ -1407,9 +1408,14 @@ impl LogTab {
                 text: stream.prefix.clone(),
                 color: pod_color(stream.color_slot, cx),
             });
+        let today = jiff::Timestamp::now()
+            .to_zoned(self.time_zone.clone())
+            .date();
         let style = RowStyle {
             shows_timestamps: self.shows_timestamps,
             time_zone: &self.time_zone,
+            today,
+            reserves_date: spans_other_day(self.buffer.oldest_timestamp(), &self.time_zone, today),
             wraps_lines: self.wraps_lines,
             shows_json: self.shows_json,
             matcher: self.buffer.view().matcher.as_ref(),

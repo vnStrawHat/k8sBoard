@@ -526,3 +526,51 @@ fn zone_label_names_the_zone_or_its_offset() {
         "UTC-05:00"
     );
 }
+
+#[test]
+fn a_line_from_today_has_no_date_prefix_and_another_day_has() {
+    let zone = TimeZone::UTC;
+    let today = jiff::civil::date(2026, 10, 6);
+    let now: jiff::Timestamp = "2026-10-06T09:14:52.541Z".parse().expect("valid");
+    let earlier: jiff::Timestamp = "2026-09-29T09:14:52.541Z".parse().expect("valid");
+    assert_eq!(log_date_prefix(now, &zone, today), None);
+    assert_eq!(
+        log_date_prefix(earlier, &zone, today).as_deref(),
+        Some("09-29 ")
+    );
+}
+
+#[test]
+fn the_date_is_read_on_the_calendar_of_the_zone() {
+    let timestamp: jiff::Timestamp = "2026-10-05T20:00:00Z".parse().expect("valid");
+    let plus_seven = TimeZone::fixed(jiff::tz::offset(7));
+    let today = jiff::civil::date(2026, 10, 6);
+    assert_eq!(log_date_prefix(timestamp, &plus_seven, today), None);
+    assert_eq!(
+        log_date_prefix(timestamp, &TimeZone::UTC, today).as_deref(),
+        Some("10-05 ")
+    );
+}
+
+#[test]
+fn the_date_room_is_reserved_when_the_oldest_line_is_from_another_day() {
+    let zone = TimeZone::UTC;
+    let today = jiff::civil::date(2026, 10, 6);
+    let stamped = |time: &str| SourcedLine {
+        source: SourceId(0),
+        kind: LineKind::Log,
+        line: LogLine {
+            timestamp: Some(time.parse().expect("valid")),
+            text: "x".to_owned(),
+        },
+    };
+    let mut buffer = LogBuffer::new();
+    assert!(!spans_other_day(buffer.oldest_timestamp(), &zone, today));
+    buffer.push(vec![stamped("2026-10-06T08:00:00Z")]);
+    assert!(!spans_other_day(buffer.oldest_timestamp(), &zone, today));
+    // A late joiner's tail can be older than what is already kept.
+    buffer.push(vec![stamped("2026-10-05T23:00:00Z")]);
+    assert!(spans_other_day(buffer.oldest_timestamp(), &zone, today));
+    buffer.clear();
+    assert!(!spans_other_day(buffer.oldest_timestamp(), &zone, today));
+}
