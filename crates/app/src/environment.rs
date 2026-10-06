@@ -151,6 +151,11 @@ impl Environment {
         }
     }
 
+    /// Whether the environment follows the Production rules; a custom one with that tier counts.
+    pub(crate) fn is_production(&self) -> bool {
+        self.tier() == EnvironmentTier::Production
+    }
+
     pub(crate) fn name(&self) -> &str {
         match self {
             Self::BuiltIn(tier) => tier.name(),
@@ -285,6 +290,12 @@ fn tokens(lowered: &str) -> Vec<&str> {
 /// The color of the environment badge.
 pub(crate) fn environment_color(environment: &Environment, cx: &App) -> Hsla {
     palette_color(environment.color(), cx)
+}
+
+/// `uat-monitor · PROD`: the cluster and its environment, for the places that cannot show the
+/// badge (window titles, tooltips).
+pub(crate) fn cluster_environment_label(display_name: &str, environment: &Environment) -> String {
+    format!("{display_name} · {}", environment.badge())
 }
 
 /// A filled badge with light text on the environment color.

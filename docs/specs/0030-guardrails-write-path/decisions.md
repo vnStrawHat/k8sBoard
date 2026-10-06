@@ -40,3 +40,4 @@
 | 34 | (amendment, 0032) `GuardedKind::Batch(BatchPlan { items, skipped, extras: BatchExtras })` is the one bulk mechanism: ≤ 50 items, sequential dry-runs, all must pass, each commit through `checked_write` | one bulk path for 0032, 0033, 0034 |
 | 35 | (amendment) `action_availability(action, guard)` stays two-argument; `ResourceAction::gate()` reads the kind carried by kind-dependent variants (`Scale(kind)`, `RestartRollout(kind)`) | per-resource SSAR without touching every caller (0036 unchanged) |
 | 36 | (amendment, 0034) A 429 refusal is not audited; a drain writes one summary line per node (outcomes `drained`, `stuck`, `cancelled`, `stopped`) | nothing changed on a refusal; retries would flood the log |
+| 37 | (J3) The environment is also on the status bar (badge + name), a 2 px danger top border on Production, the pop-out window title, and dock tab tooltips | PROD must be visible on every screen, not only in the title bar |

@@ -6,6 +6,7 @@ use gpui_kit::component::WindowExt as _;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
 use gpui_kit::component::notification::Notification;
+use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{ActiveTheme as _, Disableable as _, Icon, Sizable as _, h_flex, v_flex};
 use gpui_kit::{
     AnyElement, AnyWindowHandle, App, AppContext as _, Context, Entity, InteractiveElement as _,
@@ -19,7 +20,7 @@ use crate::cluster_session::ClusterSession;
 use crate::drain_tab::DrainTab;
 use crate::log_tab::{LogLayout, LogTab, LogTabEvent};
 use crate::log_target::{ContainerChoice, LogTarget, NoLogTarget};
-use crate::log_window::open_log_window;
+use crate::log_window::{log_window_title, open_log_window};
 use crate::resource_actions::{RowAction, disabled_menu_item};
 use crate::row_context::RowContext;
 use crate::shell_tab::{AttachGrant, ShellGrant, ShellKind, ShellTab, ShellTarget};
@@ -168,6 +169,9 @@ pub(crate) struct Dock {
     mode: DockMode,
     /// The "+ ▾" menu reads the selection and opens tabs through the shell.
     shell: WeakEntity<AppShell>,
+    /// `uat-monitor · PROD`, the open cluster. The dock never reads the shell for it: a pop-out can
+    /// start inside a shell update. `None` before a session opens.
+    environment_label: Option<SharedString>,
 }
 
 impl Dock {
@@ -178,7 +182,13 @@ impl Dock {
             active: None,
             mode: DockMode::Normal,
             shell,
+            environment_label: None,
         }
+    }
+
+    pub(crate) fn set_environment_label(&mut self, label: String, cx: &mut Context<Self>) {
+        self.environment_label = Some(label.into());
+        cx.notify();
     }
 
     /// Activates the target's tab of that cluster if one exists, else adds one. Minimized becomes
@@ -272,7 +282,7 @@ impl Dock {
         let Some(taken) = self.take_tab(index, cx) else {
             return;
         };
-        let title = tab.read(cx).label();
+        let title = log_window_title(&tab.read(cx).label(), self.environment_label.as_deref());
         match open_log_window(tab.clone(), title, cx) {
             Some(handle) => self.popped.push(PoppedTab {
                 tab: tab.downgrade(),
@@ -776,6 +786,7 @@ impl Dock {
         let theme = cx.theme();
         let title = tab.title(cx);
         let is_active = self.active == Some(index);
+        let tooltip = tab_tooltip(&title, self.environment_label.as_deref());
         h_flex()
             .h_full()
             .items_center()
@@ -805,6 +816,7 @@ impl Dock {
                     .min_w_0()
                     .cursor_pointer()
                     .on_click(cx.listener(move |dock, _, _, cx| dock.activate(index, cx)))
+                    .tooltip(move |window, cx| Tooltip::new(tooltip.clone()).build(window, cx))
                     .child(Icon::new(tab.icon()).size_3())
                     .child(
                         div()
@@ -952,9 +964,27 @@ fn active_after_close(active: usize, closed: usize, remaining: usize) -> Option<
     Some(closed.min(remaining - 1))
 }
 
+/// The hover text of a tab: its full title, then the cluster and environment so a Production tab
+/// is told apart from a Staging one.
+fn tab_tooltip(title: &str, environment_label: Option<&str>) -> SharedString {
+    match environment_label {
+        Some(label) => format!("{title}\n{label}").into(),
+        None => title.to_owned().into(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_tab_tooltip_names_the_cluster_and_environment() {
+        assert_eq!(
+            tab_tooltip("shell · api-0/api", Some("uat-monitor · PROD")),
+            "shell · api-0/api\nuat-monitor · PROD"
+        );
+        assert_eq!(tab_tooltip("shell · api-0/api", None), "shell · api-0/api");
+    }
 
     #[test]
     fn dock_max_height_is_sixty_percent_of_workspace() {

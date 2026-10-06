@@ -20,7 +20,7 @@ pub(crate) struct LogWindow {
 }
 
 /// Opens a window for `tab`; the tab moves its window-bound parts there and uses the Full layout.
-/// The window is titled `title` (taskbar, Alt Tab) with no cluster suffix. `None`, with a log
+/// The window is titled `title` (taskbar, Alt Tab); see `log_window_title`. `None`, with a log
 /// line, when the window could not open.
 pub(crate) fn open_log_window(
     tab: Entity<LogTab>,
@@ -44,6 +44,15 @@ pub(crate) fn open_log_window(
             tracing::error!(%error, "failed to open a log window");
             None
         }
+    }
+}
+
+/// The tab label, then the cluster and environment (`uat-monitor · PROD`) when known: the window
+/// has no title bar badge, so the environment must be in its name.
+pub(crate) fn log_window_title(tab_label: &str, environment_label: Option<&str>) -> String {
+    match environment_label {
+        Some(label) => format!("{tab_label} — {label}"),
+        None => tab_label.to_owned(),
     }
 }
 
@@ -92,6 +101,15 @@ mod tests {
     use gpui_kit::TestAppContext;
 
     use super::*;
+
+    #[test]
+    fn the_window_title_carries_the_cluster_and_environment() {
+        assert_eq!(
+            log_window_title("api-0/api", Some("uat-monitor · PROD")),
+            "api-0/api — uat-monitor · PROD"
+        );
+        assert_eq!(log_window_title("api-0/api", None), "api-0/api");
+    }
 
     #[gpui_kit::test]
     fn the_os_window_is_named_after_the_tab(cx: &mut TestAppContext) {

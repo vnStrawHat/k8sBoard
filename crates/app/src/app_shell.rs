@@ -14,7 +14,7 @@ use gpui_kit::component::{ActiveTheme as _, WindowExt as _, h_flex, v_flex};
 use gpui_kit::{
     App, AppContext as _, Context, Div, Entity, FocusHandle, Focusable as _,
     InteractiveElement as _, IntoElement, ParentElement as _, Point, Render, SharedString,
-    Styled as _, Subscription, Task, Window, px,
+    Styled as _, Subscription, Task, Window, prelude::FluentBuilder as _, px,
 };
 
 use crate::active_session::{ActiveConnection, ActiveSession};
@@ -46,6 +46,7 @@ use crate::drawer::{
     ContainerTab, DRAWER_SUBJECT_DELAY, DrawerSize, DrawerState, DrawerTab, MonitorCache,
     MonitorKey, MonitorRange, MonitorScope, MonitorState, drawer_tabs, shown_tab,
 };
+use crate::environment::cluster_environment_label;
 use crate::file_export::{ExportState, export_file_name, start_export};
 use crate::filter_bar::ToolkitState;
 use crate::helm_release_view::{
@@ -1163,6 +1164,10 @@ impl AppShell {
             cx.notify();
             return;
         };
+        let label =
+            cluster_environment_label(&open.profile.display_name, &open.profile.environment);
+        self.dock
+            .update(cx, |dock, cx| dock.set_environment_label(label, cx));
         self.active_session = Some(open);
         self.sync_view_sessions(cx);
     }
@@ -4758,6 +4763,10 @@ impl Render for AppShell {
         let theme = cx.theme();
         let counts = self.navigation_counts(cx);
         let is_kubeconfig_loading = self.catalog.read(cx).is_loading();
+        // A 2 px danger edge on Production only: the title bar can scroll or be covered, this cannot.
+        let is_production = self
+            .active_profile(cx)
+            .is_some_and(|profile| profile.environment.is_production());
         let root = v_flex()
             .size_full()
             .track_focus(&self.focus_handle)
@@ -4791,6 +4800,9 @@ impl Render for AppShell {
         let root = on_switch_to::<SwitchToCluster8>(root, 8, cx);
         let root = on_switch_to::<SwitchToCluster9>(root, 9, cx);
         root.bg(theme.background)
+            .when(is_production, |root| {
+                root.border_t_2().border_color(theme.danger)
+            })
             .text_color(theme.foreground)
             .child(title_bar(self, window.viewport_size().width, cx))
             .children(self.reset_banner.as_deref().map(|text| {

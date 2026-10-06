@@ -8,7 +8,9 @@ use gpui_kit::{
 };
 
 use crate::app_shell::{AppShell, Screen};
+use crate::cluster_registry::ClusterProfile;
 use crate::cluster_session::{ClusterSession, SessionPhase, latency_millis};
+use crate::environment::environment_badge;
 use crate::status_tooltip::{Section, table_tooltip};
 use crate::watched_kinds::{WatchedKind, watched_row};
 
@@ -75,7 +77,13 @@ pub(crate) fn status_bar(
     let user = session
         .and_then(ClusterSession::user)
         .map(|user| format!("user: {user}"));
-    let mut items = vec![watch_slot(text, dot, watched)];
+    // First, so a Production cluster is named even when the title bar is scrolled or covered.
+    let mut items: Vec<AnyElement> = shell
+        .active_profile(cx)
+        .map(|profile| environment_slot(&profile, cx))
+        .into_iter()
+        .collect();
+    items.push(watch_slot(text, dot, watched));
     items.extend(version.map(IntoElement::into_any_element));
     items.extend(user.map(IntoElement::into_any_element));
     let forwards = shell.running_forward_count(cx);
@@ -87,6 +95,17 @@ pub(crate) fn status_bar(
         bar = bar.left(item);
     }
     bar.right(shell.usage().clone())
+}
+
+/// The environment badge of the title bar, then the cluster's display name.
+fn environment_slot(profile: &ClusterProfile, cx: &App) -> AnyElement {
+    h_flex()
+        .id("status-environment")
+        .gap_1p5()
+        .items_center()
+        .child(environment_badge(&profile.environment, cx))
+        .child(profile.display_name.clone())
+        .into_any_element()
 }
 
 /// `items` with a vertical rule between each pair.

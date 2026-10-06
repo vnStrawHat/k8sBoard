@@ -277,3 +277,21 @@ fn palette_lists_seven_colors_with_names() {
         ["Red", "Amber", "Green", "Blue", "Teal", "Purple", "Gray"]
     );
 }
+
+#[test]
+fn cluster_environment_label_pairs_the_name_with_the_badge() {
+    assert_eq!(
+        cluster_environment_label("uat-monitor", &Environment::PRODUCTION),
+        "uat-monitor · PROD"
+    );
+    let qa = Environment::Custom(custom("qa", Staging));
+    assert_eq!(cluster_environment_label("eu-1", &qa), "eu-1 · QA");
+}
+
+#[test]
+fn production_follows_the_tier() {
+    assert!(Environment::PRODUCTION.is_production());
+    assert!(Environment::Custom(custom("DR", Production)).is_production());
+    assert!(!Environment::STAGING.is_production());
+    assert!(!Environment::Custom(custom("QA", Staging)).is_production());
+}

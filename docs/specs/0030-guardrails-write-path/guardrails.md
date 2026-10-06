@@ -95,3 +95,7 @@ impl AppShell { pub(crate) fn guard_for(&self, cluster: &ClusterRef, cx: &App) -
 
 - `title_bar.rs` `read_only_badge` becomes a ghost button: `Locked` → lock icon + `Read-only`; `Unlocked` → `IconName::LockOpen` + `Writable` (UX batch 5c: the word matches Settings; the tooltip reads `Read-only · click to unlock` or `Writes allowed on {cluster} · click to lock`, with the key hint added by the tooltip). Border: 1 px dashed in `environment_color` (W1 `.lock`); without a session the badge is hidden. Click and `ToggleReadOnly` run `AppShell::toggle_write_lock`.
 - 0028 `keymap.rs`: bind `secondary-shift-r` → `ToggleReadOnly` in `WINDOW`; drop it from `RESERVED_KEYS`; sheet row "Toggle read-only" (General). Tooltip via `tooltip_with_action`.
+
+## Environment on every screen (J3, 2026-10-06)
+
+The title-bar badge is not the only place the environment shows: the status bar starts with the same badge (`environment_badge`) and the cluster display name; the main window has a 2 px top border in the danger token when the environment's tier is Production (`Environment::is_production`); the pop-out log window is titled `{tab} — {cluster} · {ENV}`, and dock tab tooltips read `{title}` then `{cluster} · {ENV}` (`cluster_environment_label`, set on the dock when a session opens).
