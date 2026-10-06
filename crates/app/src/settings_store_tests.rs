@@ -279,3 +279,20 @@ fn notice_texts_name_the_cause() {
         texts[4]
     );
 }
+
+#[test]
+fn only_a_reset_has_a_banner() {
+    let backup = PathBuf::from("settings.json.bak");
+    assert_eq!(
+        SettingsNotice::Reset { backup }.banner_text().as_deref(),
+        Some(
+            "Settings were reset; environments and locks are back to defaults. \
+             Old file: settings.json.bak"
+        )
+    );
+    assert_eq!(SettingsNotice::NoConfigDir.banner_text(), None);
+    assert_eq!(
+        SettingsNotice::NewerVersion { version: 2 }.banner_text(),
+        None
+    );
+}

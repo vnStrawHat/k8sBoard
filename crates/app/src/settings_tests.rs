@@ -386,6 +386,26 @@ fn flush_writes_the_last_snapshot(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn only_a_reset_marks_the_run_as_reset(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+        assert!(!AppSettings::was_reset(cx), "no global yet");
+        let loaded = |notice| LoadedSettings {
+            settings: Settings::default(),
+            writes: WriteMode::Disabled,
+            notice,
+        };
+        AppSettings::install(loaded(Some(SettingsNotice::NoConfigDir)), cx);
+        assert!(!AppSettings::was_reset(cx));
+        let backup = std::path::PathBuf::from("settings.json.bak");
+        AppSettings::install(loaded(Some(SettingsNotice::Reset { backup })), cx);
+        assert!(AppSettings::was_reset(cx));
+        // Dismissing the notice does not unlock later sessions.
+        AppSettings::dismiss_notice(cx);
+        assert!(AppSettings::was_reset(cx));
+    });
+}
+
+#[gpui_kit::test]
 fn dismiss_clears_the_notice(cx: &mut TestAppContext) {
     cx.update(|cx| {
         AppSettings::install(

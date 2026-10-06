@@ -103,6 +103,8 @@ use crate::secret_values::{
     pending_action, value_access, values_subject,
 };
 use crate::settings::{AppSettings, TablePrefs, screen_key};
+use crate::settings_reset_banner::reset_banner;
+use crate::settings_store::SettingsNotice;
 use crate::shortcut_sheet::open_shortcut_sheet;
 use crate::status_bar::status_bar;
 use crate::table_filter::{
@@ -416,6 +418,8 @@ pub(crate) struct AppShell {
     switch_notice: Option<String>,
     /// Why the last audit line could not be written; shown by the title-bar warning button.
     write_notice: Option<String>,
+    /// The text of the banner under the title bar after a settings reset; kept until dismissed.
+    reset_banner: Option<String>,
     /// The open value popover (Scale), floating over the bottom of the workspace. It belongs to the
     /// row under the cursor and closes when the cursor leaves it.
     value_popover: Option<Entity<ValuePopover>>,
@@ -726,6 +730,7 @@ impl AppShell {
             kind_cache: CustomKindCache::default(),
             switch_notice: None,
             write_notice: None,
+            reset_banner: AppSettings::notice(cx).and_then(SettingsNotice::banner_text),
             value_popover: None,
             running_batches: HashSet::new(),
             delete_start: None,
@@ -4788,6 +4793,16 @@ impl Render for AppShell {
         root.bg(theme.background)
             .text_color(theme.foreground)
             .child(title_bar(self, window.viewport_size().width, cx))
+            .children(self.reset_banner.as_deref().map(|text| {
+                reset_banner(
+                    text,
+                    cx,
+                    cx.listener(|shell, _, _, cx| {
+                        shell.reset_banner = None;
+                        cx.notify();
+                    }),
+                )
+            }))
             .child(
                 h_flex()
                     .flex_1()

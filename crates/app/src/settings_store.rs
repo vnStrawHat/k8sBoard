@@ -68,6 +68,20 @@ pub(crate) enum SettingsNotice {
     WriteFailed { path: PathBuf, kind: io::ErrorKind },
 }
 
+impl SettingsNotice {
+    /// The text of the persistent banner under the title bar; only a reset has one, because it
+    /// silently drops the environments and locks the user set.
+    pub(crate) fn banner_text(&self) -> Option<String> {
+        let Self::Reset { backup } = self else {
+            return None;
+        };
+        Some(format!(
+            "Settings were reset; environments and locks are back to defaults. Old file: {}",
+            backup.display()
+        ))
+    }
+}
+
 impl fmt::Display for SettingsNotice {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {

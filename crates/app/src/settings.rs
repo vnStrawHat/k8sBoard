@@ -412,6 +412,9 @@ pub(crate) struct AppSettings {
     last_sent: Vec<u8>,
     generation: u64,
     notice: Option<SettingsNotice>,
+    /// Set when the file was unparsable and replaced by defaults: every session opens Locked for
+    /// the rest of the run, so a reset never downgrades a Production cluster.
+    was_reset: bool,
     _quit_flush: Option<Subscription>,
 }
 
@@ -432,6 +435,7 @@ impl AppSettings {
             writer: None,
             last_sent,
             generation: 0,
+            was_reset: matches!(loaded.notice, Some(SettingsNotice::Reset { .. })),
             notice: loaded.notice,
             _quit_flush: None,
         };
@@ -488,6 +492,11 @@ impl AppSettings {
 
     pub(crate) fn notice(cx: &App) -> Option<&SettingsNotice> {
         cx.global::<Self>().notice.as_ref()
+    }
+
+    /// Whether this run started from a reset settings file; false without a global.
+    pub(crate) fn was_reset(cx: &App) -> bool {
+        cx.try_global::<Self>().is_some_and(|app| app.was_reset)
     }
 
     pub(crate) fn dismiss_notice(cx: &mut App) {

@@ -7,11 +7,12 @@
 ```rust
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum WriteLock { Locked, Unlocked }
-impl WriteLock { pub(crate) fn at_open(profile: &ClusterProfile) -> Self; } // profile.read_only (0025 resolver)
+impl WriteLock { pub(crate) fn at_open(profile: &ClusterProfile, settings_were_reset: bool) -> Self; } // profile.read_only (0025 resolver), or Locked after a settings reset
 ```
 
 - `ClusterSession` holds `lock: WriteLock`, set by `at_open` when the session starts (and on switch); a reconnect keeps it. 0027 has one per session.
 - `profile.read_only` = `entry.read_only.unwrap_or(environment == Production)` (0024 decision 27, 0025 decision 17). The W2 switch "Open as read-only" is that stored default; toggling the lock in the title bar is **session-only** and never writes `settings.json`.
+- **Settings reset (J2, 2026-10-06):** when `settings.json` was unparsable and renamed `.bak` (0024 decision 6), `AppSettings::was_reset` is true for the rest of the run and `at_open` returns `Locked` for every session whatever its tier, because the reset also forgot which clusters were Production. The main window shows a banner under the title bar until dismissed (not persisted): `Settings were reset; environments and locks are back to defaults. Old file: <path>` with a Dismiss button.
 - **Locking** is immediate. **Unlocking** runs `confirm_step(guard.confirm, Change, display_name)` (write-flow.md dialog, title `Unlock {cluster} for changes?`, no dry-run). Lock and unlock each append an audit line from step 3 (audit-log.md).
 - Enforcement point: `write_flow.rs` re-reads the lock right before every commit (write-flow.md). The gate below only decides what the UI offers.
 

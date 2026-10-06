@@ -136,6 +136,7 @@ mod secret_clipboard;
 mod secret_rows;
 mod secret_values;
 mod settings;
+mod settings_reset_banner;
 mod settings_store;
 mod settings_window;
 mod shell_tab;

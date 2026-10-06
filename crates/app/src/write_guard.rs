@@ -19,9 +19,10 @@ pub(crate) enum WriteLock {
 
 impl WriteLock {
     /// The state a session opens in: `profile.read_only`, which is on for Production unless the
-    /// cluster's entry says otherwise.
-    pub(crate) fn at_open(profile: &ClusterProfile) -> Self {
-        if profile.read_only {
+    /// cluster's entry says otherwise. After a settings reset every session opens Locked, because
+    /// the reset also forgot which clusters were Production.
+    pub(crate) fn at_open(profile: &ClusterProfile, settings_were_reset: bool) -> Self {
+        if profile.read_only || settings_were_reset {
             Self::Locked
         } else {
             Self::Unlocked

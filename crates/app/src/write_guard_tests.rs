@@ -90,15 +90,23 @@ fn confirm_mode_serializes_kebab_case() {
 #[test]
 fn lock_at_open_follows_the_profile() {
     assert_eq!(
-        WriteLock::at_open(&profile(Environment::PRODUCTION, true)),
+        WriteLock::at_open(&profile(Environment::PRODUCTION, true), false),
         WriteLock::Locked
     );
     assert_eq!(
-        WriteLock::at_open(&profile(Environment::PRODUCTION, false)),
+        WriteLock::at_open(&profile(Environment::PRODUCTION, false), false),
         WriteLock::Unlocked
     );
     assert_eq!(
-        WriteLock::at_open(&profile(Environment::DEVELOPMENT, true)),
+        WriteLock::at_open(&profile(Environment::DEVELOPMENT, true), false),
+        WriteLock::Locked
+    );
+}
+
+#[test]
+fn a_settings_reset_opens_every_session_locked() {
+    assert_eq!(
+        WriteLock::at_open(&profile(Environment::STAGING, false), true),
         WriteLock::Locked
     );
 }

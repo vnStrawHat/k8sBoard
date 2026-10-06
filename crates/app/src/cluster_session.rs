@@ -1319,7 +1319,7 @@ impl ClusterSession {
         };
         let phase = Self::begin_connect(&inputs, summary, cx);
         let profile = AppSettings::get(cx).registry.profile(summary);
-        let lock = WriteLock::at_open(&profile);
+        let lock = WriteLock::at_open(&profile, AppSettings::was_reset(cx));
         let source_entry = profile.metrics;
         Self {
             inputs,

@@ -36,3 +36,4 @@
 | 30 | Notices (settings and skipped kubeconfigs) share one title-bar warning button: tooltip lists them, click dismisses all | there is no notification layer in the shell; keeps the message visible until read |
 | 31 | **Flush on quit**: `cx.on_app_quit` calls `AppSettings::flush`, which writes the last sent snapshot synchronously through the `WriteGate` | a change made just before quitting is not lost; the gate keeps an older in-flight write from winning |
 | 32 | A `serde_json` serialization failure (unreachable for these types) is a `tracing::warn!` without content, and nothing is sent | no `unwrap`; no partial file |
+| 33 | A reset (decision 6) also shows a persistent banner under the main title bar with a Dismiss button (not persisted, separate from the warning button of decision 30), and every session of that run opens Locked (0030 guardrails.md) | a reset PROD cluster must never reopen as a click-to-confirm Staging; a hover icon is too easy to miss |
