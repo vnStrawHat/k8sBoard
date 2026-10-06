@@ -17,7 +17,7 @@ use gpui_kit::{
 use crate::access_bindings::{BindingIndex, ready_binding_lists};
 use crate::age::format_age;
 use crate::app_shell::AppShell;
-use crate::certificate_expiry::expiry_label;
+use crate::certificate_expiry::expiry_detail_label;
 use crate::clipboard_copy::copyable_mono;
 use crate::cluster_registry::ClusterRef;
 use crate::cluster_session::{CompanionLists, CompanionSource, LiveCluster};
@@ -828,7 +828,7 @@ fn field_value(value: &KindCell, id: usize, now: jiff::Timestamp, cx: &App) -> A
             }
             .into_any_element()
         }
-        KindCell::Expiry { not_after } => toned_text(expiry_label(*not_after, now), cx)
+        KindCell::Expiry { not_after } => toned_text(expiry_detail_label(*not_after, now), cx)
             .truncate()
             .into_any_element(),
         KindCell::Date { at, rule } => {

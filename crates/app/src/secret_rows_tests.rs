@@ -68,6 +68,31 @@ fn secret_row_cells_match_column_count() {
 }
 
 #[test]
+fn expires_cell_is_the_leaf_not_after_for_tls_only() {
+    let opaque_row = secret_row(&opaque(&[]));
+    assert_eq!(opaque_row.cells[3], KindCell::Absent);
+    let tls = secret(
+        "kubernetes.io/tls",
+        SecretDetails::Certificate {
+            chain: vec![certificate("CN=a", "2027-01-01T00:00:00Z")],
+        },
+        &[],
+    );
+    assert_eq!(
+        secret_row(&tls).cells[3],
+        KindCell::Expiry {
+            not_after: at("2027-01-01T00:00:00Z")
+        }
+    );
+    let unparsed = secret(
+        "kubernetes.io/tls",
+        SecretDetails::NoCertificate(CertificateIssue::Unparsed),
+        &[],
+    );
+    assert_eq!(secret_row(&unparsed).cells[3], KindCell::Absent);
+}
+
+#[test]
 fn secret_status_is_type_or_not_parsed() {
     let ok = secret_status(&opaque(&[]));
     assert_eq!((ok.text.as_ref(), ok.tone), ("Opaque", StatusTone::Ok));

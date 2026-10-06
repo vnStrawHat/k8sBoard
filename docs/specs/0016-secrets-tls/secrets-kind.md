@@ -30,6 +30,7 @@ pub(crate) enum KindCell { /* … */
 | Type | 220 | `Mono(secret_type)` |
 | Keys | 70 r | `Text(keys.len())`, like ConfigMaps' Data |
 | Used by | 220 | joined (`SECRET_USED_BY`), built `Absent` |
+| Expires | 130 | `Expiry { leaf.not_after }` for a parsed certificate, `Absent` for other secrets; sortable by date (UX walk H5) |
 | Age | — | `Age { at: created_at, tone: None }` (decision 19) |
 
 **Status** (drawer subtitle): `Ok` with the type text; `NoCertificate(Unparsed)` → Warn "Certificate not parsed"; `NoCertificate(Missing)` → Warn "No certificate". Time-dependent states live in the box. Helm release secrets (`helm.sh/release.v1`) are plain rows; 0017 owns their decoding.
@@ -51,7 +52,7 @@ pub(crate) enum KindCell { /* … */
 
 ### `Live(Certificate)`
 
-From `SecretDetails::Certificate { chain }`, leaf = `chain[0]`: Subject (Mono), Issuer (Mono), Alt names (`Chips`, at most 20, then `+{n}`), Not before (`YYYY-MM-DD HH:MM UTC`), Not after (`Expiry { leaf.not_after }`), Intermediate (Warn, only when `intermediate_expires_first`; [tls-expiry.md](tls-expiry.md)), Chain `{n} certificates` when `n > 1`. `NoCertificate(Missing)` → `Note("The secret has no tls.crt.")`; `NoCertificate(Unparsed)` → `Note("tls.crt could not be parsed as an X.509 certificate.")`.
+From `SecretDetails::Certificate { chain }`, leaf = `chain[0]`: Subject (Mono), Issuer (Mono), Alt names (`Chips`, at most 20, then `+{n}`), Not before (`YYYY-MM-DD HH:MM UTC`), Not after (`Expiry { leaf.not_after }`, shown as `Dec 25, 2026 (81d left)` or `Sep 1, 2026 (expired 35d ago)`), Intermediate (Warn, only when `intermediate_expires_first`; [tls-expiry.md](tls-expiry.md)), Chain `{n} certificates` when `n > 1`. `NoCertificate(Missing)` → `Note("The secret has no tls.crt.")`; `NoCertificate(Unparsed)` → `Note("tls.crt could not be parsed as an X.509 certificate.")`.
 
 ## Used by (`kind_join.rs`, `live_sections.rs`)
 

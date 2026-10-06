@@ -58,6 +58,15 @@ pub(crate) fn expiry_label(not_after: Timestamp, now: Timestamp) -> StatusLabel 
     }
 }
 
+/// The drawer field text: the absolute date, then the relative one, `Dec 25, 2026 (81d left)`.
+pub(crate) fn expiry_detail_label(not_after: Timestamp, now: Timestamp) -> StatusLabel {
+    let relative = expiry_label(not_after, now);
+    StatusLabel {
+        text: format!("{} ({})", date_text(not_after), relative.text).into(),
+        tone: relative.tone,
+    }
+}
+
 /// The earliest not-after among `chain[1..]` when it is before the leaf's.
 pub(crate) fn intermediate_expires_first(chain: &[CertificateInfo]) -> Option<Timestamp> {
     let (leaf, rest) = chain.split_first()?;
@@ -168,6 +177,19 @@ mod tests {
         assert_eq!(expiry_state(&leaf, now), ExpiryState::NotYetValid);
         // The label still follows the not-after.
         assert_eq!(expiry_label(leaf.not_after, now).tone, StatusTone::Ok);
+    }
+
+    #[test]
+    fn detail_label_has_date_and_relative_text() {
+        let now: Timestamp = "2026-10-05T00:00:00Z".parse().expect("timestamp");
+        let later: Timestamp = "2026-12-25T00:00:00Z".parse().expect("timestamp");
+        let label = expiry_detail_label(later, now);
+        assert_eq!(label.text, "Dec 25, 2026 (81d left)");
+        assert_eq!(label.tone, StatusTone::Ok);
+        let earlier: Timestamp = "2026-09-01T00:00:00Z".parse().expect("timestamp");
+        let label = expiry_detail_label(earlier, now);
+        assert_eq!(label.text, "Sep 1, 2026 (expired 34d ago)");
+        assert_eq!(label.tone, StatusTone::Bad);
     }
 
     #[test]

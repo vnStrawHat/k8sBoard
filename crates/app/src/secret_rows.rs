@@ -56,6 +56,7 @@ pub(crate) fn secret_row(secret: &SecretSummary) -> KindRow {
             KindCell::count(secret.keys.len()),
             // The pods and Ingresses join fills it once both lists have loaded.
             KindCell::Absent,
+            expires_cell(&secret.details),
             KindCell::age(secret.created_at),
         ],
         sections,
@@ -63,6 +64,20 @@ pub(crate) fn secret_row(secret: &SecretSummary) -> KindRow {
         related_pods: None,
         labels: chips(&secret.labels),
         object: KindObject::Secret(secret.clone()),
+    }
+}
+
+/// The leaf's not-after of a TLS secret; other secrets have no expiry.
+fn expires_cell(details: &SecretDetails) -> KindCell {
+    match details {
+        SecretDetails::Certificate { chain } => {
+            chain
+                .first()
+                .map_or(KindCell::Absent, |leaf| KindCell::Expiry {
+                    not_after: leaf.not_after,
+                })
+        }
+        _ => KindCell::Absent,
     }
 }
 

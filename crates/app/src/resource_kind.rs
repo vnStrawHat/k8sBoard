@@ -804,6 +804,7 @@ static SECRETS: KindSpec = KindSpec {
         column("Type", 190., Align::Left),
         column("Keys", 70., Align::Right),
         column("Used by", 170., Align::Left).grows(2).up_to(300.),
+        column("Expires", 130., Align::Left),
         AGE_COLUMN,
     ],
     read_only_actions: &[KindAction::keyed(
