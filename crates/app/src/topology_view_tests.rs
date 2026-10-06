@@ -972,3 +972,24 @@ fn the_legend_choice_is_kept_and_starts_open_by_room(cx: &mut gpui_kit::TestAppC
     });
     cx.update(|cx| assert_eq!(view.read(cx).legend_choice, Some(false)));
 }
+
+#[test]
+fn the_namespace_button_says_what_the_title_bar_shows_when_it_differs() {
+    let several = NamespaceScope::of_namespaces(["a", "b", "c"].map(str::to_owned));
+    assert_eq!(
+        namespace_button_label(Some("kube-system"), &NamespaceScope::All),
+        "Namespace: kube-system (title bar: all)"
+    );
+    assert_eq!(
+        namespace_button_label(Some("a"), &several),
+        "Namespace: a (title bar: a, b +1)"
+    );
+    assert_eq!(
+        namespace_button_label(Some("blog"), &NamespaceScope::Named("blog".to_owned())),
+        "Namespace: blog"
+    );
+    assert_eq!(
+        namespace_button_label(None, &NamespaceScope::All),
+        "Pick a namespace"
+    );
+}

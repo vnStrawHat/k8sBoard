@@ -63,3 +63,7 @@ React Flow animates an edge with `stroke-dasharray: 5` and `dashdraw 0.5s linear
 - The minimap and the legend sit in the bottom strip that Fit keeps clear (`OVERLAY_GUTTER`). While the drawer is open they move left by its width (`DRAWER_WIDTH`), so both stay visible.
 - A click on a card brings it and its direct neighbours into the part of the canvas the drawer leaves free (`Viewport::reveal_group`, UX walk M22): the least pan when they all fit at the current zoom; else centered at the largest grid zoom below the current one that fits them and still shows the card text (`MIN_TEXT_ZOOM`); else the nearest neighbours that fit with the node (the node alone, when it fills the area). `pending_focus` centers the node in that part and then does the same. When the canvas size becomes known and the first view is made again, a selected node is revealed the same way. The port label on `routes to` edges is drawn since the later round (0050 as-built).
 - The legend draws a 38 px swatch per relation with the stroke code of the edges (same dash, color, and arrow) and an 11 px label.
+
+## Namespace button (walk J15)
+
+Topology draws one namespace. When the title-bar scope is not that namespace (`all`, or several), the toolbar button reads `Namespace: kube-system (title bar: all)` (`namespace_button_label`), so the two pickers never seem to disagree.

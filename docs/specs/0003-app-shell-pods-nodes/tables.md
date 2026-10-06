@@ -56,6 +56,7 @@ pub(crate) fn tone_color(tone: StatusTone, cx: &App) -> Hsla; // the only theme 
 | Info | `info` | `ContainerCreating`, `PodInitializing`, `Init:n/m`, `Terminating` | container waiting with no or other reason |
 | Done | `muted_foreground` | `Completed`, `Succeeded` | container terminated with exit 0; not reported |
 
+- On a light theme every tone is pulled toward the foreground only as far as 4.5:1 on the background needs (cap: 40%), so amber Warn text (Severity, Blocks drain, Restarts) reads on the Default light panel too (walk J14); a dark theme keeps the fill.
 - `Init:<reason>` takes the tone of `<reason>`. Otherwise the text is the cluster `PodStatus` Display.
 - **Readiness failed** (UI rule, decision 2 of 0001) applies when:
   - `status == Reason(Running)`, and

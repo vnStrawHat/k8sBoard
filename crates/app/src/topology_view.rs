@@ -28,7 +28,7 @@ use crate::app_shell::AppShell;
 use crate::app_shell::workspace::toggle_button;
 use crate::cluster_metrics::{SourceState, TrafficSources};
 use crate::cluster_runtime::ClusterRuntime;
-use crate::cluster_session::{ClusterSession, LiveCluster, scope_includes};
+use crate::cluster_session::{ClusterSession, LiveCluster, namespaces_label, scope_includes};
 use crate::drawer::{DrawerSize, drawer_width};
 use crate::file_export::{ExportState, export_file_name, start_export_with};
 use crate::status_tone::{StatusTone, tone_color};
@@ -1555,10 +1555,7 @@ impl TopologyView {
         let namespaces = namespace_choices(&live.scope, live.namespaces.ready_items());
         let view = cx.weak_entity();
         // Without a namespace the picker is the one thing to do: it is the primary button.
-        let namespace_label = match &self.namespace {
-            Some(namespace) => format!("Namespace: {namespace}"),
-            None => "Pick a namespace".to_owned(),
-        };
+        let namespace_label = namespace_button_label(self.namespace.as_deref(), &live.scope);
         let namespace_tooltip = match scope_note(&live.scope) {
             Some(note) => format!("The namespace to draw \u{b7} {note}"),
             None => "The namespace to draw".to_owned(),
@@ -2440,6 +2437,23 @@ fn neighbour_rects(graph: &TopologyGraph, layout: &TopologyLayout, index: usize)
 }
 
 /// `1 of {n} namespaces in scope` when the title-bar scope holds several: Topology draws one.
+/// The toolbar button: the namespace drawn, and what the title bar says when that is another scope
+/// (Topology draws one namespace; the title-bar picker may show all or several).
+fn namespace_button_label(namespace: Option<&str>, scope: &NamespaceScope) -> String {
+    let Some(namespace) = namespace else {
+        return "Pick a namespace".to_owned();
+    };
+    let title_bar = match scope {
+        NamespaceScope::Named(named) if named == namespace => {
+            return format!("Namespace: {namespace}");
+        }
+        NamespaceScope::Named(named) => named.clone(),
+        NamespaceScope::All => "all".to_owned(),
+        NamespaceScope::Several(names) => namespaces_label(names),
+    };
+    format!("Namespace: {namespace} (title bar: {title_bar})")
+}
+
 fn scope_note(scope: &NamespaceScope) -> Option<String> {
     match scope {
         NamespaceScope::Several(namespaces) => {

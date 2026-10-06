@@ -25,8 +25,6 @@ pub(crate) struct StatusLabel {
 /// the tone moves at most 40% toward the foreground). The share is the `factor` of `mix_oklab`,
 /// which computes `self * factor + other * (1 - factor)`.
 const LIGHT_THEME_TONE_SHARE: f32 = 0.6;
-/// Amber mixed toward near-black turns grey-brown at small sizes, so it keeps more of its hue.
-const LIGHT_THEME_WARN_SHARE: f32 = 0.7;
 /// The contrast ratio (WCAG) a tone needs against the background to read as text.
 const TEXT_CONTRAST: f32 = 4.5;
 /// Steps of the search for the largest share that still reaches `TEXT_CONTRAST`.
@@ -47,11 +45,12 @@ pub(crate) fn tone_color(tone: StatusTone, cx: &App) -> Hsla {
     if theme.is_dark() {
         color
     } else {
-        let share = match tone {
-            StatusTone::Warn => LIGHT_THEME_WARN_SHARE,
-            _ => LIGHT_THEME_TONE_SHARE,
-        };
-        readable_on_light(color, theme.foreground, theme.background, share)
+        readable_on_light(
+            color,
+            theme.foreground,
+            theme.background,
+            LIGHT_THEME_TONE_SHARE,
+        )
     }
 }
 

@@ -323,17 +323,16 @@ fn light_theme_text_reaches_the_text_contrast_or_the_cap() {
     for hue in [0.02, 0.12, 0.38, 0.58] {
         for lightness in [0.35, 0.5, 0.65] {
             let fill = gpui_kit::hsla(hue, 0.6, lightness, 1.);
-            for cap in [LIGHT_THEME_TONE_SHARE, LIGHT_THEME_WARN_SHARE] {
-                let text = readable_on_light(fill, foreground, white(), cap);
-                let at_cap = fill.mix_oklab(foreground, cap);
-                assert!(
-                    contrast(text, white()) >= TEXT_CONTRAST - 0.02
-                        || contrast(text, white()) >= contrast(at_cap, white()) - 0.02,
-                    "hue {hue} lightness {lightness} cap {cap}"
-                );
-                // Never darker than the cap allows.
-                assert!(text.l >= at_cap.l - 0.01, "hue {hue} lightness {lightness}");
-            }
+            let cap = LIGHT_THEME_TONE_SHARE;
+            let text = readable_on_light(fill, foreground, white(), cap);
+            let at_cap = fill.mix_oklab(foreground, cap);
+            assert!(
+                contrast(text, white()) >= TEXT_CONTRAST - 0.02
+                    || contrast(text, white()) >= contrast(at_cap, white()) - 0.02,
+                "hue {hue} lightness {lightness} cap {cap}"
+            );
+            // Never darker than the cap allows.
+            assert!(text.l >= at_cap.l - 0.01, "hue {hue} lightness {lightness}");
         }
     }
 }
@@ -373,7 +372,7 @@ fn default_light_tones_stay_close_to_the_old_fixed_mix() {
     let theme = ThemeColor::light();
     for (fill, cap) in [
         (theme.success, LIGHT_THEME_TONE_SHARE),
-        (theme.warning, LIGHT_THEME_WARN_SHARE),
+        (theme.warning, LIGHT_THEME_TONE_SHARE),
         (theme.danger, LIGHT_THEME_TONE_SHARE),
         (theme.info, LIGHT_THEME_TONE_SHARE),
     ] {
@@ -488,4 +487,40 @@ fn a_failed_container_names_its_exit_code_and_keeps_its_reason() {
     assert_eq!(text_of(None, 2), "Error · exit 2");
     assert_eq!(text_of(Some(StatusReason::Completed), 0), "Completed");
     assert_eq!(text_of(None, 0), "Completed");
+}
+
+/// A colour of One Light, read raw because the kit's base colour fields are private.
+fn one_light(key: &str) -> Hsla {
+    let file: serde_json::Value =
+        serde_json::from_str(include_str!("../themes/zed-one.json")).expect("the theme is JSON");
+    let theme = file["themes"]
+        .as_array()
+        .and_then(|themes| themes.iter().find(|theme| theme["name"] == "One Light"))
+        .expect("One Light is in the file");
+    let raw = theme["colors"][key].as_str().expect("the key is set");
+    gpui_kit::component::try_parse_color(raw).expect("the colour parses")
+}
+
+#[test]
+fn light_theme_warning_text_reads_on_the_light_backgrounds() {
+    let (fill, foreground) = (one_light("warning.background"), one_light("foreground"));
+    for key in ["background", "sidebar.background", "table.head.background"] {
+        let background = one_light(key);
+        let text = readable_on_light(fill, foreground, background, LIGHT_THEME_TONE_SHARE);
+        let ratio = contrast(text, background);
+        assert!(ratio >= TEXT_CONTRAST, "warning on {key}: {ratio}");
+    }
+}
+
+#[test]
+fn default_light_warning_text_reaches_the_text_contrast() {
+    // The kit's amber fill only reads at 4.5:1 once it is pulled well toward the foreground.
+    let theme = ThemeColor::light();
+    let text = readable_on_light(
+        theme.warning,
+        theme.foreground,
+        theme.background,
+        LIGHT_THEME_TONE_SHARE,
+    );
+    assert!(contrast(text, theme.background) >= TEXT_CONTRAST - 0.02);
 }
