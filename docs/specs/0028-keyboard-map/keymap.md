@@ -20,6 +20,7 @@ All actions are unit structs from `gpui_kit::actions!(k8sboard, [...])` in `keym
 | Space | `space` | `NoAction` | cluster switcher (both contexts) | `space` → `NoAction` in the switcher (0046); no tick, never confirms or closes |
 | `[` / `]` | `[` / `]` | `PreviousContainer` / `NextContainer` | WORKSPACE | pod drawer: previous/next container |
 | `Alt+Left` / `Alt+Right` | `Alt+Left` / `Alt+Right` | `GoBack` / `GoForward` | WORKSPACE | back / forward through the places a link left (0056); text fields and the terminal keep the keys |
+| 1 to 5 | `1` … `5` | `SelectDrawerTab1` … `5` | WORKSPACE | shows the n-th tab of the open drawer, in the order its tab bar draws them; a drawer with fewer tabs ignores the key (UX batch 5c) |
 | L | `l` | `ViewLogs` | WORKSPACE | [row-actions.md](row-actions.md) |
 | Y | `y` | `ViewYaml` | WORKSPACE | drawer opens on the YAML tab |
 | Ctrl C (menu) | `secondary-c` | `CopyName` | WORKSPACE | copies the name; a text selection wins (decision 8) |
@@ -29,6 +30,8 @@ All actions are unit structs from `gpui_kit::actions!(k8sboard, [...])` in `keym
 | D | `d` | `Drain` | WORKSPACE | gated (nodes) |
 | E | `e` | `EditYaml` | WORKSPACE | gated |
 | R (W7 menu) | `r` | `RestartRollout` | WORKSPACE | restart the cursor row (0032, shipped) |
+| ⇧R | `shift-r` | `RestartPod` | WORKSPACE | restart the cursor pod (0040); the confirm dialog still opens (UX batch 5c) |
+| X | `x` | `EvictPod` | WORKSPACE | evict the cursor pod (0040); the confirm dialog still opens. Debug has no key: it needs a container choice, so the menu and palette keep it (UX batch 5c) |
 | ⇧S (W7 menu) | `shift-s` | `Scale` | WORKSPACE | gated until the 0032 Scale popover |
 | — (menus, palette) | unbound | `PauseRollout`, `RollBack`, `SuspendCronJob`, `TriggerCronJob`, `RerunJob` | — | unit actions the W7 menus and the palette dispatch; no key in the wireframe, not on the sheet (0032) |
 | Del (W4 menu) | `delete`; on macOS also `cmd-backspace` | `Delete` | WORKSPACE | the cursor row, or the ticked set when it is one of several; gated by the lazy `delete {resource}` check; offered on every subject but Helm releases and custom resources (0033, shipped) |

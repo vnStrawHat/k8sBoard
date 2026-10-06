@@ -236,6 +236,19 @@ fn bindings_never_share_a_keystroke_in_one_context(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn digits_pick_drawer_tabs_only_outside_text_fields(cx: &mut TestAppContext) {
+    bind_all(cx);
+    assert_eq!(resolve("1", &SHELL, cx), Some("k8sboard::SelectDrawerTab1"));
+    assert_eq!(
+        resolve("5", &TABLE_PATH, cx),
+        Some("k8sboard::SelectDrawerTab5")
+    );
+    assert!(!is_app_action(resolve("3", &INPUT_PATH, cx)));
+    assert_eq!(resolve("shift-r", &SHELL, cx), Some("k8sboard::RestartPod"));
+    assert_eq!(resolve("x", &SHELL, cx), Some("k8sboard::EvictPod"));
+}
+
+#[gpui_kit::test]
 fn bindings_avoid_reserved_keys(cx: &mut TestAppContext) {
     bind_all(cx);
     let reserved: Vec<Keystroke> = RESERVED_KEYS
@@ -272,7 +285,7 @@ fn every_sheet_row_has_a_binding(cx: &mut TestAppContext) {
 fn every_bound_action_is_on_the_sheet(cx: &mut TestAppContext) {
     bind_all(cx);
     let rows = shortcut_rows();
-    let without_row: [&dyn Action; 18] = [
+    let without_row: [&dyn Action; 22] = [
         &LeaveInput,
         &CloseTerminalFind,
         &PalettePreview,
@@ -287,6 +300,10 @@ fn every_bound_action_is_on_the_sheet(cx: &mut TestAppContext) {
         &SwitchToCluster7,
         &SwitchToCluster8,
         &SwitchToCluster9,
+        &SelectDrawerTab2,
+        &SelectDrawerTab3,
+        &SelectDrawerTab4,
+        &SelectDrawerTab5,
         &SwitcherNext,
         &SwitcherPrevious,
         &SwitcherConfirm,

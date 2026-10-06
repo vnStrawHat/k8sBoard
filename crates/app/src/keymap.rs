@@ -30,6 +30,12 @@ gpui_kit::actions!(
         LeaveInput,
         PreviousContainer,
         NextContainer,
+        // The n-th tab of the open drawer, in the order its tab bar shows them.
+        SelectDrawerTab1,
+        SelectDrawerTab2,
+        SelectDrawerTab3,
+        SelectDrawerTab4,
+        SelectDrawerTab5,
         // Back and forward through the places a link left (spec 0056).
         GoBack,
         GoForward,
@@ -51,7 +57,7 @@ gpui_kit::actions!(
         DebugContainer,
         EditTaints,
         EditLabels,
-        // Pod removals (0040): unbound; the pod menu and the palette dispatch them.
+        // Pod removals (0040): the pod menu, the palette, and Shift R / X dispatch them.
         RestartPod,
         EvictPod,
         RollBack,
@@ -177,6 +183,11 @@ pub(crate) fn bind_keys(cx: &mut App) {
         KeyBinding::new("escape", Dismiss, Some(WORKSPACE)),
         KeyBinding::new("[", PreviousContainer, Some(WORKSPACE)),
         KeyBinding::new("]", NextContainer, Some(WORKSPACE)),
+        KeyBinding::new("1", SelectDrawerTab1, Some(WORKSPACE)),
+        KeyBinding::new("2", SelectDrawerTab2, Some(WORKSPACE)),
+        KeyBinding::new("3", SelectDrawerTab3, Some(WORKSPACE)),
+        KeyBinding::new("4", SelectDrawerTab4, Some(WORKSPACE)),
+        KeyBinding::new("5", SelectDrawerTab5, Some(WORKSPACE)),
         KeyBinding::new("alt-left", GoBack, Some(WORKSPACE)),
         KeyBinding::new("alt-right", GoForward, Some(WORKSPACE)),
         KeyBinding::new("l", ViewLogs, Some(WORKSPACE)),
@@ -190,6 +201,8 @@ pub(crate) fn bind_keys(cx: &mut App) {
         KeyBinding::new("e", EditYaml, Some(other_screens.as_str())),
         KeyBinding::new("e", EditValues, Some(values_screen.as_str())),
         KeyBinding::new("r", RestartRollout, Some(WORKSPACE)),
+        KeyBinding::new("shift-r", RestartPod, Some(WORKSPACE)),
+        KeyBinding::new("x", EvictPod, Some(WORKSPACE)),
         KeyBinding::new("shift-s", Scale, Some(WORKSPACE)),
         KeyBinding::new("delete", Delete, Some(WORKSPACE)),
         // The table: the kit table binds these keys deeper, so they are taken over here.
@@ -334,7 +347,7 @@ fn row(group: ShortcutGroup, label: &'static str, action: impl Action) -> Shortc
 }
 
 /// Every row of the sheet in wireframe order. `LeaveInput`, `SwitchToCluster2`…`9` (covered by the
-/// 1–9 row) and the switcher popover's own keys have no row.
+/// 1–9 row), `SelectDrawerTab2`…`5` (covered by the 1–5 row) and the switcher popover's own keys have no row.
 pub(crate) fn shortcut_rows() -> Vec<ShortcutRow> {
     use ShortcutGroup::{Dock, Drawer, General, SelectedResource, Tables, Terminal};
     vec![
@@ -372,6 +385,7 @@ pub(crate) fn shortcut_rows() -> Vec<ShortcutRow> {
         ),
         row(Drawer, "Previous container", PreviousContainer),
         row(Drawer, "Next container", NextContainer),
+        row(Drawer, "Switch to tab 1–5", SelectDrawerTab1),
         row(Drawer, "Back", GoBack),
         row(Drawer, "Forward", GoForward),
         row(SelectedResource, "View logs", ViewLogs),
@@ -390,6 +404,8 @@ pub(crate) fn shortcut_rows() -> Vec<ShortcutRow> {
         ),
         row(SelectedResource, "Apply edit", ApplyEdit),
         row(SelectedResource, "Restart rollout", RestartRollout),
+        row(SelectedResource, "Restart pod", RestartPod),
+        row(SelectedResource, "Evict pod", EvictPod),
         row(SelectedResource, "Scale", Scale),
         row(SelectedResource, "Delete", Delete),
         row(Dock, "Toggle the dock", ToggleDock),

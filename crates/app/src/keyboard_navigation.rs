@@ -17,13 +17,14 @@ use super::object_delete::Removal;
 use super::resource_edit_flow::RowCheck;
 use super::{AppShell, Screen, focus_table};
 use crate::dock::{DockMode, TabStep};
-use crate::drawer::DrawerTab;
+use crate::drawer::{DrawerTab, drawer_tabs};
 use crate::keymap::{
     Attach, CloseDockTab, CopyName, Cordon, Delete, Dismiss, Drain, EditHpaRange, EditLabels,
     EditTaints, EditValues, EditYaml, EvictPod, ExpandClaim, GoBack, GoForward, LeaveInput,
     NextContainer, NextDockTab, OpenDrawer, OpenShell, PauseRollout, PortForward,
     PreviousContainer, PreviousDockTab, RenewCertificate, RerunJob, RestartPod, RestartRollout,
-    RollBack, Scale, SelectFirstRow, SelectLastRow, SelectNextPage, SelectNextRow,
+    RollBack, Scale, SelectDrawerTab1, SelectDrawerTab2, SelectDrawerTab3, SelectDrawerTab4,
+    SelectDrawerTab5, SelectFirstRow, SelectLastRow, SelectNextPage, SelectNextRow,
     SelectPreviousPage, SelectPreviousRow, SetDefaultStorageClass, SuspendCronJob, ToggleDock,
     ToggleDockZoom, ToggleReadOnly, TriggerCronJob, ViewLogs, ViewYaml,
 };
@@ -157,6 +158,11 @@ pub(super) fn register_key_handlers(root: Div, cx: &Context<AppShell>) -> Div {
     let root = on_step::<SelectLastRow>(root, RowStep::Last, cx);
     let root = on_step::<SelectNextPage>(root, RowStep::NextPage, cx);
     let root = on_step::<SelectPreviousPage>(root, RowStep::PreviousPage, cx);
+    let root = on_drawer_tab::<SelectDrawerTab1>(root, 1, cx);
+    let root = on_drawer_tab::<SelectDrawerTab2>(root, 2, cx);
+    let root = on_drawer_tab::<SelectDrawerTab3>(root, 3, cx);
+    let root = on_drawer_tab::<SelectDrawerTab4>(root, 4, cx);
+    let root = on_drawer_tab::<SelectDrawerTab5>(root, 5, cx);
     let root = root
         .on_action(cx.listener(|shell, _: &OpenDrawer, window, cx| {
             shell.open_drawer_at_cursor(window, cx);
@@ -228,6 +234,12 @@ pub(super) fn register_key_handlers(root: Div, cx: &Context<AppShell>) -> Div {
 fn on_step<A: Action>(root: Div, step: RowStep, cx: &Context<AppShell>) -> Div {
     root.on_action(cx.listener(move |shell, _: &A, window, cx| {
         shell.step_cursor(step, window, cx);
+    }))
+}
+
+fn on_drawer_tab<A: Action>(root: Div, position: usize, cx: &Context<AppShell>) -> Div {
+    root.on_action(cx.listener(move |shell, _: &A, _, cx| {
+        shell.show_nth_drawer_tab(position, cx);
     }))
 }
 
@@ -408,6 +420,18 @@ impl AppShell {
             Screen::Issues => focus_table(&self.issue_table.clone(), window, cx),
             Screen::Kind(_) => focus_table(&self.kind_table.clone(), window, cx),
         }
+    }
+
+    /// 1 to 5: shows the `position`-th tab (counted from 1) of the open drawer, in the order its tab
+    /// bar draws them. A drawer with fewer tabs ignores the key.
+    pub(super) fn show_nth_drawer_tab(&mut self, position: usize, cx: &mut Context<Self>) {
+        let Some(subject) = self.drawer_subject() else {
+            return;
+        };
+        let Some(&tab) = drawer_tabs(&subject.key).get(position - 1) else {
+            return;
+        };
+        self.set_drawer_tab(tab, cx);
     }
 
     /// `[` and `]`: selects the previous or next container of the open pod drawer and shows the

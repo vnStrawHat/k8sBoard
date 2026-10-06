@@ -11,7 +11,7 @@ use gpui_kit::{
 };
 
 use crate::cluster_switcher::SwitchToCluster1;
-use crate::keymap::{ShortcutGroup, ShortcutRow, shortcut_rows};
+use crate::keymap::{SelectDrawerTab1, ShortcutGroup, ShortcutRow, shortcut_rows};
 
 const SHEET_WIDTH: f32 = 720.;
 /// What the dialog spends above and below the grid: its offset from the top, title, and padding.
@@ -69,8 +69,14 @@ pub(crate) fn shortcut_sheet(cx: &App) -> impl IntoElement + use<> {
 
 fn sheet_row(row: &ShortcutRow, cx: &App) -> impl IntoElement {
     let theme = cx.theme();
-    // One row stands for the keys 1 to 9; the binding that is looked up is the first.
-    let has_range = row.action.as_any().is::<SwitchToCluster1>();
+    // One row stands for a run of digit keys; the binding that is looked up is the first.
+    let range_end = if row.action.as_any().is::<SwitchToCluster1>() {
+        Some("… 9")
+    } else if row.action.as_any().is::<SelectDrawerTab1>() {
+        Some("… 5")
+    } else {
+        None
+    };
     h_flex()
         .w_1_2()
         .px_2()
@@ -92,12 +98,12 @@ fn sheet_row(row: &ShortcutRow, cx: &App) -> impl IntoElement {
                 .gap_1()
                 .items_center()
                 .children(row_keys(&*row.action, cx).into_iter().map(Kbd::new))
-                .when(has_range, |keys| {
+                .when_some(range_end, |keys, end| {
                     keys.child(
                         div()
                             .text_xs()
                             .text_color(theme.muted_foreground)
-                            .child("… 9"),
+                            .child(end),
                     )
                 }),
         )

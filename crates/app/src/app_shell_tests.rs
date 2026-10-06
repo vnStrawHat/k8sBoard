@@ -415,6 +415,25 @@ fn open_drawer_tab_on_another_row_ends_on_that_tab(cx: &mut TestAppContext) {
     });
 }
 
+#[gpui_kit::test]
+fn digit_keys_show_the_nth_drawer_tab(cx: &mut TestAppContext) {
+    let (_, shell) = open_shell(cx);
+    shell.update(cx, |shell, cx| {
+        shell.change_selection(Some(object(pod_key("api-0"))), cx);
+        // No drawer yet: the key does nothing.
+        shell.show_nth_drawer_tab(4, cx);
+        assert_eq!(shell.drawer.tab, DrawerTab::Overview);
+        shell.drawer.is_open = true;
+        shell.show_nth_drawer_tab(4, cx);
+        assert_eq!(shell.drawer.tab, DrawerTab::Yaml);
+        shell.show_nth_drawer_tab(2, cx);
+        assert_eq!(shell.drawer.tab, DrawerTab::Containers);
+        // A pod drawer has no sixth tab.
+        shell.show_nth_drawer_tab(6, cx);
+        assert_eq!(shell.drawer.tab, DrawerTab::Containers);
+    });
+}
+
 fn context(name: &str) -> ContextSummary {
     ContextSummary {
         name: name.to_owned(),
