@@ -52,6 +52,7 @@ fn parses_all_flags() {
             screen: LaunchScreen::PodDrawer(DrawerTab::Containers),
             screenshot: Some(PathBuf::from("out.png")),
             window_width: None,
+            zoom_percent: None,
             palette: None,
         }
     );
@@ -721,6 +722,23 @@ fn window_width_parses() {
         run_options(&["--window-width", "3840"]).window_width,
         Some(3840)
     );
+}
+
+#[test]
+fn zoom_parses_to_hundredths() {
+    assert_eq!(run_options(&["--zoom", "0.8"]).zoom_percent, Some(80));
+    assert_eq!(run_options(&["--zoom", "0.2"]).zoom_percent, Some(20));
+    assert_eq!(run_options(&["--zoom", "1.95"]).zoom_percent, Some(195));
+    assert_eq!(run_options(&[]).zoom_percent, None);
+}
+
+#[test]
+fn zoom_out_of_range_is_an_error() {
+    for text in ["0.19", "1.96", "-1", "big", "NaN", ""] {
+        let error = parse(&["--zoom", text]).expect_err("must fail");
+        assert!(error.contains("--zoom"), "{error}");
+    }
+    assert!(parse(&["--zoom"]).is_err());
 }
 
 #[test]

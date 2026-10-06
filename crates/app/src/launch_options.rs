@@ -35,6 +35,7 @@ Options:
                          screen to open (default: overview)
   --palette <text>       open the command palette with <text> typed (for example :po or > rest)
   --window-width <px>    window width, 800 to 3840 (default: 1320)
+  --zoom <factor>        Topology zoom of the first view, 0.2 to 1.95 (default: the first view's own)
   --screenshot <path>    write a PNG and exit (needs a build with --features screenshot)
   --help                 print this help
 ";
@@ -782,6 +783,9 @@ pub(crate) struct LaunchOptions {
     /// `--window-width`: the window width in pixels, within `WINDOW_WIDTH_RANGE`; the default
     /// width without it.
     pub(crate) window_width: Option<u16>,
+    /// `--zoom`: the Topology zoom of the first view, in hundredths (80 is 0.8), within
+    /// `ZOOM_PERCENT_RANGE`; the first view's own zoom without it.
+    pub(crate) zoom_percent: Option<u16>,
     /// `--palette`: the command palette opens with this text typed, once the session is live.
     pub(crate) palette: Option<String>,
 }
@@ -810,6 +814,7 @@ pub(crate) fn parse_launch_options(
         screen: LaunchScreen::Overview,
         screenshot: None,
         window_width: None,
+        zoom_percent: None,
         palette: None,
     };
     while let Some(flag) = args.next() {
@@ -840,6 +845,7 @@ pub(crate) fn parse_launch_options(
             }
             "--screenshot" => options.screenshot = Some(PathBuf::from(value()?)),
             "--window-width" => options.window_width = Some(parse_window_width(&value()?)?),
+            "--zoom" => options.zoom_percent = Some(parse_zoom_percent(&value()?)?),
             "--palette" => options.palette = Some(value()?),
             _ => return Err(format!("unknown flag '{flag}'")),
         }
@@ -877,6 +883,24 @@ fn parse_window_width(text: &str) -> Result<u16, String> {
             WINDOW_WIDTH_RANGE.end()
         )),
     }
+}
+
+/// The zoom the Topology wheel reaches, in hundredths.
+const ZOOM_PERCENT_RANGE: std::ops::RangeInclusive<u16> = 20..=195;
+
+fn parse_zoom_percent(text: &str) -> Result<u16, String> {
+    // A float cast saturates, so a negative or unparsable zoom lands on 0, outside the range.
+    let percent = text
+        .parse::<f32>()
+        .map_or(0, |zoom| (zoom * 100.).round() as u16);
+    if ZOOM_PERCENT_RANGE.contains(&percent) {
+        return Ok(percent);
+    }
+    Err(format!(
+        "invalid value '{text}' for --zoom: use {} to {}",
+        f32::from(*ZOOM_PERCENT_RANGE.start()) / 100.,
+        f32::from(*ZOOM_PERCENT_RANGE.end()) / 100.
+    ))
 }
 
 /// `a` or `a,b,c`: the namespaces to show. Empty parts are ignored.

@@ -164,6 +164,7 @@ mod topology_feeds;
 mod topology_fixtures;
 mod topology_graph;
 mod topology_layout;
+mod topology_port_labels;
 mod topology_route;
 mod topology_stroke;
 mod topology_traffic;

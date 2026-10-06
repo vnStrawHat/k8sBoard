@@ -18,7 +18,7 @@ use gpui_kit::component::{
     ActiveTheme as _, Disableable as _, IconName, Selectable as _, Sizable as _, h_flex, v_flex,
 };
 use gpui_kit::{
-    AnyElement, App, Context, Div, Entity, FocusHandle, InteractiveElement as _, IntoElement,
+    AnyElement, App, Context, Div, Entity, FocusHandle, Hsla, InteractiveElement as _, IntoElement,
     KeyDownEvent, MouseButton, MouseDownEvent, ParentElement as _, Pixels, Point, Render,
     ScrollDelta, SharedString, StatefulInteractiveElement as _, Styled as _, Subscription, Task,
     WeakEntity, Window, div, prelude::FluentBuilder as _, px,
@@ -51,10 +51,11 @@ use crate::topology_graph::{
 use crate::topology_layout::{
     GraphPoint, GraphRect, GraphStructure, TopologyLayout, layout as lay_out, structure,
 };
+use crate::topology_port_labels::port_chips;
 use crate::topology_traffic::{
     TrafficLayer, TrafficOverlay, TrafficSample, shown_caption, tooltip_with_traffic,
 };
-use crate::topology_traffic_labels::{LABEL_HEIGHT, LABEL_TEXT_SIZE, edge_labels};
+use crate::topology_traffic_labels::{EdgeLabel, LABEL_HEIGHT, LABEL_TEXT_SIZE, edge_labels};
 use crate::topology_viewport::{
     CONTROLS_INSET, MIN_TEXT_ZOOM, MINIMAP_HEIGHT, MINIMAP_WIDTH, OVERLAY_GUTTER, Viewport,
     ZOOM_BUTTON_STEPS, is_drag, visible_nodes, wheel_steps,
@@ -329,6 +330,8 @@ pub(crate) struct TopologyView {
     pending_focus: Option<NodeId>,
     /// `--screen topology-selected`: select the first Deployment once a graph has one.
     wants_first_deployment: bool,
+    /// `--zoom`: the zoom the first view takes instead of its own, once.
+    launch_zoom: Option<f32>,
     /// The card under the pointer: its edges stand out, the others fade.
     hovered: Option<NodeId>,
     drag: Drag,
@@ -377,6 +380,7 @@ impl TopologyView {
             highlighted: None,
             pending_focus: None,
             wants_first_deployment: false,
+            launch_zoom: None,
             hovered: None,
             drag: Drag::None,
             is_dirty: true,
@@ -508,6 +512,11 @@ impl TopologyView {
     /// `--screen topology-selected`: the first Deployment of the first graph is selected.
     pub(crate) fn select_first_deployment_once(&mut self, is_wanted: bool) {
         self.wants_first_deployment = is_wanted;
+    }
+
+    /// `--zoom`: the first view opens at the grid zoom nearest to `percent` hundredths.
+    pub(crate) fn set_launch_zoom(&mut self, percent: Option<u16>) {
+        self.launch_zoom = percent.map(|percent| f32::from(percent) / 100.);
     }
 
     /// `--screen topology-rbac`: the RBAC chip is on.
@@ -797,6 +806,12 @@ impl TopologyView {
         let width = width - CONTROLS_INSET;
         // The graph starts to the right of the zoom panel.
         self.viewport = Viewport::first_view(layout.extent, width, height).pan(CONTROLS_INSET, 0.);
+        // The first view is made again once the canvas size is known; the flag waits for that one.
+        if self.canvas_size.is_some()
+            && let Some(zoom) = self.launch_zoom.take()
+        {
+            self.viewport = self.viewport.zoom_to(zoom);
+        }
         self.is_first_view_partial = !self.viewport.shows_whole(layout.extent, width, height);
         self.needs_fit = false;
         self.fit_waits_for_size = self.canvas_size.is_none();
@@ -1907,11 +1922,12 @@ impl TopologyView {
             scale_factor,
             colors,
         };
+        let paint_focus = hovered.or(selected);
         let paint = CanvasPaint {
             graph: Rc::clone(&graph),
             layout: Rc::clone(&layout),
             viewport,
-            focus: hovered.or(selected),
+            focus: paint_focus,
             selected,
             elapsed: self.created.elapsed(),
             colors,
@@ -2006,6 +2022,7 @@ impl TopologyView {
                         colors,
                     ))
                     .children(self.render_edge_labels(&graph, &layout, colors, cx))
+                    .children(self.render_port_labels(&graph, &layout, paint_focus, colors, cx))
                     .child(self.render_controls(cx))
                     .child(self.render_legend(colors, minimap_size.0 + drawer, width, cx))
                     .child(self.render_minimap(&graph, &layout, colors, minimap_size, drawer, cx)),
@@ -2122,26 +2139,34 @@ impl TopologyView {
         let mono = cx.theme().mono_font_family.clone();
         edge_labels(graph, layout, layer, self.viewport, canvas)
             .into_iter()
-            .map(|label| {
-                div()
-                    .absolute()
-                    .left(px(label.left))
-                    .top(px(label.top))
-                    .w(px(label.width))
-                    .h(px(LABEL_HEIGHT))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .rounded(px(4.))
-                    .border_1()
-                    .border_color(colors.card_border)
-                    .bg(colors.background)
-                    .text_color(colors.foreground)
-                    .font_family(mono.clone())
-                    .text_size(px(LABEL_TEXT_SIZE))
-                    .whitespace_nowrap()
-                    .child(label.text)
-                    .into_any_element()
+            .map(|label| edge_chip(label, colors, colors.foreground, mono.clone()))
+            .collect()
+    }
+
+    /// The port chips on the `routes to` edges (not in Traffic mode, which labels them with their
+    /// rate): muted, and in the foreground tone on the edges of the focused node.
+    fn render_port_labels(
+        &self,
+        graph: &TopologyGraph,
+        layout: &TopologyLayout,
+        focus: Option<usize>,
+        colors: CanvasColors,
+        cx: &App,
+    ) -> Vec<AnyElement> {
+        if self.traffic.layer.is_some() {
+            return Vec::new();
+        }
+        let canvas = self.canvas_size.unwrap_or(DEFAULT_CANVAS);
+        let mono = cx.theme().mono_font_family.clone();
+        port_chips(graph, layout, self.viewport, canvas, focus)
+            .into_iter()
+            .map(|chip| {
+                let text = if chip.is_focused {
+                    colors.foreground
+                } else {
+                    colors.muted_foreground
+                };
+                edge_chip(chip.label, colors, text, mono.clone())
             })
             .collect()
     }
@@ -2283,6 +2308,34 @@ impl Render for TopologyView {
                     .child(self.render_body(scale_factor, cx)),
             )
     }
+}
+
+/// A small chip on an edge, on the canvas surface so it stays readable over other edges.
+fn edge_chip(
+    label: EdgeLabel,
+    colors: CanvasColors,
+    text_color: Hsla,
+    mono: SharedString,
+) -> AnyElement {
+    div()
+        .absolute()
+        .left(px(label.left))
+        .top(px(label.top))
+        .w(px(label.width))
+        .h(px(LABEL_HEIGHT))
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(px(4.))
+        .border_1()
+        .border_color(colors.card_border)
+        .bg(colors.background)
+        .text_color(text_color)
+        .font_family(mono)
+        .text_size(px(LABEL_TEXT_SIZE))
+        .whitespace_nowrap()
+        .child(label.text)
+        .into_any_element()
 }
 
 /// The width the legend may take: the canvas without the zoom panel on the left and the minimap

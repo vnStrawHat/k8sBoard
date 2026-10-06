@@ -88,6 +88,7 @@ fn hand_built(nodes: &[(TopologyKind, &str)], edges: &[(usize, usize, Relation)]
                 relation: *relation,
             })
             .collect(),
+        port_labels: HashMap::new(),
         checks: Vec::new(),
         resources: 0,
     }

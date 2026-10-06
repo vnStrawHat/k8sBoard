@@ -161,6 +161,7 @@ fn options(screenshot: Option<&str>) -> LaunchOptions {
         screen: LaunchScreen::Kind(ResourceKind::Secrets),
         screenshot: screenshot.map(Into::into),
         window_width: None,
+        zoom_percent: None,
         palette: None,
     }
 }

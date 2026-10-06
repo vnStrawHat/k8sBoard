@@ -78,6 +78,12 @@ impl Viewport {
         }
     }
 
+    /// The zoom of the grid nearest to `zoom` (the `--zoom` launch flag), around the canvas origin.
+    pub(crate) fn zoom_to(self, zoom: f32) -> Self {
+        let step = (zoom.ln() / WHEEL_STEP.ln()).round() as i32;
+        self.zoom_at(0., 0., step - self.zoom_step)
+    }
+
     /// Moves the content by `(dx, dy)` canvas pixels.
     pub(crate) fn pan(self, dx: f32, dy: f32) -> Self {
         let zoom = self.zoom();
@@ -351,6 +357,14 @@ mod tests {
     fn zoom_steps_are_on_the_grid() {
         let zoomed = Viewport::default().zoom_at(0., 0., 2).zoom_at(0., 0., -5);
         assert!(close(zoomed.zoom(), WHEEL_STEP.powi(-3)));
+    }
+
+    #[test]
+    fn zoom_to_lands_on_the_nearest_grid_zoom() {
+        let near = |zoom: f32| Viewport::default().pan(40., 0.).zoom_to(zoom).zoom();
+        assert!(close(near(0.8), WHEEL_STEP.powi(-2)));
+        assert!(close(near(1.0), 1.));
+        assert!(close(near(0.2), WHEEL_STEP.powi(-17)));
     }
 
     #[test]

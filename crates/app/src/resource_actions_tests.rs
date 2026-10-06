@@ -937,6 +937,7 @@ fn secret_menu_blocked_in_screenshot_runs() {
         screen: crate::launch_options::LaunchScreen::Kind(ResourceKind::Secrets),
         screenshot: Some("secrets.png".into()),
         window_width: None,
+        zoom_percent: None,
         palette: None,
     };
     let access = crate::secret_values::value_access(&options);

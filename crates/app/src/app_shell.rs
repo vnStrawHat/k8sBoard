@@ -868,6 +868,7 @@ impl AppShell {
             view.set_problems_only(wants_problems, cx);
             view.set_rbac(wants_rbac, cx);
             view.select_first_deployment_once(wants_selection);
+            view.set_launch_zoom(options.zoom_percent);
             view.start_in_traffic(wants_traffic);
             #[cfg(feature = "screenshot")]
             if options.screen == LaunchScreen::TopologyTrafficFixture || wants_fixture_selection {

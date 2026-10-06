@@ -3,6 +3,8 @@
 //! hand so the screenshot build needs none of the test builders; a test checks that it equals what
 //! the real row builders and `build_topology` make of the same objects.
 
+use std::collections::HashMap;
+
 use cluster::{
     ControllerRef, MetricsError, PodStatus, PodSummary, ReadyCount, StatusReason, TrafficEnd,
     TrafficMetricSource, TrafficRate, TrafficReading, TrafficSourceKind,
@@ -189,6 +191,12 @@ pub(crate) fn traffic_fixture_graph() -> TopologyGraph {
                 relation: *relation,
             })
             .collect(),
+        // Every fixture Service has the one port 80 (the builders' default).
+        port_labels: EDGES
+            .iter()
+            .filter(|(_, _, relation)| *relation == Relation::RoutesTo)
+            .map(|(from, to, _)| ((*from, *to), "80".to_owned()))
+            .collect::<HashMap<_, _>>(),
         checks: vec![
             ConfigCheck {
                 rule: CheckRule::ServiceNoPods,

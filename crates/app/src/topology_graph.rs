@@ -22,6 +22,7 @@ use crate::topology_access::{
 };
 use crate::topology_checks::{ConfigCheck, GraphParts, claim_problem, graph_checks};
 use crate::topology_layout::Placement;
+use crate::topology_port_labels::{backend_port_label, service_port_label};
 
 /// More listed rows plus namespace pods than this are not built: the cost is bounded by the input.
 pub(crate) const RAW_LIMIT: usize = 5_000;
@@ -320,6 +321,8 @@ pub(crate) struct TopologyGraph {
     pub(crate) nodes: Vec<TopologyNode>,
     /// Sorted by `(from, to, relation)`, without duplicates.
     pub(crate) edges: Vec<TopologyEdge>,
+    /// The port text of the `RoutesTo` edges that have one, by `(from, to)`.
+    pub(crate) port_labels: HashMap<(usize, usize), String>,
     pub(crate) checks: Vec<ConfigCheck>,
     /// The sum of `objects` of the visible nodes.
     pub(crate) resources: usize,
@@ -804,6 +807,7 @@ impl<'a> Builder<'a> {
             };
             let matching = self.matching_pods(service, &label_index);
             let from = NodeId::object(TopologyKind::Service, &service.name);
+            let ports = service_port_label(&service.ports);
             let Some(matching) = matching else {
                 parts.service_pods.insert(service.name.as_str(), Vec::new());
                 continue;
@@ -827,12 +831,10 @@ impl<'a> Builder<'a> {
                         key: None,
                     },
                 );
-                parts.edges.insert((from.clone(), to, Relation::RoutesTo));
+                insert_routes_to(parts, &from, to, &ports);
             }
             for pod in &matching {
-                parts
-                    .edges
-                    .insert((from.clone(), self.pod_node(pod), Relation::RoutesTo));
+                insert_routes_to(parts, &from, self.pod_node(pod), &ports);
             }
             parts.service_pods.insert(service.name.as_str(), matching);
         }
@@ -889,7 +891,8 @@ impl<'a> Builder<'a> {
                 .collect();
             for service in services {
                 if let Some(to) = self.target(parts, TopologyKind::Service, service) {
-                    parts.edges.insert((from.clone(), to, Relation::RoutesTo));
+                    let ports = backend_port_label(ingress, service);
+                    insert_routes_to(parts, &from, to, &ports);
                 }
             }
             let secrets: BTreeSet<&str> = ingress
@@ -1255,7 +1258,12 @@ fn pod_refs(pod: &PodSummary) -> BTreeSet<(TopologyKind, &str)> {
 /// the edges between them, and the checks that are drawn.
 fn finish(parts: GraphParts, checks: Vec<ConfigCheck>, inputs: &TopologyInputs) -> TopologyBuild {
     let filter = inputs.filter;
-    let GraphParts { nodes, edges, .. } = parts;
+    let GraphParts {
+        nodes,
+        edges,
+        port_labels,
+        ..
+    } = parts;
     let mut kept: BTreeSet<NodeId> = nodes
         .values()
         .filter(|node| filter.kinds.contains(&node.kind.filter()))
@@ -1332,6 +1340,10 @@ fn finish(parts: GraphParts, checks: Vec<ConfigCheck>, inputs: &TopologyInputs) 
         })
         .collect();
     edges.sort();
+    let port_labels = port_labels
+        .into_iter()
+        .filter_map(|((from, to), text)| Some(((*index.get(&from)?, *index.get(&to)?), text)))
+        .collect();
     spread_groups(&mut visible, &edges);
     let checks = checks
         .into_iter()
@@ -1341,9 +1353,20 @@ fn finish(parts: GraphParts, checks: Vec<ConfigCheck>, inputs: &TopologyInputs) 
     TopologyBuild::Graph(TopologyGraph {
         nodes: visible,
         edges,
+        port_labels,
         checks,
         resources,
     })
+}
+
+/// Adds a `RoutesTo` edge, with the port text it shows when it has one.
+fn insert_routes_to(parts: &mut GraphParts, from: &NodeId, to: NodeId, ports: &str) {
+    if !ports.is_empty() {
+        parts
+            .port_labels
+            .insert((from.clone(), to.clone()), ports.to_owned());
+    }
+    parts.edges.insert((from.clone(), to, Relation::RoutesTo));
 }
 
 /// A node without an app label takes the group of its first neighbour that has one: one pass over

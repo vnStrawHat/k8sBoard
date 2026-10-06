@@ -86,6 +86,8 @@ pub(crate) struct ConfigCheck {
 pub(crate) struct GraphParts<'a> {
     pub(crate) nodes: BTreeMap<NodeId, TopologyNode>,
     pub(crate) edges: BTreeSet<(NodeId, NodeId, Relation)>,
+    /// The port text of a `RoutesTo` edge, by its ends (see `topology_port_labels`).
+    pub(crate) port_labels: HashMap<(NodeId, NodeId), String>,
     rows: HashMap<TopologyKind, HashMap<&'a str, &'a KindRow>>,
     /// The pods each Service selects; an empty list for one that selects nothing by design.
     pub(crate) service_pods: HashMap<&'a str, Vec<&'a PodSummary>>,
@@ -145,6 +147,7 @@ impl<'a> GraphParts<'a> {
         Self {
             nodes: BTreeMap::new(),
             edges: BTreeSet::new(),
+            port_labels: HashMap::new(),
             rows,
             service_pods: HashMap::new(),
             owned_pods,

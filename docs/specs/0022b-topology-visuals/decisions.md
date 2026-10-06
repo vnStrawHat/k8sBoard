@@ -51,7 +51,7 @@
 | 24 | The legend swatches use the stroke code of the edges; the legend and the minimap move left of the drawer while it is open; the graph keeps 60 px clear of the zoom panel | overlays must not cover content |
 | 25 | `edge_stroke_budget` asserts a vertex ceiling, not a time | a wall-clock assertion fails on a loaded machine |
 | 26 | UX walk H5: the first view fits the whole graph down to `MIN_BADGE_ZOOM` (0.3) and says `Showing part of the graph` beside Fit when it cannot; band-columns are chosen for the largest zoom; the first paint with the real size lays out again | kong opened cut off at the right edge, argocd and monitoring opened cropped with no hint |
-| 27 | UX walk M22: a selection reveals the node and its direct neighbours left of the drawer; the focused edges are painted last. No port label on `routes to` edges | the drawer hid the neighbours; the edges of the selected node could be under faint ones; `TopologyEdge` has no port |
+| 27 | UX walk M22: a selection reveals the node and its direct neighbours left of the drawer; the focused edges are painted last. Port labels on `routes to` edges came later (0050 as-built) | the drawer hid the neighbours; the edges of the selected node could be under faint ones |
 | 28 | UX walk M24: the legend has a Legend toggle and collapses by itself where it would cover the zoom panel or the minimap; the choice lasts for the session. Fit and the first view already keep the bottom strip clear, so the strip is unchanged | at 800 px and with the drawer open the legend covered the zoom panel and collided with the minimap |
 
 ## Measurements (filled by the coder)
