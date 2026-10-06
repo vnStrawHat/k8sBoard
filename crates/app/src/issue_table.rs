@@ -18,7 +18,7 @@ use crate::age::format_age;
 use crate::app_shell::{AppShell, Screen};
 use crate::cell_truncation::{middle_truncate, mono_capacity};
 use crate::dock::Dock;
-use crate::drawer::{truncated_text, truncated_text_with_tooltip};
+use crate::drawer::truncated_text_with_tooltip;
 use crate::event_rows::message_line;
 use crate::filter_bar::filtered_empty_state;
 use crate::issue::{Issue, IssueAction};
@@ -45,17 +45,22 @@ const AGE: usize = 7;
 /// Marks a value the issue does not have.
 const ABSENT: &str = "—";
 
-/// Cause takes most of the spare width: it holds the longest text.
+/// The base widths add up to what a 1100 px window leaves for the table (Count and Age stay inside
+/// it). Object keeps 16 mono characters of the name there, and Cause, which holds the longest text,
+/// takes the most spare width; Kind and Namespace grow a little, up to the width of their content.
 const ISSUE_COLUMNS: [KindColumn; 8] = [
-    column("Severity", 80., Align::Left),
-    column("Reason", 170., Align::Left),
-    column("Kind", 110., Align::Left),
-    column("Object", 260., Align::Left).grows(1),
-    column("Namespace", 120., Align::Left),
-    column("Cause", 200., Align::Left).grows(3),
-    column("Count", 64., Align::Right),
-    column("Age", 60., Align::Right),
+    column("Severity", 78., Align::Left),
+    column("Reason", 126., Align::Left),
+    column("Kind", 88., Align::Left).grows(1).up_to(130.),
+    column("Object", 178., Align::Left).grows(3).up_to(320.),
+    column("Namespace", 92., Align::Left).grows(1).up_to(150.),
+    column("Cause", 146., Align::Left).grows(6),
+    column("Count", 62., Align::Right),
+    column("Age", 50., Align::Right),
 ];
+
+/// Characters of the name the Object column keeps before it makes room for the container.
+const MIN_NAME_CHARS: usize = 16;
 
 pub(crate) struct IssueTableDelegate {
     /// The primary cluster: the issues of the other viewed clusters are not merged yet.
@@ -235,8 +240,12 @@ impl IssueTableDelegate {
                 Some(namespace) => div().truncate().child(namespace.clone()).into_any_element(),
                 None => absent(cx),
             },
-            CAUSE => truncated_text(("issue-cause", row_ix), message_line(&issue.cause))
-                .into_any_element(),
+            CAUSE => truncated_text_with_tooltip(
+                ("issue-cause", row_ix),
+                message_line(&issue.cause),
+                cause_tooltip(issue),
+            )
+            .into_any_element(),
             COUNT => match count_text(issue.count) {
                 None => absent_right(cx),
                 Some(count) => div()
@@ -364,12 +373,29 @@ impl TableDelegate for IssueTableDelegate {
     }
 }
 
-/// ` · container api`, or nothing when the issue is not about one container.
+/// ` · api`, or nothing when the issue is not about one container.
 fn container_suffix(issue: &Issue) -> Option<String> {
     issue
         .container
         .as_ref()
-        .map(|container| format!(" · container {container}"))
+        .map(|container| format!(" · {container}"))
+}
+
+/// The suffix when the name still keeps `MIN_NAME_CHARS` characters (or all of it, if shorter)
+/// in a column of `capacity` characters; otherwise the container is left to the Cause tooltip.
+fn suffix_that_fits(name: &str, suffix: Option<String>, capacity: usize) -> Option<String> {
+    let suffix = suffix?;
+    let room = capacity.saturating_sub(suffix.chars().count());
+    (room >= name.chars().count().min(MIN_NAME_CHARS)).then_some(suffix)
+}
+
+/// The cause, then the container when the Object column had no room to name it.
+fn cause_tooltip(issue: &Issue) -> String {
+    let cause = message_line(&issue.cause);
+    match &issue.container {
+        Some(container) => format!("{cause}\nContainer: {container}"),
+        None => cause,
+    }
 }
 
 /// The count of a group; nothing for a single object.
@@ -377,8 +403,8 @@ fn count_text(count: usize) -> Option<String> {
     (count > 1).then(|| count.to_string())
 }
 
-/// The name in mono, then the container the issue is about, muted. A long name is cut in the
-/// middle, within the room the container note leaves.
+/// The name in mono, then the container the issue is about, muted, when the column has room for
+/// both. A long name is cut in the middle, within the room the container leaves.
 fn object_cell(
     issue: &Issue,
     row_ix: usize,
@@ -386,10 +412,10 @@ fn object_cell(
     capacity: usize,
     cx: &App,
 ) -> gpui_kit::AnyElement {
-    let suffix = container_suffix(issue);
+    let name = &issue.shown.name;
+    let suffix = suffix_that_fits(name, container_suffix(issue), capacity);
     let name_capacity =
         capacity.saturating_sub(suffix.as_ref().map_or(0, |suffix| suffix.chars().count()));
-    let name = &issue.shown.name;
     let container = suffix.map(|suffix| {
         div()
             .flex_shrink_0()

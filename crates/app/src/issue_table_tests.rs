@@ -85,15 +85,99 @@ fn a_cluster_object_has_no_namespace_cell() {
 
 #[test]
 fn object_cell_appends_container() {
-    assert_eq!(
-        container_suffix(&issue()).as_deref(),
-        Some(" · container api")
-    );
+    assert_eq!(container_suffix(&issue()).as_deref(), Some(" · api"));
     let whole_pod = Issue {
         container: None,
         ..issue()
     };
     assert_eq!(container_suffix(&whole_pod), None);
+}
+
+#[test]
+fn the_container_shows_only_when_the_name_keeps_its_room() {
+    let suffix = || container_suffix(&issue());
+    // A short name keeps all of itself, so a narrow column still names the container.
+    assert_eq!(
+        suffix_that_fits("api", suffix(), 9).as_deref(),
+        Some(" · api")
+    );
+    assert_eq!(suffix_that_fits("api", suffix(), 8), None);
+    // A long name keeps 16 characters first: 16 + the 6 of ` · api`.
+    let long = "crashloop-85cc769bcd-q4nqt";
+    assert_eq!(
+        suffix_that_fits(long, suffix(), 22).as_deref(),
+        Some(" · api")
+    );
+    assert_eq!(suffix_that_fits(long, suffix(), 21), None);
+    assert_eq!(suffix_that_fits(long, None, 40), None);
+}
+
+#[test]
+fn the_cause_tooltip_names_the_container() {
+    assert_eq!(
+        cause_tooltip(&issue()),
+        "Exits with Error (exit 1) on each start.\nContainer: api"
+    );
+    let whole_pod = Issue {
+        container: None,
+        ..issue()
+    };
+    assert_eq!(
+        cause_tooltip(&whole_pod),
+        "Exits with Error (exit 1) on each start."
+    );
+}
+
+/// The widths of the columns of a window `window` px wide: the table is the window less the 220 px
+/// sidebar.
+fn widths_at(window: f32) -> Vec<f32> {
+    let plan = ColumnPlan {
+        specs: ISSUE_COLUMNS.to_vec(),
+        flexible: CAUSE,
+    };
+    let layout = crate::table_layout::layout_columns(
+        &plan.specs,
+        plan.flexible,
+        gpui_kit::px(window - 220.),
+        &std::collections::BTreeSet::new(),
+    );
+    layout
+        .columns
+        .iter()
+        .skip(1)
+        .map(|column| f32::from(column.width))
+        .collect()
+}
+
+#[test]
+fn count_and_age_stay_inside_the_window_at_1100_and_1320_px() {
+    for window in [1100., 1320.] {
+        let widths = widths_at(window);
+        // The window less the sidebar, the table gutter, and the checkbox column.
+        let room = window - 220. - 28. - 32.;
+        let total: f32 = widths.iter().sum();
+        assert!(
+            total <= room + 0.5,
+            "{window} px: {total} px of columns for {room} px"
+        );
+    }
+}
+
+#[test]
+fn object_keeps_sixteen_characters_and_cause_grows_most() {
+    // A mono glyph is about 9.6 px, and a cell keeps 24 px of padding.
+    let sixteen = 16. * 9.6 + 24.;
+    for window in [1100., 1320.] {
+        let widths = widths_at(window);
+        assert!(widths[OBJECT] >= sixteen, "{window} px: {widths:?}");
+    }
+    let (narrow, wide) = (widths_at(1100.), widths_at(1320.));
+    let growth = |index: usize| wide[index] - narrow[index];
+    assert!(
+        (0..8).all(|index| growth(CAUSE) >= growth(index)),
+        "{narrow:?} {wide:?}"
+    );
+    assert!(wide[KIND] <= 130. && wide[NAMESPACE] <= 150.);
 }
 
 #[test]
