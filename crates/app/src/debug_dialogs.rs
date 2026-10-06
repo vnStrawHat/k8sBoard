@@ -13,14 +13,16 @@ use gpui_kit::component::WindowExt as _;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::component::select::{Select, SelectState};
+use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{ActiveTheme as _, IndexPath, Sizable as _, h_flex, v_flex};
 use gpui_kit::{
     AnyElement, AppContext as _, Context, Entity, InteractiveElement as _, IntoElement,
-    KeyDownEvent, ParentElement as _, Render, SharedString, Styled as _, WeakEntity, Window, div,
-    px,
+    KeyDownEvent, ParentElement as _, Render, SharedString, StatefulInteractiveElement as _,
+    Styled as _, Subscription, WeakEntity, Window, div, px,
 };
 
 use crate::app_shell::AppShell;
+use crate::cell_truncation::middle_truncate;
 use crate::fresh_enter::{confirms, is_enter};
 use crate::keymap::FORWARD_FORM;
 use crate::port_forwards::is_dns_subdomain;
@@ -146,6 +148,34 @@ pub(crate) fn first_selected(choices: &[DebugChoice], preselected: Option<&str>)
         .unwrap_or(0)
 }
 
+/// How many characters of an image the Image field shows before its text runs out of room.
+const IMAGE_FIELD_CHARS: usize = 54;
+
+/// The image cut in the middle, so the registry and the end (a tag or a digest) show, when it is
+/// longer than its field. The field itself keeps the start only.
+fn image_summary(image: &str) -> Option<String> {
+    let image = image.trim();
+    (image.chars().count() > IMAGE_FIELD_CHARS)
+        .then(|| middle_truncate(image, IMAGE_FIELD_CHARS).into_owned())
+}
+
+/// The line under an Image field that shows the end of a long image; its tooltip has all of it.
+fn image_summary_line(image: &str, cx: &gpui_kit::App) -> Option<AnyElement> {
+    let summary = image_summary(image)?;
+    let theme = cx.theme();
+    let full = SharedString::from(image.trim().to_owned());
+    Some(
+        div()
+            .id("image-summary")
+            .text_xs()
+            .font_family(theme.mono_font_family.clone())
+            .text_color(theme.muted_foreground)
+            .child(summary)
+            .tooltip(move |window, cx| Tooltip::new(full.clone()).build(window, cx))
+            .into_any_element(),
+    )
+}
+
 fn field(
     label: &'static str,
     body: impl IntoElement,
@@ -209,6 +239,8 @@ struct DebugBody {
     target: Entity<SelectState<Vec<String>>>,
     image: Entity<InputState>,
     errors: FormErrors,
+    /// Draws the image summary again as the image is typed.
+    _image_observer: Subscription,
 }
 
 impl DebugBody {
@@ -264,7 +296,10 @@ impl Render for DebugBody {
             ))
             .child(field(
                 "Image",
-                Input::new(&self.image).small(),
+                v_flex()
+                    .gap_1()
+                    .child(Input::new(&self.image).small())
+                    .children(image_summary_line(&self.image.read(cx).value(), cx)),
                 self.errors.image,
                 cx,
             ))
@@ -284,6 +319,8 @@ struct NodeShellBody {
     namespace: Entity<InputState>,
     image: Entity<InputState>,
     errors: FormErrors,
+    /// Draws the image summary again as the image is typed.
+    _image_observer: Subscription,
 }
 
 impl NodeShellBody {
@@ -345,6 +382,7 @@ impl Render for NodeShellBody {
                 v_flex()
                     .gap_1()
                     .child(Input::new(&self.image).small())
+                    .children(image_summary_line(&self.image.read(cx).value(), cx))
                     .child(
                         div()
                             .text_xs()
@@ -399,6 +437,7 @@ impl AppShell {
                 input.set_value(image, window, cx);
                 input
             });
+            let _image_observer = cx.observe(&image, |_, _, cx| cx.notify());
             DebugBody {
                 shell,
                 start: Rc::new(start),
@@ -406,6 +445,7 @@ impl AppShell {
                 target,
                 image,
                 errors: FormErrors::default(),
+                _image_observer,
             }
         });
         window.open_dialog(cx, move |dialog, _, _| {
@@ -440,13 +480,16 @@ impl AppShell {
                         input
                     })
                 };
+            let image = text_input(image, "busybox:1.36", cx);
+            let _image_observer = cx.observe(&image, |_, _, cx| cx.notify());
             NodeShellBody {
                 shell,
                 node,
                 start: Rc::new(start),
                 namespace: text_input(namespace, "kube-system", cx),
-                image: text_input(image, "busybox:1.36", cx),
+                image,
                 errors: FormErrors::default(),
+                _image_observer,
             }
         });
         window.open_dialog(cx, move |dialog, _, _| {

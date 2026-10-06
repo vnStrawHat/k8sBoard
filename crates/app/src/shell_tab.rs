@@ -13,13 +13,14 @@ use cluster::{
     ShellExit, ShellInput, ShellRequest, ShellUpdate,
 };
 use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender, unbounded};
+use gpui_kit::assets::IconName;
 use gpui_kit::component::WindowExt as _;
 use gpui_kit::component::button::{Button, ButtonVariants as _, Toggle};
 use gpui_kit::component::dialog::DialogButtonProps;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
 use gpui_kit::component::notification::Notification;
-use gpui_kit::component::{ActiveTheme as _, Disableable as _, Sizable as _, h_flex, v_flex};
+use gpui_kit::component::{ActiveTheme as _, Disableable as _, Icon, Sizable as _, h_flex, v_flex};
 use gpui_kit::{
     App, AppContext as _, Context, Entity, EventEmitter, FocusHandle, InteractiveElement as _,
     IntoElement, KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
@@ -698,12 +699,12 @@ impl ShellTab {
                 self.session.borrow_mut().find(&query);
             }
             InputEvent::PressEnter { shift, .. } => {
-                let mut session = self.session.borrow_mut();
                 if *shift {
-                    session.find_previous();
+                    self.find_previous_match(cx);
                 } else {
-                    session.find_next();
+                    self.find_next_match(cx);
                 }
+                return;
             }
             InputEvent::Focus | InputEvent::Blur => return,
         }
@@ -939,6 +940,32 @@ impl ShellTab {
                 self.find_status_text(cx)
                     .map(|text| div().text_xs().text_color(muted).child(text)),
             )
+            .child(
+                Button::new("shell-find-previous")
+                    .ghost()
+                    .xsmall()
+                    .icon(Icon::new(IconName::ChevronUp))
+                    .tooltip("Previous match (Shift+Enter)")
+                    .on_click(cx.listener(|tab, _, _, cx| tab.find_previous_match(cx))),
+            )
+            .child(
+                Button::new("shell-find-next")
+                    .ghost()
+                    .xsmall()
+                    .icon(Icon::new(IconName::ChevronDown))
+                    .tooltip("Next match (Enter)")
+                    .on_click(cx.listener(|tab, _, _, cx| tab.find_next_match(cx))),
+            )
+    }
+
+    fn find_next_match(&mut self, cx: &mut Context<Self>) {
+        self.session.borrow_mut().find_next();
+        cx.notify();
+    }
+
+    fn find_previous_match(&mut self, cx: &mut Context<Self>) {
+        self.session.borrow_mut().find_previous();
+        cx.notify();
     }
 
     /// Clears the local screen and scrollback; the remote shell is not told.
@@ -1084,6 +1111,8 @@ impl Render for ShellTab {
             .child(
                 div()
                     .id("shell-terminal")
+                    // The text keeps off the sidebar border.
+                    .px_2()
                     .key_context("Terminal")
                     .flex_1()
                     .min_h(px(0.))

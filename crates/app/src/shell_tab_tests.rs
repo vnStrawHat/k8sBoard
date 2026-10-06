@@ -1029,3 +1029,39 @@ fn the_exec_header_names_pod_container_shell_namespace_and_cluster(cx: &mut Test
         "›_ api-7d9f8c-m8n2p · api · Auto · payments · stg-b"
     );
 }
+
+#[gpui_kit::test]
+fn the_find_arrows_step_through_the_matches(cx: &mut TestAppContext) {
+    let fixture = live_tab(cx);
+    apply(
+        &fixture,
+        ShellUpdate::Output(b"api one\r\nweb\r\nAPI two\r\napi three".to_vec()),
+        cx,
+    );
+    render(&fixture, cx);
+    dispatch(&fixture, TerminalFind, cx);
+    cx.update_window(fixture.window.into(), |_, window, cx| {
+        fixture.tab.update(cx, |tab, cx| {
+            tab.find_input
+                .update(cx, |input, cx| input.set_value("api", window, cx));
+            let input = tab.find_input.clone();
+            tab.on_find_event(&input, &InputEvent::Change, window, cx);
+        });
+    })
+    .expect("the window is open");
+    render(&fixture, cx);
+    let status = |cx: &mut TestAppContext| {
+        fixture
+            .tab
+            .read_with(cx, |tab, cx| tab.find_status_text(cx))
+    };
+    assert_eq!(status(cx).as_deref(), Some("1 of 3"));
+    let click = |id: &'static str, cx: &mut TestAppContext| {
+        cx.update_window(fixture.window.into(), |_, window, cx| window.click(id, cx))
+            .expect("the window is open");
+    };
+    click("shell-find-next", cx);
+    assert_eq!(status(cx).as_deref(), Some("2 of 3"));
+    click("shell-find-previous", cx);
+    assert_eq!(status(cx).as_deref(), Some("1 of 3"));
+}

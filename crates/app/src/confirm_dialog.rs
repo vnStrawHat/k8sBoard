@@ -109,6 +109,15 @@ pub(crate) fn typed_prompt(expected: &str, cx: &App) -> AnyElement {
         .into_any_element()
 }
 
+/// The words the dialog shows for a stream start field. The audit line keeps the raw path.
+fn connect_field_label(path: &str) -> &str {
+    match path {
+        "remote_port" => "Remote port",
+        "local_port" => "Local port",
+        other => other,
+    }
+}
+
 /// What the dialog asks about.
 pub(crate) enum DialogKind {
     /// Unlock `cluster` for changes; no object, no dry-run.
@@ -965,8 +974,8 @@ impl ConfirmDialog {
             let mono = theme.mono_font_family.clone();
             let lines = intent.fields.iter().map(|field| {
                 let text = match &field.value {
-                    Some(value) => format!("{} → {value}", field.path),
-                    None => field.path.clone(),
+                    Some(value) => format!("{} → {value}", connect_field_label(&field.path)),
+                    None => connect_field_label(&field.path).to_owned(),
                 };
                 div().text_sm().font_family(mono.clone()).child(text)
             });
@@ -1026,6 +1035,14 @@ impl ConfirmDialog {
         }
     }
 
+    /// What the dialog says when no audit folder is set. A stream start is not a change.
+    fn unlogged_note(&self) -> &'static str {
+        match self.kind {
+            DialogKind::Connect(_) => "Audit file unavailable: this action won't be logged",
+            _ => "Audit file unavailable: this change won't be logged",
+        }
+    }
+
     fn render_dry_run(&self, cx: &App) -> Option<AnyElement> {
         // The result of the run replaces the dry-run line, which is about a past check.
         if let Some(outcome) = &self.outcome {
@@ -1036,6 +1053,13 @@ impl ConfirmDialog {
                     .child(outcome.notice.clone())
                     .into_any_element(),
             );
+        }
+        // A stream start has nothing to dry-run, so it does not say the check is missing.
+        if matches!(
+            (&self.kind, self.dry_run.as_ref()),
+            (DialogKind::Connect(_), Some(DryRunState::NotSupported))
+        ) {
+            return None;
         }
         let theme = cx.theme();
         let total = self.items.len();
@@ -1168,7 +1192,7 @@ impl ConfirmDialog {
                     div()
                         .text_xs()
                         .text_color(muted)
-                        .child("Audit file unavailable: this change won't be logged")
+                        .child(self.unlogged_note())
                 }))
                 .into_any_element(),
         )
@@ -1483,5 +1507,18 @@ mod item_list_tests {
             ITEMS_MAX_HEIGHT,
             rows * ITEM_ROW_HEIGHT + (rows - 1.) * ITEM_ROW_GAP
         );
+    }
+}
+
+#[cfg(test)]
+mod connect_field_tests {
+    use super::connect_field_label;
+
+    #[test]
+    fn a_forward_confirm_words_its_port_fields() {
+        assert_eq!(connect_field_label("remote_port"), "Remote port");
+        assert_eq!(connect_field_label("local_port"), "Local port");
+        // Any other field keeps the path the audit line records.
+        assert_eq!(connect_field_label("container"), "container");
     }
 }

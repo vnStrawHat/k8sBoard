@@ -93,3 +93,20 @@ fn the_dialog_texts_are_the_spec_texts() {
         "Creates a privileged pod with host PID access on wk-03. Anything you run affects the node."
     );
 }
+
+#[test]
+fn a_long_image_is_summarised_with_its_end_kept() {
+    let digest = "docker.io/library/busybox:1.36.1@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662";
+    let summary = image_summary(digest).expect("the image is longer than the field");
+    assert!(summary.chars().count() <= IMAGE_FIELD_CHARS);
+    assert!(summary.contains('…'));
+    // The tail of the digest is what tells two images apart.
+    assert!(summary.ends_with("b11662"));
+    assert!(summary.starts_with("docker.io"));
+}
+
+#[test]
+fn a_short_image_needs_no_summary() {
+    assert_eq!(image_summary("busybox:1.36"), None);
+    assert_eq!(image_summary("  busybox:1.36  "), None);
+}

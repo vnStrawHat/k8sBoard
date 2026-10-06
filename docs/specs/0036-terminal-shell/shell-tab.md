@@ -63,3 +63,9 @@ The submenu items carry an argument (the container), so they keep an `on_click` 
 - `ctrl-shift-c` in the terminal outranks 0026's switcher chord (`secondary-shift-c` on Windows and Linux): the switcher is reachable from the terminal by the title bar only (decision 30).
 - 0026 binds `secondary-1…9` (`SwitchToCluster1…9`) and `secondary-shift-c` in the shell root context. Inside a Terminal, `ctrl-shift-c` is `TerminalCopy` (above), and `ctrl-1…9` must be bound or consumed in the `Terminal` context (`NoAction`, like Ctrl K), so Ctrl n inside a pod shell reaches the program and does not switch clusters. On macOS ⌘1…9 stay app chords (shells never receive ⌘).
 - The `!Terminal` part of `WORKSPACE` also keeps 0028's `secondary-c` (`CopyName`) out of the terminal, and with it every letter key. The terminal element must set `key_context("Terminal")`, or the table keys (and Ctrl C as "copy name") would be captured while a shell has focus.
+
+## UX walk fixes (I14, I15)
+
+- Find has ↑ / ↓ buttons beside `1 of N` (previous and next match, like Shift+Enter and Enter). The terminal body has `px_2` padding so text keeps off the sidebar border.
+- The exec, attach, and forward confirms hide the "Dry-run not supported" line (a stream start has nothing to check), say "this action won't be logged" when no audit folder is set, and the forward confirm words its fields `Remote port` and `Local port` (the audit line keeps `remote_port` and `local_port`).
+- The Debug container and node shell Image fields keep the start of a long image; under the field a muted line shows it cut in the middle (registry and tag or digest tail), with the whole image as its tooltip.
