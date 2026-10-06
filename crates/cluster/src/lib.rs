@@ -165,7 +165,7 @@ pub use node::{
 };
 pub use node_maintenance_bodies::{GracePeriod, LabelChange};
 pub use node_shell_leftovers::{LeftoverPhase, NodeShellLeftover};
-pub use object_create::{DraftError, DraftWarning, ObjectDraft};
+pub use object_create::{DraftError, DraftFix, DraftWarning, ObjectDraft};
 pub use object_edit::{EditBase, EditError, ObjectEdit, Rebased, format_yaml, rebase};
 pub use object_names::{NameList, ObjectName};
 pub use object_write::{

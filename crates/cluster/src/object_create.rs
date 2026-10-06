@@ -12,9 +12,11 @@ use serde_json::Value;
 use crate::dns_name::{is_dns_label, is_dns_subdomain, is_path_segment_name};
 use crate::edit_placeholders::MARKER_PREFIX;
 use crate::edit_preview::{FieldPath, PathSegment};
-use crate::object_edit::{EditError, SERVER_METADATA, parse_mapping, refuse_leading_zero};
+use crate::object_edit::{
+    EditError, SERVER_METADATA, parse_mapping, refuse_leading_zero, serialization_error,
+};
 use crate::object_write::ChangedField;
-use crate::object_yaml::{ObjectKind, ObjectRef, api_resource};
+use crate::object_yaml::{ObjectKind, ObjectRef, api_resource, to_yaml_text};
 
 /// Lists in the confirm and the audit line stop here (decision 16).
 const MAX_LISTED: usize = 10;
@@ -102,8 +104,12 @@ pub enum DraftError {
     MissingNamespace,
     #[error("a {kind} has no namespace")]
     UnexpectedNamespace { kind: &'static str },
-    #[error("{field} is set by the server; remove it")]
-    ServerField { field: &'static str },
+    /// Every server-owned field of the text at once, as `kubectl get -o yaml` leaves them.
+    #[error("{}", server_fields_message(fields))]
+    ServerFields { fields: Vec<String> },
+    /// Several YAML documents: the editor holds one object.
+    #[error("Found {count} documents; paste one")]
+    SeveralDocuments { count: usize },
     #[error("{path} holds <hidden>; write a value")]
     Placeholder { path: String },
     /// A `metadata` field of the wrong type (for example `labels: 5`).
@@ -118,8 +124,9 @@ impl ObjectDraft {
         if !kind.is_creatable() {
             return Err(DraftError::NotCreatable(kind.name()));
         }
-        if has_several_documents(text) {
-            return Err(EditError::NotAnObject.into());
+        let count = documents(text).len();
+        if count > 1 {
+            return Err(DraftError::SeveralDocuments { count });
         }
         let body = parse_mapping(text)?;
         refuse_leading_zero(text)?;
@@ -134,8 +141,9 @@ impl ObjectDraft {
                 expected: api_version,
             });
         }
-        if let Some(field) = server_field(&body) {
-            return Err(DraftError::ServerField { field });
+        let fields = server_fields(&body);
+        if !fields.is_empty() {
+            return Err(DraftError::ServerFields { fields });
         }
         let metadata = body.get("metadata");
         if metadata.is_some_and(|value| value.get("generateName").is_some()) {
@@ -189,7 +197,7 @@ impl ObjectDraft {
             && text_at(&self.body, "/apiVersion") == Some(api_resource(kind).api_version.as_str())
             && text_at(&self.body, "/metadata/name") == Some(self.target.name())
             && text_at(&self.body, "/metadata/namespace") == self.target.namespace()
-            && server_field(&self.body).is_none()
+            && server_fields(&self.body).is_empty()
             && self.body.pointer("/metadata/generateName").is_none()
     }
 
@@ -393,16 +401,71 @@ fn text_at<'a>(body: &'a Value, pointer: &str) -> Option<&'a str> {
     body.pointer(pointer).and_then(Value::as_str)
 }
 
-/// The first server-owned field of `body`, `status` first.
-fn server_field(body: &Value) -> Option<&'static str> {
-    if body.get("status").is_some() {
-        return Some("status");
-    }
-    let metadata = body.get("metadata")?;
-    SERVER_METADATA
+/// Every server-owned field of `body` as a path, `status` first.
+fn server_fields(body: &Value) -> Vec<String> {
+    let status = body.get("status").map(|_| "status".to_owned());
+    let metadata = body.get("metadata");
+    let owned = SERVER_METADATA
         .into_iter()
         .chain(["ownerReferences"])
-        .find(|field| metadata.get(field).is_some())
+        .filter(|field| metadata.is_some_and(|metadata| metadata.get(field).is_some()))
+        .map(|field| format!("metadata.{field}"));
+    status.into_iter().chain(owned).collect()
+}
+
+/// The error text: the fields are listed once, so the user sees all of them before fixing.
+fn server_fields_message(fields: &[String]) -> String {
+    match fields {
+        [field] => format!("{field} is set by the server; remove it"),
+        fields => format!(
+            "{} fields are set by the server: {}; remove them",
+            fields.len(),
+            fields.join(", ")
+        ),
+    }
+}
+
+/// What the editor can do about a failed draft in one click.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DraftFix {
+    /// Take every server-owned field out of the text.
+    RemoveServerFields,
+    /// Keep the first YAML document only.
+    KeepFirstDocument,
+}
+
+impl DraftError {
+    /// The one-click fix of this error, if it has one.
+    pub fn fix(&self) -> Option<DraftFix> {
+        match self {
+            Self::ServerFields { .. } => Some(DraftFix::RemoveServerFields),
+            Self::SeveralDocuments { .. } => Some(DraftFix::KeepFirstDocument),
+            _ => None,
+        }
+    }
+}
+
+impl DraftFix {
+    /// The text with the fix applied. Removing server fields re-serializes the object, like Format.
+    pub fn apply(self, text: &str) -> Result<String, EditError> {
+        match self {
+            Self::KeepFirstDocument => Ok(documents(text).into_iter().next().unwrap_or_default()),
+            Self::RemoveServerFields => {
+                let mut body = parse_mapping(text)?;
+                if let Some(root) = body.as_object_mut() {
+                    root.remove("status");
+                    if let Some(metadata) = root.get_mut("metadata").and_then(Value::as_object_mut)
+                    {
+                        for field in SERVER_METADATA.into_iter().chain(["ownerReferences"]) {
+                            metadata.remove(field);
+                        }
+                    }
+                }
+                body.sort_all_objects();
+                to_yaml_text(&body, None).map_err(serialization_error)
+            }
+        }
+    }
 }
 
 /// A namespaced kind needs a DNS-label namespace; a Namespace has none.
@@ -504,24 +567,31 @@ fn role_binding_warnings(body: &Value) -> Vec<DraftWarning> {
     warnings
 }
 
-/// Whether a `---` marker is followed by content after a first document with content. A leading
-/// marker is the usual start of one document.
-fn has_several_documents(text: &str) -> bool {
+/// The documents of a multi-document text that have content, each as its own text. A leading `---`
+/// marker is the usual start of one document, and a document of comments only is not one.
+fn documents(text: &str) -> Vec<String> {
+    let mut documents = Vec::new();
+    let mut current = String::new();
     let mut has_content = false;
-    let mut has_second_marker = false;
+    let mut finish = |current: &mut String, has_content: &mut bool| {
+        if *has_content {
+            documents.push(std::mem::take(current));
+        }
+        current.clear();
+        *has_content = false;
+    };
     for line in text.lines() {
-        let line = line.trim_end();
-        if line == "---" || line.starts_with("--- ") {
-            has_second_marker |= has_content;
+        let marker = line.trim_end();
+        if marker == "---" || marker.starts_with("--- ") {
+            finish(&mut current, &mut has_content);
             continue;
         }
-        let is_content = !line.is_empty() && !line.trim_start().starts_with('#');
-        if is_content && has_second_marker {
-            return true;
-        }
-        has_content |= is_content;
+        has_content |= !marker.is_empty() && !marker.trim_start().starts_with('#');
+        current.push_str(line);
+        current.push('\n');
     }
-    false
+    finish(&mut current, &mut has_content);
+    documents
 }
 
 #[cfg(test)]

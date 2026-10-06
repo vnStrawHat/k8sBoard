@@ -10,7 +10,8 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use cluster::{
-    DraftWarning, ObjectDraft, ObjectKind, WriteOperation, WriteOutcome, WriteRequest, format_yaml,
+    DraftFix, DraftWarning, ObjectDraft, ObjectKind, WriteOperation, WriteOutcome, WriteRequest,
+    format_yaml,
 };
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::{Editor, EditorState, InputEvent};
@@ -60,8 +61,12 @@ pub(crate) struct PassedCreate {
 }
 
 pub(crate) enum CreateFailure {
-    /// The text is not a creatable object; nothing was sent.
-    Local(SharedString),
+    /// The text is not a creatable object; nothing was sent. `fix` is the one-click repair of the
+    /// text, when the error has one.
+    Local {
+        message: SharedString,
+        fix: Option<DraftFix>,
+    },
     /// A 422, a 409 name clash, or a missing namespace: the side panel lists the fields as the
     /// server spelled them.
     Invalid {
@@ -69,6 +74,15 @@ pub(crate) enum CreateFailure {
         fields: Vec<SharedString>,
     },
     Server(SharedString),
+}
+
+impl CreateFailure {
+    fn local(message: impl Into<SharedString>, fix: Option<DraftFix>) -> Self {
+        Self::Local {
+            message: message.into(),
+            fix,
+        }
+    }
 }
 
 /// How a press of Ctrl S arrived: a repeat of a held key never opens the confirm.
@@ -193,7 +207,24 @@ impl ObjectCreateView {
                 self.refresh_dirty(cx);
             }
             Err(error) => {
-                self.check = CreateCheck::Failed(CreateFailure::Local(error.to_string().into()));
+                self.check = CreateCheck::Failed(CreateFailure::local(error.to_string(), None));
+            }
+        }
+        cx.notify();
+    }
+
+    /// The one-click repair of a failed text (`DraftFix`): the text is replaced as one undoable
+    /// edit, and the check starts over.
+    pub(crate) fn apply_fix(&mut self, fix: DraftFix, window: &mut Window, cx: &mut Context<Self>) {
+        match fix.apply(&self.text(cx)) {
+            Ok(fixed) => {
+                self.editor
+                    .update(cx, |editor, cx| editor.replace_all(fixed, window, cx));
+                self.refresh_dirty(cx);
+                self.check = CreateCheck::NotChecked;
+            }
+            Err(error) => {
+                self.check = CreateCheck::Failed(CreateFailure::local(error.to_string(), None));
             }
         }
         cx.notify();
@@ -287,7 +318,8 @@ impl ObjectCreateView {
         let draft = match ObjectDraft::new(self.kind, &text) {
             Ok(draft) => draft,
             Err(error) => {
-                self.check = CreateCheck::Failed(CreateFailure::Local(error.to_string().into()));
+                let fix = error.fix();
+                self.check = CreateCheck::Failed(CreateFailure::local(error.to_string(), fix));
                 cx.notify();
                 return;
             }
@@ -297,7 +329,7 @@ impl ObjectCreateView {
             draft.target().clone(),
             WriteOperation::CreateObject(Box::new(draft)),
         ) else {
-            self.check = CreateCheck::Failed(CreateFailure::Local(COULD_NOT_CREATE.into()));
+            self.check = CreateCheck::Failed(CreateFailure::local(COULD_NOT_CREATE, None));
             cx.notify();
             return;
         };
@@ -502,7 +534,7 @@ pub(crate) fn footer_text(check: &CreateCheck, current: &str) -> String {
             format!("Dry-run OK · {} ms", passed.elapsed.as_millis())
         }
         CreateCheck::Failed(
-            CreateFailure::Local(text)
+            CreateFailure::Local { message: text, .. }
             | CreateFailure::Invalid { message: text, .. }
             | CreateFailure::Server(text),
         ) => text.to_string(),
@@ -581,6 +613,19 @@ impl ObjectCreateView {
                         .child(warning.clone()),
                 );
             }
+        }
+        // The message is the status line above; the button repairs the text it describes.
+        if let CreateCheck::Failed(CreateFailure::Local { fix: Some(fix), .. }) = &self.check {
+            let fix = *fix;
+            side = side.child(
+                Button::new("create-fix")
+                    .label(fix_label(fix))
+                    .small()
+                    .outline()
+                    .on_click(cx.listener(move |view, _, window, cx| {
+                        view.apply_fix(fix, window, cx);
+                    })),
+            );
         }
         if let CreateCheck::Failed(CreateFailure::Invalid { message, fields }) = &self.check {
             side = side
@@ -712,6 +757,13 @@ fn dry_run_line(
     }
 }
 
+/// The button that repairs the text for a failed check.
+fn fix_label(fix: DraftFix) -> &'static str {
+    match fix {
+        DraftFix::RemoveServerFields => "Remove server fields",
+        DraftFix::KeepFirstDocument => "Keep the first document",
+    }
+}
 #[cfg(feature = "screenshot")]
 impl ObjectCreateView {
     /// `--screen new-config-map`: the ConfigMap template of `payments` with a passed dry-run, drawn

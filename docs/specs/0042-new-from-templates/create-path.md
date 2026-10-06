@@ -34,7 +34,8 @@ pub enum DraftError {
     #[error("metadata.name is not a valid {kind} name")] InvalidName { kind: &'static str },
     #[error("metadata.namespace is required")] MissingNamespace,
     #[error("a {kind} has no namespace")] UnexpectedNamespace { kind: &'static str },
-    #[error("{field} is set by the server; remove it")] ServerField { field: &'static str },
+    #[error("{} fields are set by the server: …; remove them")] ServerFields { fields: Vec<String> }, // one field: "{field} is set by the server; remove it"
+    #[error("Found {count} documents; paste one")] SeveralDocuments { count: usize },
     #[error("{path} holds <hidden>; write a value")] Placeholder { path: String },
 }
 ```
@@ -106,3 +107,7 @@ The response object is dropped after `created_name`, `uid`, and the missing path
 | `CreateObject` | POST `application/json` | `{collection path}?dryRun=All&fieldManager=k8sboard` (commit: `?fieldManager=k8sboard`) | the draft: the five kinds only, no `status` or server metadata | yes (query) | 0042 |
 
 No new clippy exception: `Api::create` sits in the excepted `send` match.
+
+## Pasting from kubectl (UX fix H10)
+
+`ServerFields` lists every server-owned field once (`status`, `metadata.uid`, `resourceVersion`, `creationTimestamp`, `managedFields`, `generation`, …, `ownerReferences`), and `SeveralDocuments` counts the YAML documents with content. `DraftError::fix()` names the one-click repair: `DraftFix::RemoveServerFields` re-serializes the object without them, `DraftFix::KeepFirstDocument` keeps the first document. The side panel shows the repair as one button (`Remove server fields`, `Keep the first document`) under the status line; the text is replaced as one undoable edit and the check starts over.

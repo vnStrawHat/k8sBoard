@@ -318,7 +318,7 @@ pub fn format_yaml(text: &str) -> Result<String, EditError> {
 }
 
 /// The text of the failure is a fixed message of the serializer.
-fn serialization_error(message: &'static str) -> EditError {
+pub(crate) fn serialization_error(message: &'static str) -> EditError {
     EditError::Syntax {
         line: 0,
         column: 0,

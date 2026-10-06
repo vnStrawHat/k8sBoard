@@ -314,11 +314,79 @@ fn local_error_blocks_before_request(cx: &mut TestAppContext) {
     t.view(cx).read_with(cx, |view, _| {
         assert!(matches!(
             view.check(),
-            CreateCheck::Failed(CreateFailure::Local(_))
+            CreateCheck::Failed(CreateFailure::Local { .. })
         ));
     });
     assert!(t.footer(cx).contains("metadata.generateName"));
     assert!(t.posts().is_empty());
+}
+
+const KUBECTL_CONFIG_MAP: &str = "\
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: pasted
+  namespace: team-a
+  uid: 5b2f
+  resourceVersion: \"881\"
+  creationTimestamp: \"2026-10-01T08:00:00Z\"
+data:
+  K: v
+status: {}
+";
+
+#[gpui_kit::test]
+fn a_kubectl_paste_lists_its_server_fields_and_one_click_strips_them(cx: &mut TestAppContext) {
+    let t = create_test("create-server-fields", cx);
+    t.show(ResourceKind::ConfigMaps, Vec::new(), cx);
+    t.open(cluster::ObjectKind::ConfigMap, cx);
+    t.set_text(KUBECTL_CONFIG_MAP, cx);
+    t.apply(cx);
+    cx.run_until_parked();
+    let fix = t.view(cx).read_with(cx, |view, _| match view.check() {
+        CreateCheck::Failed(CreateFailure::Local { message, fix }) => {
+            assert!(
+                message.starts_with("4 fields are set by the server: status, "),
+                "{message}"
+            );
+            *fix
+        }
+        _ => panic!("expected a local failure"),
+    });
+    assert_eq!(fix, Some(cluster::DraftFix::RemoveServerFields));
+    assert!(t.posts().is_empty());
+    let view = t.view(cx);
+    t.t.fixture.with_window(cx, |window, cx| {
+        view.update(cx, |view, cx| {
+            view.apply_fix(cluster::DraftFix::RemoveServerFields, window, cx)
+        });
+    });
+    let text = t.text(cx);
+    assert!(!text.contains("uid") && !text.contains("status"), "{text}");
+    assert!(text.contains("name: pasted"));
+    assert!(t.view(cx).read_with(cx, |view, _| matches!(
+        view.check(),
+        CreateCheck::NotChecked
+    )));
+}
+
+#[gpui_kit::test]
+fn several_pasted_documents_say_how_many_and_the_first_can_be_kept(cx: &mut TestAppContext) {
+    let t = create_test("create-several-documents", cx);
+    t.show(ResourceKind::ConfigMaps, Vec::new(), cx);
+    t.open(cluster::ObjectKind::ConfigMap, cx);
+    let second = KUBECTL_CONFIG_MAP.replace("pasted", "second");
+    t.set_text(&format!("{KUBECTL_CONFIG_MAP}---\n{second}"), cx);
+    t.apply(cx);
+    cx.run_until_parked();
+    assert_eq!(t.footer(cx), "Found 2 documents; paste one");
+    let view = t.view(cx);
+    t.t.fixture.with_window(cx, |window, cx| {
+        view.update(cx, |view, cx| {
+            view.apply_fix(cluster::DraftFix::KeepFirstDocument, window, cx)
+        });
+    });
+    assert_eq!(t.text(cx), KUBECTL_CONFIG_MAP);
 }
 
 #[gpui_kit::test]

@@ -70,9 +70,10 @@ fn draft_refuses_server_fields() {
     let with = |extra: &str| format!("{CONFIG_MAP}{extra}");
     let status = error_of(ObjectKind::ConfigMap, &with("status: {}\n"));
     assert!(matches!(
-        status,
-        DraftError::ServerField { field: "status" }
+        &status,
+        DraftError::ServerFields { fields } if fields == &["status"]
     ));
+    assert_eq!(status.to_string(), "status is set by the server; remove it");
     for field in [
         "uid",
         "resourceVersion",
@@ -85,11 +86,77 @@ fn draft_refuses_server_fields() {
             &format!("  namespace: payments\n  {field}: x\n"),
         );
         let error = error_of(ObjectKind::ConfigMap, &text);
+        let named = format!("metadata.{field}");
         assert!(
-            matches!(&error, DraftError::ServerField { field: named } if *named == field),
+            matches!(&error, DraftError::ServerFields { fields } if fields == &[named.as_str()]),
             "{field}: {error}"
         );
     }
+}
+
+/// What `kubectl get configmap -o yaml` prints around the ConfigMap of `CONFIG_MAP`.
+const KUBECTL_PASTE: &str = "\
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: new-config
+  namespace: payments
+  uid: 5b2f
+  resourceVersion: \"881\"
+  creationTimestamp: \"2026-10-01T08:00:00Z\"
+  managedFields:
+  - manager: kubectl
+data:
+  K: v
+status: {}
+";
+
+#[test]
+fn draft_lists_every_server_field_once() {
+    let error = error_of(ObjectKind::ConfigMap, KUBECTL_PASTE);
+    assert_eq!(
+        error.to_string(),
+        "5 fields are set by the server: status, metadata.managedFields, \
+         metadata.resourceVersion, metadata.uid, metadata.creationTimestamp; remove them"
+    );
+    assert_eq!(error.fix(), Some(DraftFix::RemoveServerFields));
+}
+
+#[test]
+fn remove_server_fields_strips_the_whole_list_and_the_text_then_drafts() {
+    let fixed = DraftFix::RemoveServerFields
+        .apply(KUBECTL_PASTE)
+        .expect("a mapping");
+    for field in [
+        "status",
+        "uid",
+        "resourceVersion",
+        "creationTimestamp",
+        "managedFields",
+    ] {
+        assert!(!fixed.contains(field), "{field} is still in\n{fixed}");
+    }
+    assert!(fixed.contains("name: new-config"));
+    assert!(fixed.contains("K: v"));
+    draft(ObjectKind::ConfigMap, &fixed);
+}
+
+#[test]
+fn several_documents_say_how_many_and_keep_the_first_on_request() {
+    let other = CONFIG_MAP.replace("new-config", "other");
+    let several = format!("{CONFIG_MAP}---\n{other}---\n{other}");
+    let error = error_of(ObjectKind::ConfigMap, &several);
+    assert!(matches!(error, DraftError::SeveralDocuments { count: 3 }));
+    assert_eq!(error.to_string(), "Found 3 documents; paste one");
+    assert_eq!(error.fix(), Some(DraftFix::KeepFirstDocument));
+    let kept = DraftFix::KeepFirstDocument.apply(&several).expect("text");
+    assert_eq!(kept, CONFIG_MAP);
+    draft(ObjectKind::ConfigMap, &kept);
+}
+
+#[test]
+fn only_server_fields_and_documents_have_a_fix() {
+    assert_eq!(error_of(ObjectKind::ConfigMap, "kind: [").fix(), None);
 }
 
 #[test]
@@ -176,16 +243,7 @@ fn draft_reports_syntax_and_size() {
 }
 
 #[test]
-fn draft_refuses_multi_document_yaml() {
-    let several = format!(
-        "{CONFIG_MAP}---\n{}",
-        CONFIG_MAP.replace("new-config", "other")
-    );
-    assert!(matches!(
-        error_of(ObjectKind::ConfigMap, &several),
-        DraftError::Text(EditError::NotAnObject)
-    ));
-    // A leading marker is the start of a single document.
+fn a_leading_marker_is_the_start_of_one_document() {
     draft(ObjectKind::ConfigMap, &format!("---\n{CONFIG_MAP}"));
 }
 
