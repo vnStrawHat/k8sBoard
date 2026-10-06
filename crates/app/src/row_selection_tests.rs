@@ -82,3 +82,15 @@ fn screens_without_bulk_actions_show_only_the_count() {
         assert!(bulk_actions(Screen::Kind(kind)).is_empty(), "{kind:?}");
     }
 }
+
+#[test]
+fn the_unticked_notice_counts_the_hidden_rows() {
+    assert_eq!(
+        unticked_notice_text(3),
+        "3 ticked rows hidden by the filter were unticked"
+    );
+    assert_eq!(
+        unticked_notice_text(1),
+        "1 ticked row hidden by the filter was unticked"
+    );
+}

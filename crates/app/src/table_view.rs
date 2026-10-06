@@ -2,6 +2,7 @@
 //! indices only, so the table never owns a copy of the rows and a newer snapshot cannot race it.
 
 use std::borrow::Cow;
+use std::cell::LazyCell;
 use std::collections::{BTreeSet, HashSet};
 use std::time::Instant;
 
@@ -82,6 +83,9 @@ pub(crate) struct TableView {
     checked: HashSet<RowName>,
     /// The row a Shift click extends the range from.
     anchor: Option<RowName>,
+    /// Ticked rows a rebuild unticked because the filter hides them (rows that left the list
+    /// are not counted), since the last `take_unticked_hidden`.
+    unticked_hidden: usize,
     /// Item indices in display order.
     rows: Vec<usize>,
     total: usize,
@@ -238,7 +242,24 @@ impl TableView {
             .collect();
         let is_visible =
             |name: &RowName| visible.contains(&(name.namespace.as_deref(), name.name.as_str()));
-        self.checked.retain(is_visible);
+        // Every row of the list, built only when a tick has to go: it tells a row the filter
+        // hides from a row that left the list.
+        let present = LazyCell::new(|| {
+            items
+                .iter()
+                .map(|row| (row.namespace(), row.name()))
+                .collect::<HashSet<_>>()
+        });
+        let mut hidden_by_filter = 0;
+        self.checked.retain(|name| {
+            if is_visible(name) {
+                return true;
+            }
+            let key = (name.namespace.as_deref(), name.name.as_str());
+            hidden_by_filter += usize::from(present.contains(&key));
+            false
+        });
+        self.unticked_hidden += hidden_by_filter;
         if self
             .anchor
             .as_ref()
@@ -250,6 +271,11 @@ impl TableView {
 
     pub(crate) fn is_checked<T: TableRow>(&self, row: &T) -> bool {
         self.checked.contains(&RowName::of(row))
+    }
+
+    /// How many ticked rows a rebuild unticked because the filter hides them, since the last call.
+    pub(crate) fn take_unticked_hidden(&mut self) -> usize {
+        std::mem::take(&mut self.unticked_hidden)
     }
 
     pub(crate) fn checked_count(&self) -> usize {

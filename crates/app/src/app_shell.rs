@@ -91,6 +91,7 @@ use crate::resource_actions::{
 use crate::resource_kind::ResourceKind;
 use crate::revision_diff::{RevisionDiffRequest, RevisionDiffView, dialog_body};
 use crate::row_context::RowContext;
+use crate::row_selection::{UNTICKED_NOTICE_LIFETIME, UntickedNotice};
 #[cfg(feature = "screenshot")]
 use crate::screenshot::{FeedProgress, kubelet_progress};
 #[cfg(feature = "screenshot")]
@@ -577,6 +578,8 @@ pub(crate) struct AppShell {
     /// The clear of the last copied value. It lives here, not in the drawer, so it survives the
     /// drawer closing and a context switch. A new copy replaces it.
     clipboard_clear: Option<ArmedClear>,
+    /// The notice that a filter unticked hidden rows; it clears itself after a few seconds.
+    unticked_notice: Option<UntickedNotice>,
     /// Clears an armed copy when the app quits (best effort).
     _clipboard_quit: Subscription,
     /// Re-renders the title bar when a setting or a settings notice changes.
@@ -831,6 +834,7 @@ impl AppShell {
             secret_value_access,
             overview: OverviewState::default(),
             clipboard_clear: None,
+            unticked_notice: None,
             _clipboard_quit: clipboard_quit,
             _settings_observer: cx.observe_global::<AppSettings>(|shell, cx| {
                 // A renamed or re-colored cluster shows at once in the Cluster column.
@@ -1674,6 +1678,7 @@ impl AppShell {
             return;
         }
         self.screen = screen;
+        self.unticked_notice = None;
         self.close_value_popover(cx);
         self.drawer.tab = DrawerTab::Overview;
         self.drawer.container_tab = ContainerTab::Info;
@@ -4467,8 +4472,45 @@ impl AppShell {
     /// The one path of every toolkit action: change the view, then keep the selection and the
     /// drawer consistent with the rows that remain.
     fn update_view(&mut self, cx: &mut Context<Self>, change: impl FnOnce(&mut TableView)) {
+        // Unticks that data refreshes made since the last change are not this change's.
+        self.take_unticked_hidden(cx);
         self.rebuild_visible_view(cx, change);
+        let unticked = self.take_unticked_hidden(cx);
+        if unticked > 0 {
+            self.announce_unticked(unticked, cx);
+        }
         self.sync_selection(cx);
+        cx.notify();
+    }
+
+    fn take_unticked_hidden(&self, cx: &mut Context<Self>) -> usize {
+        match self.screen {
+            Screen::Pods => take_unticked_hidden(&self.pod_table, cx),
+            Screen::Nodes => take_unticked_hidden(&self.node_table, cx),
+            Screen::Overview | Screen::Topology | Screen::PortForwarding => 0,
+            Screen::Issues => take_unticked_hidden(&self.issue_table, cx),
+            Screen::Kind(_) => take_unticked_hidden(&self.kind_table, cx),
+        }
+    }
+
+    /// Shows how many ticked rows a filter unticked, replacing an older notice, until the
+    /// timer ends or the notice is dismissed.
+    fn announce_unticked(&mut self, count: usize, cx: &mut Context<Self>) {
+        let expiry = cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .timer(UNTICKED_NOTICE_LIFETIME)
+                .await;
+            let _ = this.update(cx, |shell, cx| shell.dismiss_unticked_notice(cx));
+        });
+        self.unticked_notice = Some(UntickedNotice {
+            count,
+            _expiry: expiry,
+        });
+    }
+
+    /// The notice's ✕, and its timer.
+    pub(crate) fn dismiss_unticked_notice(&mut self, cx: &mut Context<Self>) {
+        self.unticked_notice = None;
         cx.notify();
     }
 
@@ -4883,6 +4925,16 @@ fn on_switch_to<A: gpui_kit::Action>(root: Div, shortcut: u8, cx: &Context<AppSh
 fn table_prefs<D: FilteredTable>(table: &Entity<TableState<D>>, cx: &App) -> Option<TablePrefs> {
     let delegate = table.read(cx).delegate();
     Some(delegate.view()?.prefs(delegate.column_plan()?))
+}
+
+/// How many ticked rows of `table` its filter unticked since the last call.
+fn take_unticked_hidden<D: FilteredTable>(table: &Entity<TableState<D>>, cx: &mut App) -> usize {
+    table.update(cx, |table, _| {
+        table
+            .delegate_mut()
+            .view_mut()
+            .map_or(0, TableView::take_unticked_hidden)
+    })
 }
 
 /// Ticks or unticks rows of the view of `table`.

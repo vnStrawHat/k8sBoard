@@ -1,12 +1,15 @@
 //! The selection bar that appears while rows are ticked: how many, the screen's bulk actions
 //! (gated like the menu items of the same actions), and a button that clears the selection.
 
+use std::time::Duration;
+
 use cluster::ObjectKind;
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::{ActiveTheme as _, Disableable as _, Icon, Sizable as _, h_flex};
 use gpui_kit::{
-    AnyElement, App, IntoElement, ParentElement as _, SharedString, Styled as _, WeakEntity,
+    AnyElement, App, Div, IntoElement, ParentElement as _, SharedString, Styled as _, Task,
+    WeakEntity,
 };
 
 use crate::app_shell::{AppShell, Screen};
@@ -98,15 +101,46 @@ pub(crate) struct BulkButton {
     pub(crate) is_danger: bool,
 }
 
-/// `text` is the count, such as `2 nodes selected`. The bar floats over the table, so it uses
+/// How long the notice of unticked rows stays.
+pub(crate) const UNTICKED_NOTICE_LIFETIME: Duration = Duration::from_secs(8);
+
+/// Ticked rows a filter change unticked, shown over the table until the timer ends. Dropping it
+/// cancels the timer.
+pub(crate) struct UntickedNotice {
+    pub(crate) count: usize,
+    pub(crate) _expiry: Task<()>,
+}
+
+/// `3 ticked rows hidden by the filter were unticked`.
+pub(crate) fn unticked_notice_text(count: usize) -> String {
+    if count == 1 {
+        "1 ticked row hidden by the filter was unticked".to_owned()
+    } else {
+        format!("{count} ticked rows hidden by the filter were unticked")
+    }
+}
+
+/// The floating pill of the notice, in the colours of the selection bar.
+pub(crate) fn unticked_notice(count: usize, shell: &WeakEntity<AppShell>, cx: &App) -> AnyElement {
+    let shell = shell.clone();
+    floating_pill(cx)
+        .child(unticked_notice_text(count))
+        .child(
+            Button::new("dismiss-unticked-notice")
+                .small()
+                .ghost()
+                .icon(Icon::new(IconName::X))
+                .tooltip("Dismiss")
+                .on_click(move |_, _, cx| {
+                    let _ = shell.update(cx, |shell, cx| shell.dismiss_unticked_notice(cx));
+                }),
+        )
+        .into_any_element()
+}
+
+/// The frame shared by the selection bar and the notice. They float over the table, so they use
 /// the popover colours.
-pub(crate) fn selection_bar(
-    text: String,
-    buttons: Vec<BulkButton>,
-    shell: &WeakEntity<AppShell>,
-    cx: &App,
-) -> AnyElement {
-    let clear_shell = shell.clone();
+fn floating_pill(cx: &App) -> Div {
     let theme = cx.theme();
     h_flex()
         .gap_2()
@@ -118,6 +152,17 @@ pub(crate) fn selection_bar(
         .border_color(theme.border)
         .bg(theme.popover)
         .shadow_md()
+}
+
+/// `text` is the count, such as `2 nodes selected`.
+pub(crate) fn selection_bar(
+    text: String,
+    buttons: Vec<BulkButton>,
+    shell: &WeakEntity<AppShell>,
+    cx: &App,
+) -> AnyElement {
+    let clear_shell = shell.clone();
+    floating_pill(cx)
         .child(text)
         .children(buttons.into_iter().map(|button| {
             let id = button.label.clone();

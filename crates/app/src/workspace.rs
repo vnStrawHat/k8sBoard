@@ -47,7 +47,7 @@ use crate::port_forward_menu::PortButtons;
 use crate::resource_actions::{ActionAvailability, ResourceAction, RowAction, action_availability};
 use crate::resource_kind::ResourceKind;
 use crate::row_context::RowContext;
-use crate::row_selection::selection_bar;
+use crate::row_selection::{selection_bar, unticked_notice};
 use crate::settings::AppSettings;
 use crate::settings_window::{ClusterAddition, add_cluster, manage_clusters};
 use crate::table_filter::FilterPreset;
@@ -277,7 +277,8 @@ impl AppShell {
             .children(self.render_header_actions(toolkit, cx))
     }
 
-    /// The bar over the bottom of the table while rows are ticked. It sits left of an open
+    /// The bar over the bottom of the table while rows are ticked, and the notice of rows a filter
+    /// unticked above it (alone when nothing is ticked any more). It sits left of an open
     /// drawer, and the drawer is drawn after it.
     fn render_selection_bar(
         &self,
@@ -286,6 +287,33 @@ impl AppShell {
     ) -> Option<AnyElement> {
         self.any_live(cx).then_some(())?;
         let state = state?;
+        let bar = self.selection_bar_pill(state, cx);
+        let notice = self
+            .unticked_notice
+            .as_ref()
+            .map(|notice| unticked_notice(notice.count, &cx.weak_entity(), cx));
+        if bar.is_none() && notice.is_none() {
+            return None;
+        }
+        let right = self.open_drawer_width();
+        Some(
+            div()
+                .absolute()
+                .bottom_4()
+                .left_0()
+                .right(right)
+                .flex()
+                .flex_col()
+                .items_center()
+                .gap_2()
+                .children(notice)
+                .children(bar)
+                .into_any_element(),
+        )
+    }
+
+    /// The count and the bulk buttons of the ticked rows; `None` when none is ticked.
+    fn selection_bar_pill(&self, state: &ToolkitState, cx: &Context<Self>) -> Option<AnyElement> {
         if state.checked == 0 {
             return None;
         }
@@ -297,19 +325,12 @@ impl AppShell {
             Screen::Kind(kind) => (kind.singular(), kind.plural()),
         };
         let text = format!("{} selected", count_label(state.checked, singular, plural));
-        let bar = selection_bar(text, self.bulk_buttons(cx), &cx.weak_entity(), cx);
-        let right = self.open_drawer_width();
-        Some(
-            div()
-                .absolute()
-                .bottom_4()
-                .left_0()
-                .right(right)
-                .flex()
-                .justify_center()
-                .child(bar)
-                .into_any_element(),
-        )
+        Some(selection_bar(
+            text,
+            self.bulk_buttons(cx),
+            &cx.weak_entity(),
+            cx,
+        ))
     }
 
     /// The value popover, over the bottom of the table and above the selection bar while rows are

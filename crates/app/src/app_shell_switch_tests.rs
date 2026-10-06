@@ -1466,3 +1466,37 @@ fn ctrl_a_ticks_every_shown_row_and_again_unticks(cx: &mut TestAppContext) {
     fixture.press(&chord("a"), cx);
     assert!(ticked_pod_names(&fixture, cx).is_empty());
 }
+
+#[gpui_kit::test]
+fn a_filter_that_hides_ticked_rows_says_how_many_it_unticked(cx: &mut TestAppContext) {
+    let fixture = pods_fixture("unticked-notice", cx);
+    let notice_count = |cx: &mut TestAppContext| {
+        fixture.shell.read_with(cx, |shell, _| {
+            shell.unticked_notice.as_ref().map(|n| n.count)
+        })
+    };
+    fixture.shell.update(cx, |shell, cx| {
+        shell.set_all_checked(true, cx);
+        // Both test pods are Running, so the unhealthy chip hides them.
+        shell.toggle_unhealthy(cx);
+    });
+    assert_eq!(notice_count(cx), Some(2));
+    assert!(ticked_pod_names(&fixture, cx).is_empty());
+    // Leaving the screen drops the notice.
+    fixture
+        .shell
+        .update(cx, |shell, cx| shell.show_screen(Screen::Nodes, cx));
+    assert_eq!(notice_count(cx), None);
+}
+
+#[gpui_kit::test]
+fn clearing_the_ticks_yourself_is_not_announced(cx: &mut TestAppContext) {
+    let fixture = pods_fixture("unticked-silent", cx);
+    fixture.shell.update(cx, |shell, cx| {
+        shell.set_all_checked(true, cx);
+        shell.clear_checked(cx);
+    });
+    fixture
+        .shell
+        .read_with(cx, |shell, _| assert!(shell.unticked_notice.is_none()));
+}

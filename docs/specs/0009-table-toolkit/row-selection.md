@@ -80,3 +80,7 @@ pub(crate) fn bulk_actions(screen: Screen) -> &'static [&'static str];
 ## Launch screen
 
 `--screen pods-selected` and `--screen nodes-selected`: that screen with its first two visible rows checked once the list loads (`apply_pending_launch_screen`), no drawer. Usage text updated.
+
+## Unticked by a filter (J8)
+
+When a filter change (text, chip, preset) unticks rows the filter now hides, a pill above the selection bar says "N ticked rows hidden by the filter were unticked" (also when nothing stays ticked, so the bar is gone). It has a ✕, clears itself after 8 s, and goes with a screen change. Rows that left the list (deleted, other scope) are not counted: `TableView::take_unticked_hidden` counts only rows the list still holds. There is no Undo; the pill is a plain notice.

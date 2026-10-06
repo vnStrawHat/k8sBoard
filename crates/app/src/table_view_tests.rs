@@ -522,3 +522,33 @@ fn toggle_all_ticks_then_unticks_the_shown_rows() {
     view.apply_check(&rows, RowCheck::ToggleAll);
     assert_eq!(view.checked_count(), 0);
 }
+
+#[test]
+fn a_filter_reports_the_ticked_rows_it_hid() {
+    let rows = items();
+    let mut view = ticked_view(&rows);
+    view.set_all_checked(&rows, true);
+    assert_eq!(view.take_unticked_hidden(), 0);
+    view.filter.text = "g=b".to_owned();
+    view.rebuild(&rows, 2, now());
+    assert_eq!(view.take_unticked_hidden(), 2);
+    // The count is taken once.
+    assert_eq!(view.take_unticked_hidden(), 0);
+}
+
+#[test]
+fn rows_that_left_the_list_are_not_reported_as_hidden() {
+    let rows = items();
+    let mut view = ticked_view(&rows);
+    view.set_all_checked(&rows, true);
+    view.rebuild(&rows[..2], 2, now());
+    assert_eq!(view.checked_count(), 2);
+    assert_eq!(view.take_unticked_hidden(), 0);
+    // One leaves and one is hidden in the same rebuild: only the hidden one counts.
+    view.filter.text = "g=b".to_owned();
+    view.rebuild(&rows[..1], 2, now());
+    assert_eq!(view.take_unticked_hidden(), 0);
+    view.filter.text = "g=a".to_owned();
+    view.rebuild(&rows[..2], 2, now());
+    assert_eq!(view.take_unticked_hidden(), 1);
+}
