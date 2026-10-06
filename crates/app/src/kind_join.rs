@@ -1230,13 +1230,30 @@ fn pods_text(count: usize) -> String {
     format!("{count} {}", if count == 1 { "pod" } else { "pods" })
 }
 
-/// The distinct roles joined with `, `; Warn when one is cluster-admin, a muted dash for none.
+/// The account's own roles joined with `, `, then `+N via group` for the other roles it only
+/// reaches through a group (the stock `system:serviceaccounts` grants sit on every account). A
+/// cluster-admin grant is always named. Warn when one role is cluster-admin, a muted dash for none.
 fn bound_roles_cell(roles: Option<&[&BoundRole]>) -> KindCell {
     let Some(roles) = roles else {
         return KindCell::Absent;
     };
-    let mut texts: Vec<String> = roles.iter().map(|bound| role_text(&bound.role)).collect();
+    let is_folded = |bound: &&&BoundRole| bound.group.is_some() && !is_cluster_admin(&bound.role);
+    let mut texts: Vec<String> = roles
+        .iter()
+        .filter(|bound| !is_folded(bound))
+        .map(|bound| role_text(&bound.role))
+        .collect();
     texts.dedup();
+    let mut folded: Vec<String> = roles
+        .iter()
+        .filter(is_folded)
+        .map(|bound| role_text(&bound.role))
+        .collect();
+    folded.sort();
+    folded.dedup();
+    if !folded.is_empty() {
+        texts.push(format!("+{} via group", folded.len()));
+    }
     if texts.is_empty() {
         return KindCell::Toned(StatusLabel {
             text: "—".into(),

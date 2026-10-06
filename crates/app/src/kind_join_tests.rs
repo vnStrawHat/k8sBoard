@@ -1647,6 +1647,52 @@ fn cluster_admin_through_service_accounts_group_warns() {
 }
 
 #[test]
+fn group_wide_roles_follow_the_accounts_own_and_fold_into_a_count() {
+    let group = |name: &str, role: &str, subject: &str| {
+        binding_for(
+            None,
+            name,
+            (cluster::RoleKind::ClusterRole, role),
+            vec![group_subject(subject)],
+        )
+    };
+    let bindings = (
+        Vec::new(),
+        vec![
+            group(
+                "discovery",
+                "system:service-account-issuer-discovery",
+                "system:serviceaccounts",
+            ),
+            group(
+                "also",
+                "system:public-info-viewer",
+                "system:serviceaccounts:shop",
+            ),
+            binding_for(
+                None,
+                "own",
+                (cluster::RoleKind::ClusterRole, "view"),
+                vec![account_subject("shop", "api")],
+            ),
+        ],
+    );
+    let rows = joined_accounts(
+        &[account_of("shop", "api"), account_of("shop", "idle")],
+        None,
+        Some(bindings),
+    );
+    assert_eq!(
+        rows[0].cells[ACCOUNT_BOUND_ROLES],
+        text_cell("clusterrole/view, +2 via group")
+    );
+    // An account with only group grants shows just the count.
+    assert_eq!(
+        rows[1].cells[ACCOUNT_BOUND_ROLES],
+        text_cell("+2 via group")
+    );
+}
+#[test]
 fn service_account_used_by_counts_pods() {
     let pods = vec![
         running_as("shop", "a-1", Some("api")),

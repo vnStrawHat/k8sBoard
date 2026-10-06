@@ -68,3 +68,7 @@ Secret names are plain `Mono` labels, not links (the Secrets kind is 0016).
 | CLUSTER ADMIN | ServiceAccounts | a bound role (direct or through its groups) is `clusterrole/cluster-admin` | through a ClusterRoleBinding: `This service account has full access to the cluster through {binding_text}.`; only RoleBindings: `This service account has full access to namespace {binding ns} through {binding_text}.` |
 
 No pod link in these boxes. CLUSTER ADMIN sees only RoleBindings of the session scope plus every ClusterRoleBinding (decisions ceiling).
+
+## Bound roles cell (walk H16)
+
+The ServiceAccounts Bound roles cell names the account's own roles first, then folds the roles it only reaches through a group (`system:serviceaccounts`, `system:serviceaccounts:{ns}`) into `+N via group` (N distinct roles). A cluster-admin grant through a group is never folded: it is named and toned Warn. The drawer lists every role, own first, with `· group {name}` on the group ones.
