@@ -3979,11 +3979,8 @@ fn short_reason_reduces_known_sentences_to_a_few_words() {
         format!("Read-only · {UNLOCK_KEYS}")
     );
     for (reason, short) in [
-        ("Not permitted: delete pods", "No permission · delete pods"),
-        (
-            "Not permitted: get and create pods/exec",
-            "No permission · pods/exec",
-        ),
+        ("Not permitted: delete pods", "No permission"),
+        ("Not permitted: get and create pods/exec", "No permission"),
         (NOT_SHIPPED_REASON, "Later version"),
         (NOT_RUNNING_REASON, "Not running"),
         (STATIC_POD_TEXT, "Static pod"),

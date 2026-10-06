@@ -3165,11 +3165,9 @@ fn disabled_label(label: SharedString, reason: SharedString) -> AnyElement {
 /// also fill notices and tooltips), so the short form is derived here, in the one place the menus
 /// read; a reason with no entry shows as it is and is cut at `REASON_WIDTH`.
 pub(crate) fn short_reason(reason: &str) -> SharedString {
-    let short = if let Some(denied) = reason.strip_prefix("Not permitted: ") {
-        // The verb and resource tell what to ask the cluster admin for. The pair of verbs of a shell
-        // or a forward is one right, so it names the resource only; the tooltip has both verbs.
-        let wanted = denied.strip_prefix("get and create ").unwrap_or(denied);
-        return format!("No permission · {wanted}").into();
+    let short = if reason.starts_with("Not permitted: ") {
+        // The missing verb and resource stay in the tooltip; the row itself keeps to two words.
+        "No permission"
     } else if reason.ends_with(READ_ONLY_SUFFIX) {
         return format!("Read-only · {UNLOCK_KEYS}").into();
     } else if reason == NOT_SHIPPED_REASON {
