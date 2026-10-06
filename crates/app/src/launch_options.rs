@@ -29,7 +29,7 @@ Options:
                          colour family (default: the saved one, else zed-one)
   --config-dir <path>    settings folder (default: K8SBOARD_CONFIG_DIR, else the OS config folder)
   --screen overview|switcher|namespace-picker|cordon-confirm|unlock-confirm|scale-popover|scale-confirm|restart-bulk-confirm|delete-confirm|delete-bulk-confirm|restart-pod-confirm|evict-confirm|edit-yaml-diff|edit-yaml-history|values-edit|new-config-map|revision-diff|hpa-range-popover|expand-confirm|default-class-confirm|renew-confirm|pods|nodes|issues|issues-drawer|topology|topology-problems|topology-rbac|topology-selected|topology-traffic|topology-traffic-fixture|topology-traffic-fixture-selected|pod-drawer|pod-containers|pod-events|pod-monitor|pod-monitor-source-fixture|node-drawer|node-events|node-monitor|pod-yaml|node-yaml|logs-dock|logs-zoomed|logs-popout|logs-workload|shell-fixture|shell-dock-fixture|shell-paste-fixture|shell-picker-fixture|shell-confirm-fixture|attach-confirm|node-shell-confirm|node-shell-options|debug-container-options|node-shell-confirm-staging|leftover-sweep-fixture|node-shell-tab-fixture|debug-shell-tab-fixture|shell-find-fixture|port-forwards|port-forwards-list|port-forward-new-fixture|port-forward-confirm-fixture|port-forward-remove-fixture|pods-selected|nodes-selected|shortcuts|pods-cursor|
-           node-taints-editor|node-taints-editor-invalid|node-labels-editor|node-labels-bulk-editor|drain-dialog|drain-dialog-skip-pdbs|drain-progress|drain-progress-stuck|
+           node-taints-editor|node-taints-editor-invalid|node-labels-editor|node-labels-bulk-editor|drain-dialog|drain-dialog-skip-pdbs|drain-progress|drain-progress-stuck|drain-progress-pending|
            namespaces|events|deployments|statefulsets|daemonsets|replicasets|jobs|cronjobs|
            services|ingresses|configmaps|<kind>-drawer|<kind>-events|<kind>-monitor|<kind>-yaml|releases-values|releases-manifest|
            customresourcedefinitions|custom:<crd-name>[-drawer|-events|-yaml]|who-can|check-permissions|account-permissions|test-traffic|settings|settings-tall|settings-general|settings-environments|settings-appearance|settings-terminal|settings-logs|settings-metrics|settings-metrics-fixture|settings-shortcuts
@@ -135,6 +135,9 @@ pub(crate) enum LaunchScreen {
     DrainProgress,
     /// `--screen drain-progress-stuck`: the same tab after the node ended Stuck, with its reason.
     DrainProgressStuck,
+    /// `--screen drain-progress-pending`: the tab of a drain that ended Drained while the controller's
+    /// replacement of an evicted pod is still Pending.
+    DrainProgressPending,
     /// `--screen leftover-sweep-fixture`: the leftover review dialog over fixed rows.
     LeftoverSweepFixture,
     /// `--screen node-shell-tab-fixture` and `debug-shell-tab-fixture`: the dock zoomed on a node
@@ -287,7 +290,9 @@ impl LaunchScreen {
             | Self::LeftoverSweepFixture
             | Self::NodeShellTabFixture
             | Self::DebugShellTabFixture => Screen::Pods,
-            Self::DrainProgress | Self::DrainProgressStuck => Screen::Nodes,
+            Self::DrainProgress | Self::DrainProgressStuck | Self::DrainProgressPending => {
+                Screen::Nodes
+            }
             Self::ShellConfirmFixture
             | Self::AttachConfirm
             | Self::DeleteBulkConfirm
@@ -579,6 +584,7 @@ impl LaunchScreen {
                 | Self::DebugShellTabFixture
                 | Self::DrainProgress
                 | Self::DrainProgressStuck
+                | Self::DrainProgressPending
         )
     }
 
@@ -612,6 +618,7 @@ impl LaunchScreen {
                 | Self::DebugShellTabFixture
                 | Self::DrainProgress
                 | Self::DrainProgressStuck
+                | Self::DrainProgressPending
         )
     }
 
@@ -681,6 +688,7 @@ impl LaunchScreen {
             "drain-dialog-skip-pdbs" => Some(Self::DrainDialogSkipPdbs),
             "drain-progress" => Some(Self::DrainProgress),
             "drain-progress-stuck" => Some(Self::DrainProgressStuck),
+            "drain-progress-pending" => Some(Self::DrainProgressPending),
             "leftover-sweep-fixture" => Some(Self::LeftoverSweepFixture),
             "node-shell-tab-fixture" => Some(Self::NodeShellTabFixture),
             "debug-shell-tab-fixture" => Some(Self::DebugShellTabFixture),

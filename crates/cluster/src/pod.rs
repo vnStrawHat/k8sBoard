@@ -80,6 +80,10 @@ pub struct DrainPod {
     pub is_pending: bool,
     /// `metadata.deletionTimestamp` is set.
     pub is_terminating: bool,
+    /// The PersistentVolumeClaims the pod mounts, in volume order.
+    pub claims: Vec<String>,
+    /// The claim whose volume only this node can serve (`pin_volumes`); `None` until asked.
+    pub pinned_volume: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -322,6 +326,14 @@ pub(crate) fn drain_pod(pod: &Pod) -> DrainPod {
         is_finished: matches!(phase, Some("Succeeded" | "Failed")),
         is_pending: phase == Some("Pending"),
         is_terminating: pod.metadata.deletion_timestamp.is_some(),
+        claims: pod
+            .spec
+            .iter()
+            .flat_map(|spec| spec.volumes.iter().flatten())
+            .filter_map(|volume| volume.persistent_volume_claim.as_ref())
+            .map(|claim| claim.claim_name.clone())
+            .collect(),
+        pinned_volume: None,
     }
 }
 

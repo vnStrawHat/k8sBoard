@@ -4011,7 +4011,9 @@ impl AppShell {
         #[cfg(feature = "screenshot")]
         if matches!(
             launch,
-            LaunchScreen::DrainProgress | LaunchScreen::DrainProgressStuck
+            LaunchScreen::DrainProgress
+                | LaunchScreen::DrainProgressStuck
+                | LaunchScreen::DrainProgressPending
         ) {
             self.open_drain_progress_fixture(launch, window, cx);
             return;

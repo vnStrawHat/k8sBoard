@@ -22,6 +22,8 @@ fn pod(name: &str) -> DrainPod {
         is_finished: false,
         is_pending: false,
         is_terminating: false,
+        claims: Vec::new(),
+        pinned_volume: None,
     }
 }
 
@@ -859,4 +861,162 @@ fn a_stuck_header_without_a_known_budget_has_no_blocker_part() {
         run.status_text(secs(300)),
         "Stuck on wk-04: Timed out after 5m: 1 pod left"
     );
+}
+
+// ---- Following the replacements of the evicted pods ----
+
+fn replacement(name: &str, reason: Option<&str>) -> PendingPod {
+    PendingPod {
+        namespace: "payments".to_owned(),
+        name: name.to_owned(),
+        uid: format!("new-{name}"),
+        controller: Some(ControllerRef {
+            kind: "ReplicaSet".to_owned(),
+            name: "api".to_owned(),
+        }),
+        reason: reason.map(str::to_owned),
+    }
+}
+
+const NO_NODE_FITS: &str = "0/3 nodes are available: 1 node(s) had volume node affinity conflict";
+
+/// A run that evicted `pods`, saw them go, ended drained at 4 s, and began to follow.
+fn followed(pods: &[&str]) -> DrainRun {
+    let (mut run, _) = run_over(pods);
+    for name in pods {
+        run.on_write(&NextStep::Evict(key(name)), ok(), secs(0));
+    }
+    run.on_poll(Ok(Vec::new()), secs(3));
+    run.on_node_done(NodeOutcome::Drained);
+    run.start_follow(secs(4));
+    run
+}
+
+#[test]
+fn a_pending_replacement_reads_recreated_instead_of_gone() {
+    let mut run = followed(&["api-1"]);
+    assert_eq!(progress_of_ended(&run, "api-1"), PodProgress::Gone);
+    run.on_follow(Ok(vec![replacement("api-9", Some(NO_NODE_FITS))]), secs(5));
+    let rows = run.pod_rows(secs(5));
+    assert_eq!(
+        rows[0].text.as_ref(),
+        format!("recreated · Pending: {NO_NODE_FITS}")
+    );
+    assert_eq!(rows[0].tone, StatusTone::Warn);
+    assert_eq!(run.pending_replacements(), 1);
+    assert_eq!(run.status_text(secs(5)), "Drained · 1 pending replacement");
+}
+
+#[test]
+fn a_replacement_the_scheduler_has_not_judged_says_so() {
+    let mut run = followed(&["api-1"]);
+    run.on_follow(Ok(vec![replacement("api-9", None)]), secs(5));
+    assert_eq!(
+        run.pod_rows(secs(5))[0].text.as_ref(),
+        "recreated · Pending: not scheduled yet"
+    );
+}
+
+#[test]
+fn a_replacement_that_starts_turns_the_row_back_to_gone() {
+    let mut run = followed(&["api-1"]);
+    run.on_follow(Ok(vec![replacement("api-9", None)]), secs(5));
+    run.on_follow(Ok(Vec::new()), secs(8));
+    assert_eq!(run.pending_replacements(), 0);
+    assert_eq!(run.pod_rows(secs(8))[0].text.as_ref(), "Gone");
+}
+
+#[test]
+fn only_a_pending_pod_of_the_same_controller_with_a_new_uid_is_a_replacement() {
+    let mut run = followed(&["api-1"]);
+    let mut other_owner = replacement("web-1", None);
+    other_owner.controller = Some(ControllerRef {
+        kind: "ReplicaSet".to_owned(),
+        name: "web".to_owned(),
+    });
+    let mut other_namespace = replacement("api-2", None);
+    other_namespace.namespace = "billing".to_owned();
+    // The evicted pod itself, still listed Pending, is not its own replacement.
+    let mut itself = replacement("api-1", None);
+    itself.uid = "uid-api-1".to_owned();
+    run.on_follow(Ok(vec![other_owner, other_namespace, itself]), secs(5));
+    assert_eq!(run.pending_replacements(), 0);
+}
+
+#[test]
+fn one_pending_replacement_belongs_to_one_evicted_pod() {
+    let mut run = followed(&["api-1", "api-2"]);
+    run.on_follow(Ok(vec![replacement("api-9", None)]), secs(5));
+    assert_eq!(run.pending_replacements(), 1);
+    assert_eq!(
+        run.follow_notice().as_deref(),
+        Some("Drain: 1 evicted pod has a replacement that stays Pending")
+    );
+    run.on_follow(
+        Ok(vec![replacement("api-8", None), replacement("api-9", None)]),
+        secs(8),
+    );
+    assert_eq!(run.status_text(secs(8)), "Drained · 2 pending replacements");
+}
+
+#[test]
+fn following_polls_until_a_quiet_spell_or_the_window_ends() {
+    let mut run = followed(&["api-1"]);
+    assert_eq!(run.next_follow(secs(4)), FollowStep::Poll);
+    run.on_follow(Ok(Vec::new()), secs(4));
+    assert_eq!(run.next_follow(secs(5)), FollowStep::Sleep(secs(2)));
+    assert_eq!(run.next_follow(secs(7)), FollowStep::Poll);
+    assert_eq!(run.status_text(secs(5)), "Drained · checking replacements");
+    // Nothing Pending for 15 s: nothing to wait for.
+    run.on_follow(Ok(Vec::new()), secs(18));
+    assert_eq!(run.next_follow(secs(19)), FollowStep::Done);
+    assert_eq!(run.status_text(secs(19)), "Drained");
+    assert!(run.follow_notice().is_none());
+}
+
+#[test]
+fn a_pending_replacement_keeps_the_look_going_to_the_end_of_the_window() {
+    let mut run = followed(&["api-1"]);
+    run.on_follow(Ok(vec![replacement("api-9", Some(NO_NODE_FITS))]), secs(20));
+    assert_eq!(run.next_follow(secs(21)), FollowStep::Sleep(secs(2)));
+    assert_eq!(run.next_follow(secs(63)), FollowStep::Poll);
+    assert_eq!(run.next_follow(secs(64)), FollowStep::Done);
+    // After the window the line keeps the count, without the word `checking`.
+    assert_eq!(run.status_text(secs(70)), "Drained · 1 pending replacement");
+}
+
+#[test]
+fn a_failed_listing_is_shown_and_does_not_end_the_look() {
+    let mut run = followed(&["api-1"]);
+    run.on_follow(Err("Could not list pending pods: boom".into()), secs(5));
+    assert_eq!(
+        run.poll_error().map(|text| text.as_ref()),
+        Some("Could not list pending pods: boom")
+    );
+    assert_ne!(run.next_follow(secs(6)), FollowStep::Done);
+}
+
+#[test]
+fn nothing_is_followed_without_an_evicted_pod_with_a_controller_or_after_a_cancel() {
+    // Nothing evicted.
+    let (mut empty, _) = run_over(&[]);
+    empty.on_node_done(NodeOutcome::Drained);
+    empty.start_follow(secs(1));
+    assert_eq!(empty.next_follow(secs(1)), FollowStep::Done);
+    // Cancelled after an eviction: the run did not end by itself.
+    let (mut cancelled, _) = run_over(&["api-1"]);
+    cancelled.on_write(&NextStep::Evict(key("api-1")), ok(), secs(0));
+    cancelled.cancel();
+    cancelled.start_follow(secs(1));
+    assert_eq!(cancelled.next_follow(secs(1)), FollowStep::Done);
+}
+
+/// The pod of the node the run ended on (`current` moved past it).
+fn progress_of_ended(run: &DrainRun, name: &str) -> PodProgress {
+    run.nodes
+        .iter()
+        .flat_map(|node| &node.pods)
+        .find(|pod| pod.key.name == name)
+        .map(|pod| pod.progress.clone())
+        .expect("the pod is in the run")
 }

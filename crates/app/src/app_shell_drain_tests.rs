@@ -20,6 +20,7 @@ use crate::app_shell::node_editor::NodeEditKind;
 use crate::drain_plan::{Budget, DrainOption, PodCheck, PodVerdict, PreviewLine};
 use crate::drain_tab::DrainTab;
 use crate::environment::Environment;
+use crate::status_tone::StatusTone;
 use crate::table_selection::{ClusterObject, ResourceKey};
 use crate::write_guard::{DialogConfirm, WriteLock};
 
@@ -35,6 +36,8 @@ struct DrainServer {
     dry_run_gate: Gate,
     pods: Vec<Value>,
     budgets: Vec<Value>,
+    /// What the list of Pending pods answers: replacements the scheduler could not place.
+    pending: Vec<Value>,
     /// Pod names the eviction answers 429 for.
     refusing: Vec<String>,
     /// Pod names the eviction answers 403 for.
@@ -134,6 +137,9 @@ fn server(
         let mut state = state.lock().expect("the server state");
         let is_list = request.method == "GET" && !request.query.contains("watch=");
         if is_list && request.path == "/api/v1/pods" && request.query.contains("fieldSelector") {
+            if request.query.contains("status.phase") {
+                return (200, list_of("Pod", &state.pending));
+            }
             if state.is_pod_list_broken {
                 return status(500, "InternalError", "boom", Value::Null);
             }
@@ -2075,4 +2081,83 @@ fn unticking_skip_pdbs_restores_the_grace_the_user_chose(cx: &mut TestAppContext
     });
     t.tick_skip(&dialog, false, cx);
     assert_eq!(grace(cx), GracePeriod::Seconds(30));
+}
+
+// ---- Replacements that cannot be placed ----
+
+const NO_NODE_FITS: &str = "0/3 nodes are available: 1 node(s) had volume node affinity conflict.";
+
+/// The replacement a controller made for `api-1`: Pending, and the scheduler's `FailedScheduling`
+/// message on its `PodScheduled` condition.
+fn unschedulable_replacement() -> Value {
+    json!({
+        "apiVersion": "v1", "kind": "Pod",
+        "metadata": {
+            "name": "api-9", "namespace": "payments", "uid": "uid-api-9",
+            "ownerReferences": [{
+                "apiVersion": "apps/v1", "kind": "ReplicaSet", "name": "owner",
+                "uid": "o-1", "controller": true,
+            }],
+        },
+        "status": {"phase": "Pending", "conditions": [{
+            "type": "PodScheduled", "status": "False", "reason": "Unschedulable",
+            "message": NO_NODE_FITS,
+        }]},
+    })
+}
+
+fn pending_requests(api: &FakeApi) -> Vec<RecordedRequest> {
+    api.requests()
+        .into_iter()
+        .filter(|request| request.path == "/api/v1/pods" && request.query.contains("status.phase"))
+        .collect()
+}
+
+#[gpui_kit::test]
+fn an_evicted_pod_recreated_pending_is_not_reported_gone(cx: &mut TestAppContext) {
+    let setup = |server: &mut DrainServer| {
+        three_pods(server);
+        server.pending = vec![unschedulable_replacement()];
+    };
+    let t = drain_test("drain-recreated-pending", setup, cx);
+    let tab = t.start(cx);
+    t.wait_for_end(&tab, cx);
+    t.t.wait_for("the Pending replacement", cx, |cx| {
+        tab.read_with(cx, |tab, _| tab.run().pending_replacements() == 1)
+    });
+    tab.read_with(cx, |tab, _| {
+        let rows = tab.run().pod_rows(tab.now());
+        let texts: Vec<_> = rows
+            .iter()
+            .map(|row| (row.pod.as_ref(), row.text.as_ref()))
+            .collect();
+        let expected = format!("recreated · Pending: {NO_NODE_FITS}");
+        assert!(
+            texts.contains(&("payments/api-1", expected.as_str())),
+            "{texts:?}"
+        );
+        assert!(texts.contains(&("payments/api-2", "Gone")), "{texts:?}");
+        assert_eq!(
+            tab.run().status_text(tab.now()),
+            "Drained · 1 pending replacement"
+        );
+        assert_eq!(tab.tone(), StatusTone::Warn);
+        // The node is still cordoned, and the Uncordon button is still offered for it.
+        assert_eq!(tab.run().cordoned(), ["node-b".to_owned()]);
+    });
+    assert!(!pending_requests(&t.t.stg_api).is_empty());
+}
+
+#[gpui_kit::test]
+fn a_drain_with_no_pending_replacement_still_ends_drained(cx: &mut TestAppContext) {
+    let t = drain_test("drain-replaced-fine", three_pods, cx);
+    let tab = t.start(cx);
+    t.wait_for_end(&tab, cx);
+    t.t.wait_for("a look at the Pending pods", cx, |_| {
+        !pending_requests(&t.t.stg_api).is_empty()
+    });
+    tab.read_with(cx, |tab, _| {
+        assert_eq!(tab.run().pending_replacements(), 0);
+        assert_eq!(tab.tone(), StatusTone::Ok);
+    });
 }

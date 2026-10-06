@@ -26,7 +26,7 @@ use crate::audit_log::{AuditEntry, AuditIdentity, append_audit, drain_summary_en
 use crate::cluster_registry::ClusterRef;
 use crate::cluster_runtime::ClusterRuntime;
 use crate::drain_plan::DrainOptions;
-use crate::drain_run::{DrainRun, NextStep, NodeSummary, RunInput};
+use crate::drain_run::{DrainRun, FollowStep, NextStep, NodeSummary, RunInput};
 use crate::drain_tab::{DrainTab, DrainTabInputs};
 use crate::drain_writes::{DrainScope, cordon_write, removal_write};
 use crate::node_edits::{CordonMode, NodeScope, TickedNode, cordon_batch};
@@ -283,7 +283,7 @@ impl AppShell {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        use cluster::{ControllerRef, DrainPod, WriteEffect, WriteMode, WriteOutcome};
+        use cluster::{ControllerRef, DrainPod, PendingPod, WriteEffect, WriteMode, WriteOutcome};
 
         use crate::app_shell::write_flow::{DryRunState, TypedMatch, confirmed};
         use crate::dock::DockMode;
@@ -319,6 +319,8 @@ impl AppShell {
             is_finished: false,
             is_pending: false,
             is_terminating: false,
+            claims: Vec::new(),
+            pinned_volume: None,
         };
         let mut pods = vec![pod("payments", "api-7d9f8c-m8n2p", "ReplicaSet")];
         pods.extend(
@@ -365,6 +367,37 @@ impl AppShell {
             run.on_node_done(NodeOutcome::Stuck {
                 reason: "Timed out after 20 min: 11 pods left".into(),
             });
+        }
+        if launch == crate::launch_options::LaunchScreen::DrainProgressPending {
+            // The budget let its pod go in the end, every pod left, and the controller's
+            // replacement of the first one cannot be placed.
+            evict(&mut run, &pods[0], 102);
+            for pod in &web[15..] {
+                evict(&mut run, pod, 102);
+            }
+            let staying: Vec<DrainPod> = pods
+                .iter()
+                .filter(|pod| {
+                    pod.controller
+                        .as_ref()
+                        .is_some_and(|c| c.kind == "DaemonSet")
+                })
+                .cloned()
+                .collect();
+            run.on_poll(Ok(staying), secs(106));
+            run.on_node_done(NodeOutcome::Drained);
+            run.start_follow(secs(107));
+            let unplaced = PendingPod {
+                namespace: "payments".to_owned(),
+                name: "api-7d9f8c-x2k8d".to_owned(),
+                uid: "fixture-api-replacement".to_owned(),
+                controller: pods[0].controller.clone(),
+                reason: Some(
+                    "0/3 nodes are available: 1 node(s) had volume node affinity conflict, 2 node(s) had untolerated taint {workload: data}."
+                        .to_owned(),
+                ),
+            };
+            run.on_follow(Ok(vec![unplaced]), secs(110));
         }
         let shell = cx.weak_entity();
         let tab = cx.new(|_| {
@@ -522,6 +555,7 @@ async fn drive(
                         notify_with(window, cx, notice, is_success);
                     });
                 }
+                follow_replacements(tab, &connection, &runtime, window, cx).await;
                 return;
             }
         }
@@ -587,6 +621,78 @@ async fn list_pods(
     match read {
         Ok(Ok(pods)) => Ok(pods),
         Ok(Err(error)) => Err(format!("Could not list pods on {node}: {error}").into()),
+        Err(_) => Err("The request task stopped".into()),
+    }
+}
+
+/// After a clean end, looks for the replacements of the evicted pods until the tab says it is done:
+/// a pod whose controller recreated it Pending is not gone for good. A closed tab ends the loop.
+async fn follow_replacements(
+    tab: &WeakEntity<DrainTab>,
+    connection: &ClusterConnection,
+    runtime: &ClusterRuntime,
+    window: AnyWindowHandle,
+    cx: &mut AsyncApp,
+) {
+    if tab
+        .update(cx, |tab, _| {
+            let now = tab.now();
+            tab.run_mut().start_follow(now);
+        })
+        .is_err()
+    {
+        return;
+    }
+    loop {
+        let Ok(step) = tab.read_with(cx, |tab, _| tab.run().next_follow(tab.now())) else {
+            return;
+        };
+        match step {
+            FollowStep::Poll => {
+                let read = list_pending_pods(connection, runtime).await;
+                let updated = tab.update(cx, |tab, cx| {
+                    let now = tab.now();
+                    tab.run_mut().on_follow(read, now);
+                    cx.notify();
+                });
+                if updated.is_err() {
+                    return;
+                }
+            }
+            FollowStep::Sleep(wait) => {
+                cx.background_executor().timer(wait.min(TICK)).await;
+                if tab.update(cx, |_, cx| cx.notify()).is_err() {
+                    return;
+                }
+            }
+            FollowStep::Done => {
+                let notice = tab.update(cx, |tab, cx| {
+                    cx.notify();
+                    tab.run().follow_notice()
+                });
+                if let Ok(Some(notice)) = notice {
+                    let _ = cx.update_window(window, |_, window, cx| {
+                        notify_with(window, cx, notice, false);
+                    });
+                }
+                return;
+            }
+        }
+    }
+}
+
+/// The Pending pods of the cluster, or the text that says why they could not be listed.
+async fn list_pending_pods(
+    connection: &ClusterConnection,
+    runtime: &ClusterRuntime,
+) -> Result<Vec<cluster::PendingPod>, SharedString> {
+    let connection = connection.clone();
+    let read = runtime
+        .spawn(async move { connection.pending_pods().await })
+        .await;
+    match read {
+        Ok(Ok(pods)) => Ok(pods),
+        Ok(Err(error)) => Err(format!("Could not list pending pods: {error}").into()),
         Err(_) => Err("The request task stopped".into()),
     }
 }

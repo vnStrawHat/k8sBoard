@@ -957,6 +957,7 @@ mod tests {
             LaunchScreen::DebugShellTabFixture,
             LaunchScreen::DrainProgress,
             LaunchScreen::DrainProgressStuck,
+            LaunchScreen::DrainProgressPending,
         ] {
             for target in [TargetState::Loading, TargetState::Unavailable] {
                 assert!(

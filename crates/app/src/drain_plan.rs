@@ -99,6 +99,8 @@ pub(crate) enum Budget {
     Blocked {
         name: String,
         cause: BlockCause,
+        /// What the budget demands against what is healthy: `minAvailable 2 = 2 healthy`.
+        rule: String,
     },
     /// `BudgetPolicy::Skip`: the budgets that would have been checked, by name.
     Bypassed {
@@ -203,6 +205,16 @@ fn matching_budgets<'a>(
         .collect()
 }
 
+/// What the budget demands against what is healthy: `minAvailable 2 = 2 healthy`.
+fn budget_rule(budget: &PodDisruptionBudgetSummary) -> String {
+    let healthy = budget.current_healthy;
+    match (&budget.min_available, &budget.max_unavailable) {
+        (Some(min), _) => format!("minAvailable {min} = {healthy} healthy"),
+        (None, Some(max)) => format!("maxUnavailable {max}, {healthy} healthy"),
+        (None, None) => format!("{healthy} healthy"),
+    }
+}
+
 /// What a drain does with `pod`; the first matching row of the table wins. `rank_in_budget` is the
 /// 1-based position of the pod among the pods of the same budget on its node, in plan order: it
 /// explains why the second pod of a budget that allows one waits.
@@ -236,7 +248,11 @@ pub(crate) fn pod_verdict(
     };
     let name = budget.name.clone();
     PodVerdict::Evict(match budget.disruption_state() {
-        DisruptionState::Blocked(cause) => Budget::Blocked { name, cause },
+        DisruptionState::Blocked(cause) => Budget::Blocked {
+            rule: budget_rule(budget),
+            name,
+            cause,
+        },
         DisruptionState::Allowed(allowed) if rank_in_budget <= allowed => {
             Budget::Allows { name, allowed }
         }
@@ -249,6 +265,18 @@ pub(crate) fn pod_verdict(
 pub(crate) struct PlannedPod {
     pub(crate) pod: DrainPod,
     pub(crate) verdict: PodVerdict,
+}
+
+impl PlannedPod {
+    /// The claim whose volume keeps the pod on this node, when the drain would evict it. A finished
+    /// pod holds no volume that matters.
+    pub(crate) fn pinned_volume(&self) -> Option<&str> {
+        let is_evicted = matches!(self.verdict, PodVerdict::Evict(_));
+        self.pod
+            .pinned_volume
+            .as_deref()
+            .filter(|_| is_evicted && !self.pod.is_finished)
+    }
 }
 
 /// Every pod of one node with what a drain does with it, in the order the node listed them.
@@ -474,6 +502,14 @@ fn budget_names(names: &[String]) -> String {
 
 /// The result column of a pod before any server answer, and its tone.
 fn local_result(planned: &PlannedPod) -> (String, StatusTone) {
+    // A blocked budget is the sharper news; every other pod that cannot move says so.
+    let is_blocked = matches!(planned.verdict, PodVerdict::Evict(Budget::Blocked { .. }));
+    if let Some(claim) = planned.pinned_volume().filter(|_| !is_blocked) {
+        return (
+            format!("cannot move: volume {claim} lives on this node"),
+            StatusTone::Warn,
+        );
+    }
     match &planned.verdict {
         PodVerdict::Refused(text) => (text.to_string(), StatusTone::Bad),
         PodVerdict::Evict(Budget::Blocked { name, .. }) => (
@@ -502,6 +538,10 @@ fn local_result(planned: &PlannedPod) -> (String, StatusTone) {
             format!("Deleted directly; PDB {} not checked", budget_names(names)),
             StatusTone::Warn,
         ),
+        // A finished pod is deleted at once, whatever owns it.
+        PodVerdict::Evict(Budget::None) if planned.pod.is_finished => {
+            ("Finished · removed".to_owned(), StatusTone::Done)
+        }
         PodVerdict::Evict(Budget::None) if planned.pod.controller.is_none() => {
             ("Will not come back".to_owned(), StatusTone::Warn)
         }
@@ -539,10 +579,11 @@ pub(crate) fn pod_result(
         }
         PodCheck::Failed(error) => return (format!("Failed: {error}").into(), StatusTone::Bad),
         PodCheck::Accepted
-            if matches!(
-                planned.verdict,
-                PodVerdict::Evict(Budget::Blocked { .. } | Budget::Waits { .. })
-            ) =>
+            if planned.pinned_volume().is_none()
+                && matches!(
+                    planned.verdict,
+                    PodVerdict::Evict(Budget::Blocked { .. } | Budget::Waits { .. })
+                ) =>
         {
             return ("Dry-run accepted".into(), StatusTone::Ok);
         }
@@ -564,6 +605,11 @@ fn preview_rank(planned: &PlannedPod, check: &PodCheck) -> u8 {
         return 1;
     }
     match &planned.verdict {
+        PodVerdict::Evict(budget)
+            if planned.pinned_volume().is_some() && !matches!(budget, Budget::Blocked { .. }) =>
+        {
+            3
+        }
         PodVerdict::Refused(_) => 0,
         PodVerdict::Evict(Budget::Blocked { .. }) if *check == PodCheck::Accepted => 5,
         PodVerdict::Evict(Budget::Waits { .. }) if *check == PodCheck::Accepted => 5,
@@ -637,9 +683,63 @@ pub(crate) fn preview_lines(
     lines
 }
 
-/// The pods the plans evict, over every node.
-pub(crate) fn eviction_count(plans: &[NodePlan]) -> usize {
-    plans.iter().map(|plan| plan.evictions().count()).sum()
+/// The pods a drain moves and the pods it cannot, over every node. A finished pod is neither: it
+/// is removed, not moved.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct EvictionCounts {
+    pub(crate) movable: usize,
+    /// Evicted, but their volume lives on the node: the replacement stays Pending.
+    pub(crate) pinned: usize,
+}
+
+pub(crate) fn eviction_counts(plans: &[NodePlan]) -> EvictionCounts {
+    let mut counts = EvictionCounts {
+        movable: 0,
+        pinned: 0,
+    };
+    for planned in plans.iter().flat_map(|plan| plan.evictions()) {
+        if planned.pod.is_finished {
+            continue;
+        }
+        if planned.pinned_volume().is_some() {
+            counts.pinned += 1;
+        } else {
+            counts.movable += 1;
+        }
+    }
+    counts
+}
+
+/// ` · 1 cannot move` after a count, when some pods cannot move.
+fn pinned_suffix(counts: EvictionCounts) -> String {
+    match counts.pinned {
+        0 => String::new(),
+        pinned => format!(" · {pinned} cannot move"),
+    }
+}
+
+/// Step 2 of the strip: `Evict 3 pods · 1 cannot move`.
+pub(crate) fn step_text(plans: &[NodePlan], budgets: BudgetPolicy) -> String {
+    let verb = match budgets {
+        BudgetPolicy::Respect => "Evict",
+        BudgetPolicy::Skip => "Delete",
+    };
+    let counts = eviction_counts(plans);
+    format!(
+        "{verb} {}{}",
+        pod_count(counts.movable),
+        pinned_suffix(counts)
+    )
+}
+
+/// The header of the preview list: `Pods to evict · 3 · 1 cannot move`.
+pub(crate) fn preview_header(plans: &[NodePlan], budgets: BudgetPolicy) -> String {
+    let lead = match budgets {
+        BudgetPolicy::Respect => "Pods to evict",
+        BudgetPolicy::Skip => "Pods to delete",
+    };
+    let counts = eviction_counts(plans);
+    format!("{lead} · {}{}", counts.movable, pinned_suffix(counts))
 }
 
 /// `2m`, `30m`: the timeout choice as the select shows it.
@@ -655,26 +755,77 @@ pub(crate) fn grace_text(grace: GracePeriod) -> String {
     }
 }
 
-/// HEADS UP: only when a pod waits on a budget. `api-pdb and 2 more` for several budgets.
-pub(crate) fn heads_up(plans: &[NodePlan], timeout: Duration) -> Option<String> {
-    let mut names: Vec<&str> = Vec::new();
+/// HEADS UP about budgets, one line each, empty when no budget stands in the way. A budget that
+/// needs every pod it has (all healthy at its minimum) never lets the drain through, so it says
+/// so and names the ways out; a budget that merely leaves too little room waits for a replacement.
+/// `api-pdb and 2 more` for several budgets.
+pub(crate) fn heads_up(plans: &[NodePlan], timeout: Duration) -> Vec<String> {
+    let mut stuck: Vec<(&str, &str)> = Vec::new();
+    let mut waiting: Vec<String> = Vec::new();
     for planned in plans.iter().flat_map(|plan| &plan.pods) {
-        if let PodVerdict::Evict(Budget::Blocked { name, .. } | Budget::Waits { name, .. }) =
-            &planned.verdict
-            && !names.contains(&name.as_str())
-        {
-            names.push(name);
+        match &planned.verdict {
+            PodVerdict::Evict(Budget::Blocked {
+                name,
+                cause: BlockCause::NoRoom,
+                rule,
+            }) => {
+                if !stuck.iter().any(|(known, _)| known == name) {
+                    stuck.push((name, rule));
+                }
+            }
+            PodVerdict::Evict(Budget::Blocked { name, .. } | Budget::Waits { name, .. })
+                if !waiting.contains(name) =>
+            {
+                waiting.push(name.clone());
+            }
+            _ => {}
         }
     }
-    let (first, more) = names.split_first()?;
-    let subject = match more.len() {
-        0 => (*first).to_owned(),
-        count => format!("{first} and {count} more"),
-    };
-    Some(format!(
-        "Drain will wait on {subject} until a replacement pod is ready elsewhere, or stop at the {} timeout.",
-        timeout_text(timeout)
-    ))
+    let timeout = timeout_text(timeout);
+    let mut lines = Vec::new();
+    match stuck.as_slice() {
+        [] => {}
+        [(name, rule)] => lines.push(format!(
+            "{name} cannot lose a pod ({rule}); this drain will stop at the {timeout} timeout. Options: Skip PDBs, scale {name}, Cordon only"
+        )),
+        [(name, rule), more @ ..] => lines.push(format!(
+            "{name} ({rule}) and {} more cannot lose a pod; this drain will stop at the {timeout} timeout. Options: Skip PDBs, scale the workloads, Cordon only",
+            more.len()
+        )),
+    }
+    if let Some((first, more)) = waiting.split_first() {
+        let subject = match more.len() {
+            0 => first.clone(),
+            count => format!("{first} and {count} more"),
+        };
+        lines.push(format!(
+            "Drain will wait on {subject} until a replacement pod is ready elsewhere, or stop at the {timeout} timeout."
+        ));
+    }
+    lines
+}
+
+/// HEADS UP about pods whose volume lives on the node: the drain evicts them, and the replacement
+/// stays Pending until the node is schedulable again. `None` when no pod is pinned.
+pub(crate) fn pinned_note(plans: &[NodePlan]) -> Option<String> {
+    let pinned: Vec<(&PlannedPod, &str)> = plans
+        .iter()
+        .flat_map(|plan| &plan.pods)
+        .filter_map(|planned| Some((planned, planned.pinned_volume()?)))
+        .collect();
+    let tail = "so its replacement stays Pending until the node is back";
+    Some(match pinned.as_slice() {
+        [] => return None,
+        [(planned, claim)] => format!(
+            "{} cannot move: its volume {claim} lives on this node, {tail}.",
+            planned.pod.name
+        ),
+        [(first, _), more @ ..] => format!(
+            "{} and {} more cannot move: their volumes live on this node, so their replacements stay Pending until the node is back.",
+            first.pod.name,
+            more.len()
+        ),
+    })
 }
 
 /// The danger note of a drain that skips budgets: which budgets lose their say and how many pods
@@ -747,6 +898,13 @@ pub(crate) fn drain_dry_run(
         }
     }
     DryRunState::Passed { elapsed }
+}
+
+/// Whether the server refused every eviction it was asked about and accepted none: the drain
+/// would only wait for the timeout, so the dry-run line is a warning, not a pass.
+pub(crate) fn dry_run_refused_all(pods: &[PodCheck]) -> bool {
+    let is_refused = |check: &PodCheck| matches!(check, PodCheck::Refused(_));
+    pods.iter().any(is_refused) && !pods.contains(&PodCheck::Accepted)
 }
 
 /// The dry-run line of the dialog: `Server dry-run: cordon passed · 21 of 23 evictions accepted,

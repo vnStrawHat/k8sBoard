@@ -67,6 +67,15 @@ A `DryRun` step: success or 429 → the dry-run is recorded and the pod stays `P
 - The tab shows `Cancelled · {k} of {n} evicted on wk-04 · cordoned: wk-04, wk-05` and an `Uncordon {m} nodes` button (a 0032 `Batch` with its own dialog).
 - Lock or session change mid-run behaves like Cancel, with the reason in the title (the next `checked_write` returns `Blocked`). A switch or slot release asks first through `leaving_work`, then stops the run and closes the tab (decision 45). App exit ends the run the same way (open item 3).
 
+## Replacements after the end (L1)
+
+An evicted pod that vanishes is not necessarily placed again: a StatefulSet pod whose volume lives on the node, or one that no other node can take, comes back Pending. When the run ends `Finished` and evicted a pod that has a controller, the driver keeps looking (`start_follow`, `next_follow`, `on_follow` in `DrainRun`; the tab is already closable and the end notice already shown):
+
+- every poll interval (3 s) it lists the cluster's Pending pods (`pending_pods()`, one field-selector list), for at most 60 s, or until 15 s pass with no replacement Pending;
+- a Pending pod of the same namespace and controller (kind and name) whose uid was not on the node is the replacement of one evicted pod (one each); that pod's row reads `recreated · Pending: {reason}` (warn), the reason being the message of the replacement's `PodScheduled=False` condition (the `FailedScheduling` event text), or `not scheduled yet`; when the replacement stops being Pending the row reads `Gone` again;
+- the header reads `Drained · checking replacements` while it looks and `Drained · {n} pending replacement(s)` after (on a stuck header the count comes before `· cordoned: …`); the dot is warn; `Uncordon` stays offered (the node is still cordoned);
+- a listing failure shows as `Could not refresh pods: …` and the next poll retries; the look ends with a notification `Drain: {n} evicted pod(s) have replacement(s) that stay Pending` when any remain.
+
 ## Audit
 
 - Every cordon and accepted or failed eviction commit writes its own line through `checked_write` (0030), with the dialog note.
@@ -98,7 +107,7 @@ loop {
 
 - `DockTab::Drain(Entity<DrainTab>)` (0036 `Dock`), with `cluster()` so the merged `close_tabs_of(cluster)` closes it when its slot is released (decision 45). Title `Drain wk-04` / `Drain 3 nodes`; one running drain per cluster.
 - Header: node list with state (`Waiting`, `Cordoning`, `Evicting 12/23`, `Drained`, `Stuck`, `Cancelled`); kit `Progress` (gone / to evict) for the current node; `Timeout in 3:12`.
-- Rows per pod: `{ns}/{name}` mono + state text: `Waiting`, `Evicting…`, `Refused by PDB: {message} · retry in 8 s (attempt 3)`, `Terminating`, `Gone`, `Failed: {error}`, `Skipped: {reason}`. Bad and warn rows first.
+- Rows per pod: `{ns}/{name}` mono + state text: `Waiting`, `Evicting…`, `Refused by PDB: {message} · retry in 8 s (attempt 3)`, `Terminating`, `Gone`, `recreated · Pending: {reason}`, `Failed: {error}`, `Skipped: {reason}`. Bad and warn rows first.
 - After the end (any end) open pods stop reading as live work: `Waiting` → `Not evicted`, `Evicting…` → `Eviction sent, still on node` (`Delete sent, still on node` under Skip PDBs), a refusal → `Blocked by PDB {name}` (the name read from the API message). A stuck header appends the blocking budgets: `Stuck on wk-04: Timed out after 20 min: 11 pods left · blocked by api-pdb`; each name is a link that reveals that PodDisruptionBudget in the pod's namespace.
 - Buttons: `Cancel` (danger outline) while running; after a stuck, failed, or stopped end `Drain again…` (reopens the Drain dialog on the nodes left undrained), then `Uncordon {m} nodes` and `Close`. The tab's ✕ and Ctrl W are disabled while running (`Cancel the drain first`).
 - Ends with a notification: `Drain: wk-04 drained`, `Drain stopped: wk-05 stuck ({reason})`, or `Drain cancelled`.

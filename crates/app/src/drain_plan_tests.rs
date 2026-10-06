@@ -17,6 +17,8 @@ fn pod(namespace: &str, name: &str) -> DrainPod {
         is_finished: false,
         is_pending: false,
         is_terminating: false,
+        claims: Vec::new(),
+        pinned_volume: None,
     }
 }
 
@@ -200,7 +202,8 @@ fn blocked_budget_reuses_disruption_state() {
             verdict,
             PodVerdict::Evict(Budget::Blocked {
                 name: "api-pdb".to_owned(),
-                cause
+                cause,
+                rule: "2 healthy".to_owned(),
             })
         );
     }
@@ -216,7 +219,8 @@ fn blocked_budget_reuses_disruption_state() {
         verdict_of(&pod("payments", "api-1"), &[failed], 1),
         PodVerdict::Evict(Budget::Blocked {
             name: "api-pdb".to_owned(),
-            cause: BlockCause::SyncFailed
+            cause: BlockCause::SyncFailed,
+            rule: "2 healthy".to_owned(),
         })
     );
 }
@@ -584,14 +588,129 @@ fn evictions_and_steps_count_only_evict_verdicts() {
         },
     ];
     let plan = node_plan("wk-04", &pods, &[], &DrainOptions::default());
-    assert_eq!(eviction_count(&[plan]), 2);
+    assert_eq!(eviction_counts(&[plan]).movable, 2);
+}
+
+fn pinned(name: &str, claim: &str) -> DrainPod {
+    DrainPod {
+        pinned_volume: Some(claim.to_owned()),
+        claims: vec![claim.to_owned()],
+        ..pod("shop", name)
+    }
+}
+
+#[test]
+fn a_pod_whose_volume_lives_on_the_node_is_counted_apart_and_says_why() {
+    let finished = DrainPod {
+        is_finished: true,
+        ..pinned("job", "data-job")
+    };
+    let pods = [pod("shop", "web"), pinned("db-0", "data-db-0"), finished];
+    let plan = node_plan("wk-04", &pods, &[], &DrainOptions::default());
+    let counts = eviction_counts(std::slice::from_ref(&plan));
+    // The finished pod is removed, not moved, so neither count has it.
+    assert_eq!(
+        counts,
+        EvictionCounts {
+            movable: 1,
+            pinned: 1
+        }
+    );
+    let plans = [plan];
+    assert_eq!(
+        step_text(&plans, BudgetPolicy::Respect),
+        "Evict 1 pod · 1 cannot move"
+    );
+    assert_eq!(
+        preview_header(&plans, BudgetPolicy::Skip),
+        "Pods to delete · 1 · 1 cannot move"
+    );
+    let lines = preview_lines(&plans, |_| PodCheck::Accepted);
+    let results: Vec<String> = lines
+        .iter()
+        .filter_map(|line| match line {
+            PreviewLine::Pod { name, result, .. } => Some(format!("{name}: {result}")),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        results,
+        [
+            "db-0: cannot move: volume data-db-0 lives on this node",
+            "web: Will be rescheduled",
+            "job: Finished · removed",
+        ]
+    );
+    assert_eq!(
+        pinned_note(&plans).as_deref(),
+        Some(
+            "db-0 cannot move: its volume data-db-0 lives on this node, so its replacement stays Pending until the node is back."
+        )
+    );
+}
+
+#[test]
+fn several_pinned_pods_share_one_note_and_a_blocked_budget_keeps_its_own_text() {
+    let pods = [pinned("db-0", "data-db-0"), pinned("db-1", "data-db-1")];
+    let plan = node_plan("wk-04", &pods, &[], &DrainOptions::default());
+    assert_eq!(
+        pinned_note(&[plan]).as_deref(),
+        Some(
+            "db-0 and 1 more cannot move: their volumes live on this node, so their replacements stay Pending until the node is back."
+        )
+    );
+    let in_payments = DrainPod {
+        namespace: "payments".to_owned(),
+        ..pods[0].clone()
+    };
+    let blocked = node_plan(
+        "wk-04",
+        &[in_payments],
+        &[budget("api-pdb", 1, 1, 0)],
+        &DrainOptions::default(),
+    );
+    let (text, _) = pod_result(&blocked.pods[0], &PodCheck::Waiting, BudgetPolicy::Respect);
+    assert_eq!(text.as_ref(), "Blocked by PDB api-pdb (0 allowed)");
+}
+
+#[test]
+fn a_skip_plan_still_says_a_pinned_pod_cannot_move() {
+    let plan = node_plan(
+        "wk-04",
+        &[pinned("db-0", "data-db-0")],
+        &[budget("api-pdb", 1, 1, 0)],
+        &skip(),
+    );
+    let (text, tone) = pod_result(&plan.pods[0], &PodCheck::Accepted, BudgetPolicy::Skip);
+    assert_eq!(
+        (text.as_ref(), tone),
+        (
+            "cannot move: volume data-db-0 lives on this node",
+            StatusTone::Warn
+        )
+    );
+}
+
+#[test]
+fn a_finished_pod_without_a_controller_is_removed_not_lost() {
+    let done = DrainPod {
+        is_finished: true,
+        controller: None,
+        ..pod("batch", "report")
+    };
+    let plan = node_plan("wk-04", &[done], &[], &DrainOptions::default());
+    let (text, tone) = pod_result(&plan.pods[0], &PodCheck::Accepted, BudgetPolicy::Respect);
+    assert_eq!(
+        (text.as_ref(), tone),
+        ("Finished · removed", StatusTone::Done)
+    );
 }
 
 #[test]
 fn heads_up_names_the_budgets_that_make_a_pod_wait() {
     let pods = [pod("payments", "api-1"), pod("payments", "api-2")];
     let none = node_plan("wk-04", &pods, &[], &DrainOptions::default());
-    assert_eq!(heads_up(&[none], DEFAULT_TIMEOUT), None);
+    assert!(heads_up(&[none], DEFAULT_TIMEOUT).is_empty());
     let waits = node_plan(
         "wk-04",
         &pods,
@@ -599,10 +718,37 @@ fn heads_up_names_the_budgets_that_make_a_pod_wait() {
         &DrainOptions::default(),
     );
     assert_eq!(
-        heads_up(&[waits], DEFAULT_TIMEOUT).as_deref(),
-        Some(
+        heads_up(&[waits], DEFAULT_TIMEOUT),
+        [
             "Drain will wait on api-pdb until a replacement pod is ready elsewhere, or stop at the 5m timeout."
-        )
+        ]
+    );
+    // Not every pod is healthy: a replacement may come, so the drain may wait.
+    let unhealthy = node_plan(
+        "wk-04",
+        &pods,
+        &[budget("api-pdb", 3, 2, 0)],
+        &DrainOptions::default(),
+    );
+    assert_eq!(
+        heads_up(&[unhealthy], DEFAULT_TIMEOUT),
+        [
+            "Drain will wait on api-pdb until a replacement pod is ready elsewhere, or stop at the 5m timeout."
+        ]
+    );
+}
+
+#[test]
+fn a_budget_that_needs_every_pod_says_the_drain_will_stop() {
+    let pods = [pod("payments", "api-1"), pod("payments", "api-2")];
+    let mut exact = budget("api-pdb", 2, 2, 0);
+    exact.min_available = Some("2".to_owned());
+    let plan = node_plan("wk-04", &pods, &[exact], &DrainOptions::default());
+    assert_eq!(
+        heads_up(&[plan], DEFAULT_TIMEOUT),
+        [
+            "api-pdb cannot lose a pod (minAvailable 2 = 2 healthy); this drain will stop at the 5m timeout. Options: Skip PDBs, scale api-pdb, Cordon only"
+        ]
     );
     let mut other = budget("kafka-pdb", 1, 1, 0);
     other.namespace = "data".to_owned();
@@ -617,11 +763,20 @@ fn heads_up_names_the_budgets_that_make_a_pod_wait() {
         &DrainOptions::default(),
     );
     assert_eq!(
-        heads_up(&[several], Duration::from_secs(600)).as_deref(),
-        Some(
-            "Drain will wait on api-pdb and 1 more until a replacement pod is ready elsewhere, or stop at the 10m timeout."
-        )
+        heads_up(&[several], Duration::from_secs(600)),
+        [
+            "api-pdb (2 healthy) and 1 more cannot lose a pod; this drain will stop at the 10m timeout. Options: Skip PDBs, scale the workloads, Cordon only"
+        ]
     );
+}
+
+#[test]
+fn a_dry_run_that_accepted_nothing_is_a_stalled_drain() {
+    let refused = PodCheck::Refused("The disruption budget api-pdb needs 2 healthy pods".into());
+    assert!(dry_run_refused_all(std::slice::from_ref(&refused)));
+    assert!(!dry_run_refused_all(&[refused, PodCheck::Accepted]));
+    assert!(!dry_run_refused_all(&[PodCheck::Accepted]));
+    assert!(!dry_run_refused_all(&[]));
 }
 
 #[test]
@@ -900,7 +1055,7 @@ fn the_bypass_note_names_the_budgets_and_counts_the_pods() {
     // The respecting plan has none, and its own waiting note is untouched.
     let respect = node_plan("wk-04", &pods, &budgets, &DrainOptions::default());
     assert_eq!(bypass_note(std::slice::from_ref(&respect)), None);
-    assert!(heads_up(&[respect], DEFAULT_TIMEOUT).is_some());
+    assert!(!heads_up(&[respect], DEFAULT_TIMEOUT).is_empty());
 }
 
 #[test]

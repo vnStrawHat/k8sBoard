@@ -1261,3 +1261,13 @@ fn topology_traffic_fixture_selected_screen_parses() {
     assert_eq!(screen.screen(), Screen::Topology);
     assert!(screen.shows_topology());
 }
+
+#[test]
+fn the_pending_replacement_drain_screen_is_an_offline_dock_over_nodes() {
+    let parsed = run_options(&["--screen", "drain-progress-pending"]).screen;
+    assert_eq!(parsed, LaunchScreen::DrainProgressPending);
+    assert_eq!(parsed.screen(), Screen::Nodes);
+    assert!(parsed.has_dock());
+    assert!(parsed.is_dock_fixture());
+    assert!(USAGE.contains("drain-progress-pending"));
+}

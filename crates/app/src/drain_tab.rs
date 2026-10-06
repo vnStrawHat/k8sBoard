@@ -137,6 +137,8 @@ impl DrainTab {
                     .any(|(_, state)| matches!(state, NodeState::Stuck(_)));
                 if is_stuck {
                     StatusTone::Bad
+                } else if self.run.pending_replacements() > 0 {
+                    StatusTone::Warn
                 } else {
                     StatusTone::Ok
                 }

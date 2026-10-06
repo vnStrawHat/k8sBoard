@@ -127,3 +127,16 @@ async fn drain_pods_refuse_a_node_name_that_could_change_the_selector() {
     );
     assert!(api.requests().is_empty());
 }
+
+#[test]
+fn drain_pod_lists_the_claims_it_mounts() {
+    let drain = drain_pod(&pod(json!({
+        "metadata": {"name": "db-0", "namespace": "shop", "uid": "u-3"},
+        "spec": {"containers": [], "volumes": [
+            {"name": "scratch", "emptyDir": {}},
+            {"name": "data", "persistentVolumeClaim": {"claimName": "data-db-0"}},
+        ]},
+    })));
+    assert_eq!(drain.claims, ["data-db-0"]);
+    assert_eq!(drain.pinned_volume, None);
+}

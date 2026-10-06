@@ -45,8 +45,8 @@ use crate::confirm_dialog::{typed_prompt, typed_prompt_text};
 use crate::drain_plan::{
     BudgetPolicy, CordonCheck, DrainOption, DrainOptions, GRACE_CHOICES, NodePlan, OptionCounts,
     PodCheck, PodKey, PreviewLine, TIMEOUT_CHOICES, bypass_note, drain_blocker, drain_dry_run,
-    dry_run_text, eviction_count, grace_text, heads_up, node_plan, option_counts, option_hint,
-    preview_lines, timeout_text,
+    dry_run_refused_all, dry_run_text, grace_text, heads_up, node_plan, option_counts, option_hint,
+    pinned_note, preview_header, preview_lines, step_text, timeout_text,
 };
 use crate::drain_writes::{DrainScope, cordon_write, removal_write};
 use crate::drawer::truncated_text_with_tooltip;
@@ -75,6 +75,19 @@ const BODY_MAX_HEIGHT: f32 = 590.;
 struct Reads {
     budgets: Result<Vec<PodDisruptionBudgetSummary>, ClusterError>,
     pods: Vec<Result<Vec<DrainPod>, ClusterError>>,
+}
+
+/// The pods of `node`, each marked when its volume lives on the node. A volume list the session
+/// may not read leaves the pods unmarked: the drain is then previewed without that warning.
+async fn node_pods(
+    connection: &ClusterConnection,
+    node: &str,
+) -> Result<Vec<DrainPod>, ClusterError> {
+    let mut pods = connection.drain_pods(node).await?;
+    if let Err(error) = connection.pin_volumes(node, &mut pods).await {
+        tracing::debug!(%error, "could not tell which volumes live on the node");
+    }
+    Ok(pods)
 }
 
 /// The pods of one node: being read, not readable, or read.
@@ -281,7 +294,7 @@ impl DrainDialog {
                         let budgets = connection.list_pod_disruption_budgets().await;
                         let mut pods = Vec::new();
                         for node in &names {
-                            pods.push(connection.drain_pods(node).await);
+                            pods.push(node_pods(&connection, node).await);
                         }
                         Reads { budgets, pods }
                     })
@@ -971,27 +984,24 @@ impl DrainDialog {
 
     fn render_steps(&self, cx: &App) -> AnyElement {
         let muted = cx.theme().muted_foreground;
-        let evictions = eviction_count(&self.plans);
-        let step = |number: &'static str, text: String| {
-            h_flex()
-                .gap_1()
-                .items_center()
-                .child(div().font_semibold().child(number))
-                .child(div().text_color(muted).child(text))
-        };
+        // A node that is cordoned already has nothing to stop: its step is not shown.
+        let mut steps = Vec::new();
+        if self.nodes.iter().any(|node| !node.is_cordoned) {
+            steps.push("Cordon: stop new pods".to_owned());
+        }
+        steps.push(step_text(&self.plans, self.options.budgets));
+        steps.push("Wait until done or timeout".to_owned());
         h_flex()
             .gap_3()
             .flex_wrap()
             .text_xs()
-            .child(step("1", "Cordon: stop new pods".to_owned()))
-            .child(step(
-                "2",
-                match self.options.budgets {
-                    BudgetPolicy::Respect => format!("Evict {evictions} pods"),
-                    BudgetPolicy::Skip => format!("Delete {evictions} pods"),
-                },
-            ))
-            .child(step("3", "Wait until done or timeout".to_owned()))
+            .children(steps.into_iter().enumerate().map(|(index, text)| {
+                h_flex()
+                    .gap_1()
+                    .items_center()
+                    .child(div().font_semibold().child((index + 1).to_string()))
+                    .child(div().text_color(muted).child(text))
+            }))
             .into_any_element()
     }
 
@@ -1213,14 +1223,7 @@ impl DrainDialog {
                     .justify_between()
                     .text_xs()
                     .text_color(muted)
-                    .child(format!(
-                        "{} · {}",
-                        match self.options.budgets {
-                            BudgetPolicy::Respect => "Pods to evict",
-                            BudgetPolicy::Skip => "Pods to delete",
-                        },
-                        eviction_count(&self.plans)
-                    ))
+                    .child(preview_header(&self.plans, self.options.budgets))
                     .child("Result"),
             )
             .child(
@@ -1236,33 +1239,42 @@ impl DrainDialog {
     }
 
     fn render_heads_up(&self, cx: &App) -> Option<AnyElement> {
-        // Skipping the budgets is the one danger note; waiting on a budget is the neutral one.
-        let (text, is_danger) = match self.options.budgets {
-            BudgetPolicy::Respect => (heads_up(&self.plans, self.options.timeout)?, false),
-            BudgetPolicy::Skip => (bypass_note(&self.plans)?, true),
-        };
+        // Skipping the budgets is the one danger note; waiting on a budget and a volume that
+        // cannot move are the neutral ones.
         let theme = cx.theme();
-        let (border, color) = if is_danger {
-            (theme.danger, tone_color(StatusTone::Bad, cx))
+        let danger = tone_color(StatusTone::Bad, cx);
+        let mut lines: Vec<(String, gpui_kit::Hsla)> = Vec::new();
+        match self.options.budgets {
+            BudgetPolicy::Respect => {
+                let budgets = heads_up(&self.plans, self.options.timeout);
+                lines.extend(budgets.into_iter().map(|text| (text, theme.foreground)));
+            }
+            BudgetPolicy::Skip => lines.extend(bypass_note(&self.plans).map(|text| (text, danger))),
+        }
+        lines.extend(pinned_note(&self.plans).map(|text| (text, theme.foreground)));
+        if lines.is_empty() {
+            return None;
+        }
+        let border = if lines.iter().any(|(_, color)| *color == danger) {
+            theme.danger
         } else {
-            (theme.border, theme.foreground)
+            theme.border
         };
+        let rows = lines
+            .into_iter()
+            .map(|(text, color)| div().text_color(color).child(format!("· {text}")));
         Some(
-            div()
+            h_flex()
+                .gap_1()
+                .items_start()
                 .p_2()
                 .rounded_md()
                 .border_1()
                 .border_color(border)
                 .bg(theme.muted)
-                .text_color(color)
                 .text_xs()
-                .child(
-                    h_flex()
-                        .gap_1()
-                        .items_start()
-                        .child(div().flex_shrink_0().font_semibold().child("HEADS UP"))
-                        .child(div().flex_1().min_w_0().child(format!("· {text}"))),
-                )
+                .child(div().flex_shrink_0().font_semibold().child("HEADS UP"))
+                .child(v_flex().flex_1().min_w_0().gap_1().children(rows))
                 .into_any_element(),
         )
     }
@@ -1282,7 +1294,10 @@ impl DrainDialog {
             &self.eviction_checks(),
             self.options.budgets,
         );
+        // A pass that refused every eviction is a drain that only waits for its timeout.
+        let is_stalled = dry_run_refused_all(&self.eviction_checks());
         let color = match state {
+            DryRunState::Passed { .. } if is_stalled => tone_color(StatusTone::Warn, cx),
             DryRunState::Passed { .. } => tone_color(StatusTone::Ok, cx),
             DryRunState::Failed(_) | DryRunState::Rejected(_) => tone_color(StatusTone::Bad, cx),
             DryRunState::Running | DryRunState::NotSupported => cx.theme().muted_foreground,
@@ -1365,8 +1380,9 @@ impl DrainDialog {
                 )
                 .into_any_element();
         }
+        // The node's name is in the title; the button is the verb.
         let drain_label = match self.nodes.as_slice() {
-            [only] => format!("Drain {}", only.name),
+            [_] => "Drain".to_owned(),
             nodes => format!("Drain {} nodes", nodes.len()),
         };
         // Without an audit folder there is no line to add a note to.
@@ -1714,6 +1730,8 @@ impl DrainDialog {
                 is_finished: false,
                 is_pending: false,
                 is_terminating: false,
+                claims: Vec::new(),
+                pinned_volume: None,
             };
         let budget = |namespace: &str, name: &str, app: &str, expected: u32, allowed: u32| {
             PodDisruptionBudgetSummary {
@@ -1761,6 +1779,8 @@ impl DrainDialog {
             let name = format!("node-agent-{index}");
             pod("kube-system", &name, "agent", Some("DaemonSet"), false)
         }));
+        // A local volume pins `cache-1` to this node.
+        pods[4].pinned_volume = Some("data-cache-1".to_owned());
         self.budgets = BudgetsLoad::Ready(vec![
             budget("payments", "api-pdb", "api", 2, 0),
             budget("data", "kafka-pdb", "kafka", 3, 1),

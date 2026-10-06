@@ -49,7 +49,7 @@ Order: `Refused`, `Blocked`, `Needs`, `Waits`, `Allows`, `Evict`, `Terminating`,
 | `Needs(IgnoreDaemonSets)` | `DaemonSet pod, needs Ignore DaemonSet pods` | warn |
 | `Waits` | `Waits on PDB {name} (allows {n})` | warn |
 | `Allows` | `PDB {name} allows {n}` | ok |
-| `Evict` | unmanaged → `Will not come back` (warn); emptyDir → `Loses local data` (warn); else `Will be rescheduled` (ok) |
+| `Evict` | finished (Succeeded or Failed) → `Finished · removed` (muted); unmanaged → `Will not come back` (warn); emptyDir → `Loses local data` (warn); else `Will be rescheduled` (ok) |
 | `Terminating` | `Already terminating` | muted |
 | skips | `{n} DaemonSet pods · Skipped`, `{n} static pods · Skipped` | muted |
 
@@ -69,11 +69,15 @@ Row: `Grace period` select `Pod default` · `10 s` · `30 s` · `60 s` · `120 s
 ## Parts (W6 top to bottom)
 
 1. Title: env badge + `Drain node wk-04?` / `Drain 3 nodes?`.
-2. Steps strip: `1 Cordon: stop new pods` · `2 Evict {n} pods` · `3 Wait until done or timeout` (n = pods with an `Evict` verdict).
+2. Steps strip: `1 Cordon: stop new pods` · `2 Evict {n} pod(s)` · `3 Wait until done or timeout`. n counts only pods the drain moves: `Evict` verdicts that are neither finished nor pinned by a volume (see below); pods that cannot move follow as `· {k} cannot move`. A strip over nodes that are all cordoned drops step 1 and renumbers. The preview header counts the same way (`Pods to evict · {n} · {k} cannot move`).
 3. Options, grace and timeout, preview list.
-4. HEADS UP (only with `Blocked` or `Waits`): `Drain will wait on {pdb} until a replacement pod is ready elsewhere, or stop at the {timeout} timeout.` (`{pdb} and {k} more` for several).
-5. Dry-run line, typed name, 0030 note checkbox.
-6. Buttons: `Cancel` · `Cordon only` · `Drain wk-04` / `Drain 3 nodes` (danger primary).
+4. HEADS UP, one line per finding in one box (only with something to say): a budget that needs every pod it has (`Blocked(NoRoom)`: all healthy at the minimum) reads `{pdb} cannot lose a pod (minAvailable 2 = 2 healthy); this drain will stop at the {timeout} timeout. Options: Skip PDBs, scale {pdb}, Cordon only`; any other `Blocked` or `Waits` reads `Drain will wait on {pdb} until a replacement pod is ready elsewhere, or stop at the {timeout} timeout.` (`{pdb} and {k} more` for several); a pinned pod adds `{pod} cannot move: its volume {claim} lives on this node, so its replacement stays Pending until the node is back.`
+5. Dry-run line, typed name, 0030 note checkbox. The dry-run line takes the warning tone when the server refused evictions and accepted none.
+6. Buttons: `Cancel` · `Cordon only` · `Drain` (one node: its name is in the title) / `Drain 3 nodes` (danger primary).
+
+## Volumes that live on the node (L1)
+
+A pod that mounts a PersistentVolumeClaim bound to a volume with a `kubernetes.io/hostname` (or `metadata.name`) node affinity naming this node cannot move: its replacement stays Pending once the node is cordoned. `pin_volumes(node, pods)` (read-only: one node GET and one volume list, only when some pod mounts a claim; a failure leaves the pods unmarked) sets `DrainPod.pinned_volume`. The pod stays an `Evict` verdict (the drain still evicts it) but its row reads `cannot move: volume {claim} lives on this node` (warn; a `Blocked` budget keeps its own text), it sorts after the budget rows, and the counts above and the HEADS UP line name it. Zone affinities and finished pods never pin.
 
 ## Dry-runs and confirm
 

@@ -7,7 +7,7 @@
 use std::collections::HashSet;
 use std::time::Duration;
 
-use cluster::{DrainPod, WriteError, WriteOutcome};
+use cluster::{ControllerRef, DrainPod, PendingPod, WriteError, WriteOutcome};
 use gpui_kit::SharedString;
 
 use crate::app_shell::write_flow::{CheckedWriteError, Confirmed, write_error_text};
@@ -22,6 +22,13 @@ pub(crate) const POLL_INTERVAL: Duration = Duration::from_secs(3);
 const BACKOFF_BASE: Duration = Duration::from_secs(5);
 const BACKOFF_CAP: Duration = Duration::from_secs(30);
 const NO_ANSWER: &str = "No answer; retrying";
+/// How long after the last node ended the tab keeps looking for the replacements of the pods the
+/// drain evicted.
+const FOLLOW_WINDOW: Duration = Duration::from_secs(60);
+/// A replacement is recreated within seconds; with none Pending for this long, the tab stops
+/// looking before the window ends.
+const FOLLOW_QUIET: Duration = Duration::from_secs(15);
+const NOT_SCHEDULED_YET: &str = "not scheduled yet";
 
 /// How long to wait before the `attempt`th retry of a refused eviction (1-based): at least the
 /// server's hint, at least `5 s * 2^(attempt - 1)`, at most 30 s. No jitter: one client, one
@@ -48,6 +55,10 @@ pub(crate) enum PodProgress {
     /// The eviction was accepted; waiting for the pod to go.
     Evicted,
     Gone,
+    /// Gone from the node, and its controller made a replacement that is still Pending.
+    Recreated {
+        reason: SharedString,
+    },
     Failed(SharedString),
     /// Already terminating when the node started: awaited, not evicted.
     Awaited,
@@ -93,6 +104,7 @@ pub(crate) enum RunEnd {
 
 struct PodRun {
     key: PodKey,
+    controller: Option<ControllerRef>,
     progress: PodProgress,
     /// The server accepted a dry-run of this eviction (or the dialog showed its answer).
     is_checked: bool,
@@ -123,6 +135,22 @@ pub(crate) struct RunInput {
     pub(crate) checked: HashSet<String>,
 }
 
+/// The look at the replacements of the evicted pods, after the nodes ended.
+struct Follow {
+    /// Run-relative time the look began.
+    started: Duration,
+    last_poll: Option<Duration>,
+}
+
+/// What the driver does next while it follows the replacements.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum FollowStep {
+    /// Lists the Pending pods of the cluster.
+    Poll,
+    Sleep(Duration),
+    Done,
+}
+
 pub(crate) struct DrainRun {
     nodes: Vec<NodeRun>,
     options: DrainOptions,
@@ -134,6 +162,7 @@ pub(crate) struct DrainRun {
     node_started: Duration,
     last_poll: Option<Duration>,
     poll_error: Option<SharedString>,
+    follow: Option<Follow>,
     end: Option<RunEnd>,
     confirmed: Confirmed,
     generation: u64,
@@ -189,6 +218,7 @@ impl DrainRun {
             node_started: Duration::ZERO,
             last_poll: None,
             poll_error: None,
+            follow: None,
             end: None,
             confirmed: input.confirmed,
             generation: input.generation,
@@ -495,6 +525,123 @@ impl DrainRun {
         }
     }
 
+    /// Starts following the replacements of the evicted pods: only after the run finished, and
+    /// only when it evicted a pod that has a controller to make a replacement.
+    pub(crate) fn start_follow(&mut self, now: Duration) {
+        let has_replaceable = self
+            .nodes
+            .iter()
+            .flat_map(|node| &node.pods)
+            .any(|pod| pod.was_evicted && pod.controller.is_some());
+        if self.end == Some(RunEnd::Finished) && has_replaceable && self.follow.is_none() {
+            self.follow = Some(Follow {
+                started: now,
+                last_poll: None,
+            });
+        }
+    }
+
+    /// What to do next while following: the Pending pods are listed every poll interval until the
+    /// window ends, or until a quiet spell with none of the evicted pods recreated Pending.
+    pub(crate) fn next_follow(&self, now: Duration) -> FollowStep {
+        let Some(follow) = &self.follow else {
+            return FollowStep::Done;
+        };
+        let elapsed = now.saturating_sub(follow.started);
+        let is_quiet = elapsed >= FOLLOW_QUIET && self.pending_replacements() == 0;
+        if elapsed >= FOLLOW_WINDOW || is_quiet {
+            return FollowStep::Done;
+        }
+        let next_poll = follow
+            .last_poll
+            .map_or(Duration::ZERO, |polled| polled + POLL_INTERVAL);
+        if next_poll <= now {
+            return FollowStep::Poll;
+        }
+        FollowStep::Sleep(next_poll - now)
+    }
+
+    /// Whether the tab still looks for replacements at `now`.
+    pub(crate) fn is_following(&self, now: Duration) -> bool {
+        self.next_follow(now) != FollowStep::Done
+    }
+
+    /// The Pending pods of the cluster: an evicted pod whose controller made a replacement that is
+    /// still Pending reads `recreated`; one whose replacement is gone from the list reads `Gone`
+    /// again. A replacement is told from the pod it replaces by its uid.
+    pub(crate) fn on_follow(&mut self, read: Result<Vec<PendingPod>, SharedString>, now: Duration) {
+        if let Some(follow) = &mut self.follow {
+            follow.last_poll = Some(now);
+        }
+        let pending = match read {
+            Ok(pending) => pending,
+            Err(text) => {
+                self.poll_error = Some(text);
+                return;
+            }
+        };
+        self.poll_error = None;
+        let known: HashSet<String> = self
+            .nodes
+            .iter()
+            .flat_map(|node| &node.pods)
+            .map(|pod| pod.key.uid.clone())
+            .collect();
+        let mut taken: HashSet<&str> = HashSet::new();
+        let followed = self
+            .nodes
+            .iter_mut()
+            .flat_map(|node| &mut node.pods)
+            .filter(|pod| pod.was_evicted && pod.controller.is_some())
+            .filter(|pod| {
+                matches!(
+                    pod.progress,
+                    PodProgress::Gone | PodProgress::Recreated { .. }
+                )
+            });
+        for pod in followed {
+            let replacement = pending.iter().find(|candidate| {
+                candidate.namespace == pod.key.namespace
+                    && candidate.controller == pod.controller
+                    && !known.contains(&candidate.uid)
+                    && !taken.contains(candidate.uid.as_str())
+            });
+            pod.progress = match replacement {
+                Some(replacement) => {
+                    taken.insert(&replacement.uid);
+                    PodProgress::Recreated {
+                        reason: replacement
+                            .reason
+                            .as_deref()
+                            .unwrap_or(NOT_SCHEDULED_YET)
+                            .to_owned()
+                            .into(),
+                    }
+                }
+                None => PodProgress::Gone,
+            };
+        }
+    }
+
+    /// Evicted pods whose replacement is Pending now.
+    pub(crate) fn pending_replacements(&self) -> usize {
+        self.nodes
+            .iter()
+            .map(|node| node.count(|progress| matches!(progress, PodProgress::Recreated { .. })))
+            .sum()
+    }
+
+    /// The notification when the look ended with replacements still Pending, `None` otherwise.
+    pub(crate) fn follow_notice(&self) -> Option<String> {
+        match self.pending_replacements() {
+            0 => None,
+            1 => Some("Drain: 1 evicted pod has a replacement that stays Pending".to_owned()),
+            count => Some(format!(
+                "Drain: {count} evicted pods have replacements that stay Pending"
+            )),
+        }
+    }
+
     /// Cancel: no new request is sent, nodes stay cordoned, no eviction is undone.
     pub(crate) fn cancel(&mut self) {
         self.end.get_or_insert(RunEnd::Cancelled);
@@ -558,7 +705,12 @@ impl NodeRun {
 
     /// Pods that still need the drain's attention: not gone and not skipped.
     fn left(&self) -> usize {
-        self.count(|progress| !matches!(progress, PodProgress::Gone | PodProgress::Skipped(_)))
+        self.count(|progress| {
+            !matches!(
+                progress,
+                PodProgress::Gone | PodProgress::Recreated { .. } | PodProgress::Skipped(_)
+            )
+        })
     }
 }
 
@@ -581,6 +733,7 @@ fn classify(pod: &DrainPod, options: &DrainOptions, checked: &HashSet<String>) -
     };
     PodRun {
         key: PodKey::of(pod),
+        controller: pod.controller.clone(),
         progress,
         is_checked: checked.contains(&pod.uid),
         was_evicted: false,
@@ -840,10 +993,10 @@ impl DrainRun {
                         return StatusLine {
                             lead: format!("Stuck on {}: {reason}", node.name),
                             blockers: self.blocking_budgets(node),
-                            tail: cordoned(),
+                            tail: format!("{}{}", self.replacement_text(now), cordoned()),
                         };
                     }
-                    None => "Drained".to_owned(),
+                    None => format!("Drained{}", self.replacement_text(now)),
                 }
             }
         };
@@ -851,6 +1004,17 @@ impl DrainRun {
             lead,
             blockers: Vec::new(),
             tail: String::new(),
+        }
+    }
+
+    /// ` · 2 pending replacements` or ` · checking replacements`, or nothing: what the tab says about
+    /// the pods the drain evicted, after the nodes ended.
+    fn replacement_text(&self, now: Duration) -> String {
+        match self.pending_replacements() {
+            0 if self.is_following(now) => " · checking replacements".to_owned(),
+            0 => String::new(),
+            1 => " · 1 pending replacement".to_owned(),
+            count => format!(" · {count} pending replacements"),
         }
     }
 
@@ -885,7 +1049,12 @@ impl NodeRun {
         let gone = self
             .pods
             .iter()
-            .filter(|pod| pod.progress == PodProgress::Gone)
+            .filter(|pod| {
+                matches!(
+                    pod.progress,
+                    PodProgress::Gone | PodProgress::Recreated { .. }
+                )
+            })
             .count();
         (gone, total)
     }
@@ -936,6 +1105,9 @@ fn pod_text(
         PodProgress::Evicted => (verb.to_owned(), StatusTone::Info),
         PodProgress::Awaited => ("Terminating".to_owned(), StatusTone::Info),
         PodProgress::Gone => ("Gone".to_owned(), StatusTone::Ok),
+        PodProgress::Recreated { reason } => {
+            (format!("recreated · Pending: {reason}"), StatusTone::Warn)
+        }
         PodProgress::Failed(error) => (format!("Failed: {error}"), StatusTone::Bad),
         PodProgress::Skipped(reason) => (
             format!(

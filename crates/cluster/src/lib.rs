@@ -57,8 +57,10 @@ mod object_edit;
 mod object_names;
 mod object_write;
 mod object_yaml;
+mod pending_pod;
 mod persistent_volume;
 mod persistent_volume_claim;
+mod pinned_volume;
 mod pod;
 mod pod_log;
 mod pod_shell;
@@ -173,6 +175,7 @@ pub use object_write::{
     WriteOutcome, WritePolicy, WriteRequest,
 };
 pub use object_yaml::{EnvValues, ObjectIdentity, ObjectKind, ObjectRef, ObjectYaml};
+pub use pending_pod::PendingPod;
 pub use persistent_volume::{ClaimRef, PersistentVolumeSummary, VolumeBackend};
 pub use persistent_volume_claim::PersistentVolumeClaimSummary;
 pub use pod::{
