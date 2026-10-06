@@ -389,6 +389,32 @@ fn suspend_and_resume_follow_the_state_of_the_row() {
 }
 
 #[test]
+fn only_a_resume_names_the_next_run() {
+    let mut cron = cron_job("reconcile", "Allow", 0);
+    let suspend = intent(
+        ResourceAction::SuspendCronJob,
+        &KindObject::CronJob(cron.clone()),
+    );
+    assert!(warnings(&suspend).is_empty());
+    cron.is_suspended = true;
+    let resume = intent(ResourceAction::SuspendCronJob, &KindObject::CronJob(cron));
+    let notes = warnings(&resume);
+    assert_eq!(notes.len(), 1);
+    // `*/5 * * * *` runs within five minutes of any instant.
+    assert!(notes[0].starts_with("Next run: "), "{}", notes[0]);
+    assert!(notes[0].contains(" · in "), "{}", notes[0]);
+}
+
+#[test]
+fn a_resume_of_an_invalid_schedule_names_no_run() {
+    let mut cron = cron_job("reconcile", "Allow", 0);
+    cron.is_suspended = true;
+    cron.timetable = CronSchedule::parse("not a schedule", None);
+    let resume = intent(ResourceAction::SuspendCronJob, &KindObject::CronJob(cron));
+    assert!(warnings(&resume).is_empty());
+}
+
+#[test]
 fn trigger_warnings_follow_policy_and_active_jobs() {
     const RUNNING: &str = "1 job(s) of this CronJob are running; this run starts anyway";
     const FORBID: &str =
@@ -416,7 +442,7 @@ fn trigger_and_rerun_create_a_job() {
         ResourceAction::TriggerCronJob,
         &KindObject::CronJob(cron_job("reconcile", "Allow", 0)),
     );
-    assert_eq!(trigger.label, "Run cronjob reconcile now");
+    assert_eq!(trigger.label, "Trigger cronjob reconcile now");
     assert_eq!(trigger.button, "Trigger now");
     assert_eq!(trigger.request.operation(), &WriteOperation::TriggerCronJob);
     let rerun = intent(

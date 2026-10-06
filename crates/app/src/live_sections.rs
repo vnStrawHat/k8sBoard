@@ -555,7 +555,7 @@ fn next_runs_content(
 }
 
 /// `10:45 UTC` for a run on today's date in its zone, else `Oct 6 02:30 UTC`.
-fn run_label(run: &jiff::Zoned, now: jiff::Timestamp) -> String {
+pub(crate) fn run_label(run: &jiff::Zoned, now: jiff::Timestamp) -> String {
     let today = now.to_zoned(run.time_zone().clone()).date();
     let format = if run.date() == today {
         "%H:%M %Z"

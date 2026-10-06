@@ -5,6 +5,7 @@
 //! names the cluster of the row or cursor (`WriteIntent::cluster`) and takes its guard and its
 //! connection from that cluster's own slot session, never from the primary.
 
+use std::cell::Cell;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::Duration;
@@ -38,6 +39,7 @@ use crate::cluster_runtime::ClusterRuntime;
 use crate::cluster_session::AccessState;
 use crate::confirm_dialog::{ConfirmDialog, DialogInputs, DialogKind};
 use crate::kind_row::KindObject;
+use crate::port_forwards::LocalPortSpec;
 use crate::resource_actions::{
     ActionAvailability, NOT_PERMITTED, ResourceAction, action_availability, action_label,
     action_risk, unavailable_text,
@@ -114,12 +116,24 @@ pub(crate) struct ConnectIntent {
 /// The call that opens the stream of a `ConnectIntent`, and so which proof it needs.
 pub(crate) enum ConnectOpen {
     Exec(Rc<ExecOpen>),
-    PortForward(Rc<PortForwardOpen>),
+    /// A forward start: the dialog also asks for the local port.
+    PortForward(Rc<PortForwardOpen>, LocalPortChoice),
     /// Creates or changes an object first (a debug container, a node shell pod), then attaches to
     /// it (spec 0037).
     CreateThenAttach(CreateThenAttach),
     /// Attaches to a running container of the pod's own spec (spec 0040): no write, no dry-run.
     Attach(Rc<ContainerAttachOpen>),
+}
+
+/// The local port of a forward start, which the confirm dialog lets the user change before it
+/// starts anything.
+pub(crate) struct LocalPortChoice {
+    /// What the field starts with: an exact port shows it, an automatic one leaves it empty.
+    pub(crate) initial: LocalPortSpec,
+    /// The port an automatic choice tries first; the empty field names it.
+    pub(crate) automatic: u16,
+    /// Where the dialog leaves the confirmed choice for the open call to read.
+    pub(crate) chosen: Rc<Cell<Option<LocalPortSpec>>>,
 }
 
 /// A start that writes before it attaches. The write is a `WriteIntent` in every respect: the
@@ -187,7 +201,7 @@ impl ConnectOpen {
     fn granted(&self, access: &AccessState) -> Option<GrantedOpen> {
         match self {
             Self::Exec(open) => Some(GrantedOpen::Exec(Rc::clone(open), exec_permit_of(access)?)),
-            Self::PortForward(open) => Some(GrantedOpen::PortForward(
+            Self::PortForward(open, _) => Some(GrantedOpen::PortForward(
                 Rc::clone(open),
                 port_forward_permit_of(access)?,
             )),
@@ -265,11 +279,21 @@ impl ConnectIntent {
         }
     }
 
+    /// The local port a forward start lets the dialog change.
+    pub(crate) fn local_port(&self) -> Option<&LocalPortChoice> {
+        match &self.open {
+            ConnectOpen::PortForward(_, choice) => Some(choice),
+            ConnectOpen::Exec(_) | ConnectOpen::CreateThenAttach(_) | ConnectOpen::Attach(_) => {
+                None
+            }
+        }
+    }
+
     /// The write a start makes before it attaches, if it makes one.
     pub(crate) fn create(&self) -> Option<&Rc<WriteIntent>> {
         match &self.open {
             ConnectOpen::CreateThenAttach(start) => Some(&start.create),
-            ConnectOpen::Exec(_) | ConnectOpen::PortForward(_) | ConnectOpen::Attach(_) => None,
+            ConnectOpen::Exec(_) | ConnectOpen::PortForward(..) | ConnectOpen::Attach(_) => None,
         }
     }
 }
@@ -666,6 +690,20 @@ fn rollout_subject(intent: &WriteIntent) -> Option<ClusterObject> {
     }
     let target = intent.request.target();
     let key = ResourceKey::of_object(target.kind_name(), target.namespace(), target.name())?;
+    Some(ClusterObject::new(intent.cluster.clone(), key))
+}
+
+/// The Job a Trigger now or Re-run created, for the notice's View button. The row may not have
+/// reached the watch yet; the reveal waits for it.
+fn created_job_subject(intent: &WriteIntent, created: Option<&str>) -> Option<ClusterObject> {
+    if !matches!(
+        intent.action,
+        ResourceAction::TriggerCronJob | ResourceAction::RerunJob
+    ) {
+        return None;
+    }
+    let namespace = intent.request.target().namespace();
+    let key = ResourceKey::of_object("Job", namespace, created?)?;
     Some(ClusterObject::new(intent.cluster.clone(), key))
 }
 
@@ -1246,6 +1284,8 @@ fn finish_commit(
                 dialog.close(window, cx);
             }
         });
+        let created_view =
+            created_job_subject(intent, created.as_deref()).filter(|_| result.is_ok());
         match rollout_subject(intent).filter(|_| result.is_ok()) {
             Some(subject) => {
                 let workload = watched_workload(intent);
@@ -1260,26 +1300,29 @@ fn finish_commit(
                     });
                 }
             }
-            None => {
-                let consumers = env_consumers_after(shell, intent, result.is_ok(), cx);
-                if consumers.is_empty() {
-                    notify_with(window, cx, notice, result.is_ok());
-                } else {
-                    let source = intent.request.target().name();
-                    notify_with_restart(
-                        window,
-                        cx,
-                        notice,
-                        shell,
-                        &intent.cluster,
-                        source,
-                        consumers,
-                    );
+            None => match created_view {
+                Some(subject) => notify_with_view(window, cx, notice, shell, subject, None),
+                None => {
+                    let consumers = env_consumers_after(shell, intent, result.is_ok(), cx);
+                    if consumers.is_empty() {
+                        notify_with(window, cx, notice, result.is_ok());
+                    } else {
+                        let source = intent.request.target().name();
+                        notify_with_restart(
+                            window,
+                            cx,
+                            notice,
+                            shell,
+                            &intent.cluster,
+                            source,
+                            consumers,
+                        );
+                    }
+                    if result.is_ok() {
+                        watch_hpa_after_scale(shell, intent, window.window_handle(), cx);
+                    }
                 }
-                if result.is_ok() {
-                    watch_hpa_after_scale(shell, intent, window.window_handle(), cx);
-                }
-            }
+            },
         }
     });
 }

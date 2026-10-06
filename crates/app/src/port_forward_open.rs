@@ -7,6 +7,7 @@
 //! forward then keeps running on its own connection clone, so a switch or a released slot does not
 //! end it (decision 20).
 
+use std::cell::Cell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
@@ -22,7 +23,7 @@ use gpui_kit::{
 };
 
 use super::AppShell;
-use super::write_flow::{ConnectIntent, ConnectOpen, PortForwardOpen};
+use super::write_flow::{ConnectIntent, ConnectOpen, LocalPortChoice, PortForwardOpen};
 use crate::audit_log::{
     AuditEntry, AuditField, AuditObject, AuditOutcome, append_audit, connect_entry,
 };
@@ -54,6 +55,8 @@ struct ForwardStart {
     cluster: ClusterRef,
     spec: ForwardSpec,
     existing: Option<ForwardId>,
+    /// The local port the dialog confirmed, which replaces the one of `spec`.
+    chosen: Rc<Cell<Option<LocalPortSpec>>>,
 }
 
 /// The starts that have not reported yet, each with the audit line to write if none ever does. A
@@ -94,8 +97,14 @@ fn forward_intent(
     cluster_name: String,
     spec: &ForwardSpec,
     open: Rc<PortForwardOpen>,
+    chosen: Rc<Cell<Option<LocalPortSpec>>>,
 ) -> ConnectIntent {
     let (object, fields) = forward_audit(spec);
+    let local_port = LocalPortChoice {
+        initial: spec.local_port,
+        automatic: spec.requested_local_port(),
+        chosen,
+    };
     let label = format!(
         "{} {}:{}",
         action_label(ResourceAction::PortForward),
@@ -112,7 +121,7 @@ fn forward_intent(
         warnings: Vec::new(),
         object,
         fields,
-        open: ConnectOpen::PortForward(open),
+        open: ConnectOpen::PortForward(open, local_port),
     }
 }
 
@@ -206,10 +215,12 @@ impl AppShell {
             warn(window, cx, text);
             return;
         }
+        let chosen = Rc::new(Cell::new(None));
         let start = Rc::new(ForwardStart {
             cluster: cluster.clone(),
             spec,
             existing,
+            chosen: Rc::clone(&chosen),
         });
         let open: Rc<PortForwardOpen> = {
             let start = Rc::clone(&start);
@@ -217,7 +228,7 @@ impl AppShell {
                 shell.open_forward(&start, permit, connection, window, cx);
             })
         };
-        let intent = forward_intent(cluster, cluster_name, &start.spec, open);
+        let intent = forward_intent(cluster, cluster_name, &start.spec, open, chosen);
         self.start_connect(intent, window, cx);
     }
 
@@ -235,8 +246,14 @@ impl AppShell {
             cluster,
             spec,
             existing,
+            chosen,
         } = start;
         let existing = *existing;
+        // The dialog may have changed the local port; a start that never asked keeps its own.
+        let spec = &ForwardSpec {
+            local_port: chosen.take().unwrap_or(spec.local_port),
+            ..spec.clone()
+        };
         // The list may have changed while the dialog was open.
         if let Some(text) = refusal_text(self.port_forwards.read(cx), spec, existing) {
             warn(window, cx, text);
@@ -661,6 +678,7 @@ impl AppShell {
             label.to_owned(),
             &spec,
             Rc::new(|_, _, _, _, _| {}),
+            Rc::new(Cell::new(None)),
         );
         let confirm = confirm_step(ConfirmMode::TypeName, ActionRisk::Change, intent.expected());
         let inputs = DialogInputs {

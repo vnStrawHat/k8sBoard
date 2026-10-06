@@ -328,11 +328,11 @@ fn a_stream_start_has_no_dry_run_to_wait_for_but_still_checks_lock_and_name() {
 fn a_create_names_what_it_made_in_the_notice() {
     assert_eq!(
         success_notice(
-            "Run cronjob reconcile now",
+            "Trigger cronjob reconcile now",
             Some("reconcile-manual-x7k2p"),
             ResourceAction::TriggerCronJob
         ),
-        "Run cronjob reconcile now: created reconcile-manual-x7k2p"
+        "Trigger cronjob reconcile now: created reconcile-manual-x7k2p"
     );
     assert_eq!(
         success_notice("Cordon node wk-04", None, ResourceAction::Cordon),
@@ -414,7 +414,14 @@ fn only_both_port_forward_verbs_give_a_permit() {
 #[test]
 fn run_guarded_picks_the_port_forward_permit() {
     use cluster::AccessCheck;
-    let forward = ConnectOpen::PortForward(Rc::new(|_, _, _, _, _| {}));
+    let forward = ConnectOpen::PortForward(
+        Rc::new(|_, _, _, _, _| {}),
+        LocalPortChoice {
+            initial: LocalPortSpec::Auto,
+            automatic: 15432,
+            chosen: Rc::new(std::cell::Cell::new(None)),
+        },
+    );
     let shell = ConnectOpen::Exec(Rc::new(|_, _, _, _, _| {}));
     let forward_rights = allowing_only(&[
         AccessCheck::GetPodPortForward,
@@ -694,4 +701,51 @@ fn only_a_deployment_restart_and_a_roll_back_are_followed_to_their_end() {
         ),
         "Restarted rollout of deployment web. Watching rollout…"
     );
+}
+
+fn job_intent(action: ResourceAction, kind: ObjectKind, operation: WriteOperation) -> WriteIntent {
+    let target = ObjectRef::new(kind, Some("shop".to_owned()), "heartbeat".to_owned())
+        .expect("a namespaced object");
+    WriteIntent {
+        cluster: cluster(),
+        cluster_name: "stg-b".into(),
+        action,
+        label: "Trigger cronjob heartbeat now".into(),
+        button: "Trigger now".into(),
+        request: WriteRequest::new(target, operation).expect("a fitting request"),
+        risk: ActionRisk::Change,
+        warnings: Vec::new(),
+    }
+}
+
+#[test]
+fn a_trigger_offers_to_view_the_job_it_created() {
+    let intent = job_intent(
+        ResourceAction::TriggerCronJob,
+        ObjectKind::CronJob,
+        WriteOperation::TriggerCronJob,
+    );
+    let subject = created_job_subject(&intent, Some("heartbeat-manual-x7k2p")).expect("a job");
+    assert_eq!(
+        subject.key,
+        ResourceKey::Kind {
+            kind: crate::resource_kind::ResourceKind::Jobs,
+            namespace: Some("shop".to_owned()),
+            name: "heartbeat-manual-x7k2p".to_owned(),
+        }
+    );
+    // Without a name from the server there is nothing to view; other actions never offer it.
+    assert!(created_job_subject(&intent, None).is_none());
+    let rerun = job_intent(
+        ResourceAction::RerunJob,
+        ObjectKind::Job,
+        WriteOperation::RerunJob,
+    );
+    assert!(created_job_subject(&rerun, Some("heartbeat-rerun-abc12")).is_some());
+    let cordon = job_intent(
+        ResourceAction::Cordon,
+        ObjectKind::CronJob,
+        WriteOperation::TriggerCronJob,
+    );
+    assert!(created_job_subject(&cordon, Some("x")).is_none());
 }

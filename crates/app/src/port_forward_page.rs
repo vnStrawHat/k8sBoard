@@ -56,6 +56,12 @@ fn target_width(workspace: f32, drawer: Option<f32>) -> f32 {
     room.max(TARGET_MIN_WIDTH)
 }
 
+/// `1 forward · 1 active`, `5 forwards · 3 active`.
+fn forward_count_text(total: usize, running: usize) -> String {
+    let noun = if total == 1 { "forward" } else { "forwards" };
+    format!("{total} {noun} · {running} active")
+}
+
 const EMPTY_TEXT: &str = "No port forwards. Use Forward next to a port, or New forward.";
 const BIND_TOOLTIP: &str = "The forward listens on this computer only (127.0.0.1 and ::1). On Windows another local program could bind the same port first.";
 
@@ -76,14 +82,10 @@ impl AppShell {
         self.port_forwards.read(cx).running_count()
     }
 
-    /// `5 (3 active)`: all rows, and the running ones.
+    /// `5 forwards · 3 active`: all rows, and the running ones.
     pub(super) fn port_forward_header_count(&self, cx: &App) -> String {
         let forwards = self.port_forwards.read(cx);
-        format!(
-            "{} ({} active)",
-            forwards.forwards().len(),
-            forwards.running_count()
-        )
+        forward_count_text(forwards.forwards().len(), forwards.running_count())
     }
 
     /// `New forward` and `Stop all`, right-aligned in the header.
@@ -643,6 +645,12 @@ impl StoppedRowAction {
 mod tests {
     use super::*;
 
+    #[test]
+    fn the_header_counts_forwards_in_singular_and_plural() {
+        assert_eq!(forward_count_text(1, 1), "1 forward · 1 active");
+        assert_eq!(forward_count_text(0, 0), "0 forwards · 0 active");
+        assert_eq!(forward_count_text(5, 3), "5 forwards · 3 active");
+    }
     #[test]
     fn target_takes_what_the_fixed_columns_leave() {
         // 1100 and 1320 px windows, less the 220 px sidebar, drawer closed.

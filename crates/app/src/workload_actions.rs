@@ -5,11 +5,13 @@
 use std::cell::Cell;
 
 use cluster::{
-    DeploymentSummary, HELM_MANAGED_WARNING, ObjectKind, ObjectRef, ReplicaSetSummary,
-    WriteOperation, WriteRequest, terms_are_helm_managed,
+    CronJobSummary, DeploymentSummary, HELM_MANAGED_WARNING, ObjectKind, ObjectRef,
+    ReplicaSetSummary, WriteOperation, WriteRequest, terms_are_helm_managed,
 };
 use gpui_kit::SharedString;
+use jiff::tz::TimeZone;
 
+use crate::age::format_age;
 use crate::app_shell::batch_write::{
     BatchExtras, BatchFailure, BatchIntent, BatchItem, BatchPlan, CheckedRow, SkippedItem,
     batch_plan,
@@ -17,6 +19,7 @@ use crate::app_shell::batch_write::{
 use crate::app_shell::write_flow::WriteIntent;
 use crate::cluster_registry::ClusterRef;
 use crate::kind_row::KindObject;
+use crate::live_sections::run_label;
 use crate::resource_actions::{ResourceAction, action_risk, values_edit_block};
 use crate::resource_edits::{claim_block, class_block};
 use crate::write_guard::ActionRisk;
@@ -137,12 +140,14 @@ pub(crate) fn workload_intent(
                 button: verb,
                 risk: action_risk(action),
                 operation: WriteOperation::SetCronJobSuspended { suspended },
-                warnings: Vec::new(),
+                warnings: next_run_note(cron_job, suspended, now)
+                    .into_iter()
+                    .collect(),
             }
         }
         (ResourceAction::TriggerCronJob, KindObject::CronJob(cron_job)) => Described {
             action,
-            label: format!("Run {word} {name} now"),
+            label: format!("Trigger {word} {name} now"),
             button: "Trigger now",
             risk: action_risk(action),
             operation: WriteOperation::TriggerCronJob,
@@ -159,6 +164,23 @@ pub(crate) fn workload_intent(
         _ => return None,
     };
     intent_of(scope, &workload, described)
+}
+
+/// What a Resume tells before it is confirmed: `Next run: 10:45 UTC · in 9m`. `None` for a
+/// Suspend, and when the schedule has no run to name (an invalid one, or an `@every` before its
+/// first run).
+fn next_run_note(
+    cron_job: &CronJobSummary,
+    suspended: bool,
+    now: jiff::Timestamp,
+) -> Option<SharedString> {
+    if suspended {
+        return None;
+    }
+    let next = cron_job.timetable.as_ref().ok()?.next_after(now)?;
+    let when = run_label(&next.timestamp().to_zoned(TimeZone::system()), now);
+    let away = format_age(Some(now), next.timestamp());
+    Some(format!("Next run: {when} · in {away}").into())
 }
 
 /// Restart rollout of `workload`, stamped at `now`.

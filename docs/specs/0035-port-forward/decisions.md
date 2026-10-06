@@ -51,3 +51,4 @@
 | 28 | Traffic sampled at most once per second, only when changed | one notify per second per busy forward |
 | 29 | Open in browser uses `http://127.0.0.1:{port}`; the page shows `localhost:{port}` (W7), the drawer `127.0.0.1:{port}` | the forward is IPv4 only; `localhost` may resolve to `::1` first |
 | 30 | Each socket polls `take_error` concurrently with the copy (`select!`); every reason string that reaches the UI (error channel, WebSocket close, resolve errors) goes through one `reason_text` (control characters stripped, ≤ 200 chars) | an error-channel message must end the socket at once, not after the copy; one sanitizer for every path |
+| 31 | Every forward confirm carries an editable Local port field (empty = automatic, placeholder `automatic (10080)`; an exact port shows its number); the confirmed value replaces the spec's port before the row, the audit line and the stream (UX walk M16) | F with one port skipped the form, so the port could not be chosen |

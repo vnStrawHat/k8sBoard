@@ -835,3 +835,16 @@ fn a_traffic_sample_repaints_only_its_open_drawer(cx: &mut gpui_kit::TestAppCont
     forwards.update(cx, |forwards, cx| forwards.on_update(id, sample(), cx));
     assert_eq!(repaints.get(), 2, "its open drawer shows the counters");
 }
+
+#[test]
+fn a_local_port_field_is_empty_for_automatic_else_exact() {
+    assert_eq!(parse_local_port_field(""), Some(LocalPortSpec::Auto));
+    assert_eq!(parse_local_port_field("  "), Some(LocalPortSpec::Auto));
+    assert_eq!(
+        parse_local_port_field(" 10080 "),
+        Some(LocalPortSpec::Exact(10080))
+    );
+    assert_eq!(parse_local_port_field("0"), None);
+    assert_eq!(parse_local_port_field("70000"), None);
+    assert_eq!(parse_local_port_field("http"), None);
+}

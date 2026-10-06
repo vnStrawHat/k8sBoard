@@ -323,7 +323,7 @@ fn trigger_audit_names_the_created_job(cx: &mut TestAppContext) {
     let action = RowAction::TriggerCronJob.key_action();
     t.fixture
         .with_window(cx, |window, cx| window.dispatch_action(action, cx));
-    assert_eq!(t.dialog_label(cx), "Run cronjob reconcile now");
+    assert_eq!(t.dialog_label(cx), "Trigger cronjob reconcile now");
     t.dialog(cx).read_with(cx, |dialog, _| {
         let lines: Vec<String> = dialog
             .warning_lines()

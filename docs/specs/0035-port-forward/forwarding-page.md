@@ -8,7 +8,7 @@ Not a Kubernetes kind (W7 note): a local list rendered with the 0009 table toolk
 
 | Part | Content |
 |---|---|
-| Header | `Port Forwarding` + muted `{total} ({active} active)`; buttons `+ New forward`, `Stop all` (disabled with no running forward) |
+| Header | `Port Forwarding` + muted `{N} forward(s) · {active} active`; buttons `+ New forward`, `Stop all` (disabled with no running forward) |
 | Columns | Target (`{ns}/{pod|svc|deploy|sts}/{name}`), Ports (`{remote} → localhost:{local}`, local `—` before bind), Status (theme token pill, decision texts in forward-model.md), Uptime (`2h 14m`, `—` when not Active), action |
 | Widths (as built) | Ports 230 px (holds `65535 → localhost:65535`), Status 170, Uptime 80, action 104; Target takes the rest (at least 160) and cuts in the middle to it. No Cluster column: the app shows one cluster, so the cluster is in the Target tooltip and the drawer meta. While the drawer is open (it covers the right half of the list) Target shrinks so Ports stays in view |
 | Action cell | Active / Paused / Reconnecting / Starting → `■ Stop`; Failed → `↻ Retry` (`Change port…` when the port is in use, opening the Change local port form); Stopped preset → `▶ Start` (W7 rows) |

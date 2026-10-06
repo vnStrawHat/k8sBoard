@@ -19,7 +19,8 @@ use crate::environment::{Environment, environment_badge};
 use crate::fresh_enter::{FreshEnter, confirms, is_enter};
 use crate::keymap::FORWARD_FORM;
 use crate::port_forwards::{
-    ForwardId, ForwardSpec, LocalPortSpec, TargetSpec, is_dns_subdomain, parse_port, parse_target,
+    ForwardId, ForwardSpec, LOCAL_PORT_FIELD_ERROR, TargetSpec, is_dns_subdomain,
+    parse_local_port_field, parse_port, parse_target,
 };
 
 const DIALOG_WIDTH: f32 = 420.;
@@ -75,14 +76,9 @@ pub(crate) fn validate_new_forward(input: &NewForwardInput<'_>) -> Result<Forwar
     if remote_port.is_none() {
         errors.remote_port = Some(PORT_ERROR);
     }
-    let local_text = input.local_port.trim();
-    let local_port = if local_text.is_empty() {
-        Some(LocalPortSpec::Auto)
-    } else {
-        parse_port(local_text).map(LocalPortSpec::Exact)
-    };
+    let local_port = parse_local_port_field(input.local_port);
     if local_port.is_none() {
-        errors.local_port = Some("Leave empty for automatic, or enter 1 to 65535");
+        errors.local_port = Some(LOCAL_PORT_FIELD_ERROR);
     }
     match (target, remote_port, local_port) {
         (Ok(target), Some(remote_port), Some(local_port)) if errors.is_empty() => Ok(ForwardSpec {

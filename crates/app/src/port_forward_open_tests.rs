@@ -496,6 +496,45 @@ fn confirm_starts_the_forward_on_the_clusters_own_connection(cx: &mut TestAppCon
 }
 
 #[gpui_kit::test]
+fn a_local_port_typed_in_the_confirm_replaces_the_automatic_one(cx: &mut TestAppContext) {
+    let forwards = two_clusters("typed-port", Answers::Pod, cx);
+    forwards.start(
+        &forwards.stg,
+        pod_spec("api-0", 8080, LocalPortSpec::Auto),
+        cx,
+    );
+    let dialog = forwards.dialog(cx);
+    forwards.fixture.with_window(cx, |window, cx| {
+        dialog.update(cx, |dialog, cx| dialog.type_local_port("18181", window, cx));
+    });
+    forwards.confirm(cx);
+    forwards.wait_for_state(ForwardState::Active, cx);
+    let spec = forwards.fixture.shell.read_with(cx, |shell, cx| {
+        shell.port_forwards.read(cx).forwards()[0].spec.clone()
+    });
+    assert_eq!(spec.local_port, LocalPortSpec::Exact(18181));
+}
+
+#[gpui_kit::test]
+fn a_local_port_that_is_not_a_port_keeps_the_confirm_open(cx: &mut TestAppContext) {
+    let forwards = two_clusters("bad-port", Answers::Pod, cx);
+    forwards.start(
+        &forwards.stg,
+        pod_spec("api-0", 8080, LocalPortSpec::Auto),
+        cx,
+    );
+    let dialog = forwards.dialog(cx);
+    forwards.fixture.with_window(cx, |window, cx| {
+        dialog.update(cx, |dialog, cx| dialog.type_local_port("70000", window, cx));
+    });
+    forwards.confirm(cx);
+    assert!(forwards.has_dialog(cx));
+    assert!(forwards.rows(cx).is_empty());
+    let error = dialog.read_with(cx, |dialog, _| dialog.local_port_error());
+    assert!(error.is_some());
+}
+
+#[gpui_kit::test]
 fn the_forward_follows_the_0030_gate(cx: &mut TestAppContext) {
     let forwards = two_clusters("gate", Answers::Pod, cx);
     let prod_api = forwards.activate(&forwards.prod, cx);
@@ -1022,7 +1061,7 @@ fn page_lists_forwards_of_every_cluster(cx: &mut TestAppContext) {
                 .collect::<Vec<_>>(),
         )
     });
-    assert_eq!(count, "2 (2 active)");
+    assert_eq!(count, "2 forwards · 2 active");
     assert_eq!(clusters, ["prod-a", "stg-b"]);
 }
 

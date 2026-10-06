@@ -1,5 +1,5 @@
 use super::*;
-use crate::port_forwards::TargetKind;
+use crate::port_forwards::{LocalPortSpec, TargetKind};
 
 fn input<'a>(
     namespace: &'a str,

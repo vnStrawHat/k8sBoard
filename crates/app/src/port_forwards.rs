@@ -942,6 +942,17 @@ pub(crate) fn parse_port(text: &str) -> Option<u16> {
     text.trim().parse::<u16>().ok().filter(|port| *port != 0)
 }
 
+/// The error under a local port field that may be left empty.
+pub(crate) const LOCAL_PORT_FIELD_ERROR: &str = "Leave empty for automatic, or enter 1 to 65535";
+
+/// The local port a field holds: empty is automatic, a typed one is exact. `None` is not a port.
+pub(crate) fn parse_local_port_field(text: &str) -> Option<LocalPortSpec> {
+    if text.trim().is_empty() {
+        return Some(LocalPortSpec::Auto);
+    }
+    parse_port(text).map(LocalPortSpec::Exact)
+}
+
 #[cfg(test)]
 #[path = "port_forwards_tests.rs"]
 mod port_forwards_tests;

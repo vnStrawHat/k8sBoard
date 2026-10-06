@@ -41,6 +41,7 @@ use crate::app_shell::write_flow::{
 use crate::cluster_registry::ClusterRef;
 use crate::environment::{Environment, environment_badge};
 use crate::node_edits::taint_rows_of_request;
+use crate::port_forwards::{LOCAL_PORT_FIELD_ERROR, LocalPortSpec, parse_local_port_field};
 use crate::resource_actions::{ResourceAction, with_next_step};
 use crate::settings::AppSettings;
 use crate::status_tone::{StatusTone, tone_color};
@@ -58,6 +59,19 @@ fn eviction_line(grace: &str) -> String {
         Some("pod default") => "Eviction request · pod's own grace period".to_owned(),
         Some(seconds) => format!("Eviction request · grace period {seconds}"),
         None => format!("Eviction request · {grace}"),
+    }
+}
+
+/// The field Trigger now and Re-run send: the name prefix of the Job the server creates.
+const GENERATE_NAME_PATH: &str = "metadata.generateName";
+
+/// What a Trigger now or Re-run does, instead of the field it sends: `Create Job
+/// report-failed-rerun-… from Job report-failed`. A batch has one prefix per row, so it says only
+/// that each row creates a Job.
+fn created_job_line(generate_name: &str, source: Option<(&str, &str)>) -> String {
+    match source {
+        Some((kind, name)) => format!("Create Job {generate_name}… from {kind} {name}"),
+        None => "Create one Job from each row".to_owned(),
     }
 }
 /// One row of the object list of a batch, and the gap between two rows. Fixed, so the height of
@@ -214,6 +228,9 @@ pub(crate) struct ConfirmDialog {
     items: Vec<ItemProgress>,
     typed: Entity<InputState>,
     note: Entity<InputState>,
+    /// The local port of a forward start, which the user may change before it starts.
+    local_port: Option<Entity<InputState>>,
+    local_port_error: Option<&'static str>,
     is_note_shown: bool,
     is_committing: bool,
     /// The Stop button of a running batch was pressed; the commit loop reads it between items.
@@ -239,11 +256,32 @@ impl ConfirmDialog {
         let hint = inputs.kind.typed_hint();
         let typed = cx.new(|cx| InputState::new(window, cx).placeholder(hint));
         let note = cx.new(|cx| InputState::new(window, cx).placeholder("Note"));
+        let local_port = match &inputs.kind {
+            DialogKind::Connect(intent) => intent.local_port().map(|choice| {
+                let placeholder = format!("automatic ({})", choice.automatic);
+                cx.new(|cx| {
+                    let mut input = InputState::new(window, cx).placeholder(placeholder);
+                    if let LocalPortSpec::Exact(port) = choice.initial {
+                        input.set_value(port.to_string(), window, cx);
+                    }
+                    input
+                })
+            }),
+            DialogKind::Unlock { .. } | DialogKind::Write(_) | DialogKind::Batch(_) => None,
+        };
         // The block and the match line follow the field as it is typed.
         let subscription = cx.subscribe_in(&typed, window, |_, _, event: &InputEvent, _, cx| {
             if matches!(event, InputEvent::Change) {
                 cx.notify();
             }
+        });
+        let port_subscription = local_port.as_ref().map(|input| {
+            cx.subscribe_in(input, window, |dialog, _, event: &InputEvent, _, cx| {
+                if matches!(event, InputEvent::Change) {
+                    dialog.local_port_error = None;
+                    cx.notify();
+                }
+            })
         });
         let items = match &inputs.kind {
             DialogKind::Batch(batch) => vec![ItemProgress::Waiting; batch.plan.items.len()],
@@ -269,6 +307,8 @@ impl ConfirmDialog {
             items,
             typed,
             note,
+            local_port,
+            local_port_error: None,
             is_note_shown: false,
             is_committing: false,
             stop_requested: Rc::new(Cell::new(false)),
@@ -280,7 +320,9 @@ impl ConfirmDialog {
             dry_run_task: None,
             #[cfg(feature = "screenshot")]
             is_fixture: false,
-            _subscriptions: vec![subscription],
+            _subscriptions: std::iter::once(subscription)
+                .chain(port_subscription)
+                .collect(),
         }
     }
 
@@ -661,6 +703,19 @@ impl ConfirmDialog {
                 self.close(window, cx);
             }
             DialogKind::Connect(intent) => {
+                if let Some(choice) = intent.local_port() {
+                    let text = self
+                        .local_port
+                        .as_ref()
+                        .map(|input| input.read(cx).value().to_string())
+                        .unwrap_or_default();
+                    let Some(port) = parse_local_port_field(&text) else {
+                        self.local_port_error = Some(LOCAL_PORT_FIELD_ERROR);
+                        cx.notify();
+                        return;
+                    };
+                    choice.chosen.set(Some(port));
+                }
                 // A start that writes first needs its passed dry-run; any other has no check.
                 let proof = if intent.create().is_some() {
                     let typed = self.typed_match(cx);
@@ -754,7 +809,14 @@ impl ConfirmDialog {
             return;
         }
         let typed_focus = self.typed.read(cx).focus_handle(cx);
-        if !(self.focus_handle.is_focused(window) || typed_focus.is_focused(window)) {
+        let is_port_focused = self
+            .local_port
+            .as_ref()
+            .is_some_and(|input| input.read(cx).focus_handle(cx).is_focused(window));
+        if !(self.focus_handle.is_focused(window)
+            || typed_focus.is_focused(window)
+            || is_port_focused)
+        {
             return;
         }
         // The kit also clicks a focused element on the Enter key-up unless the press was handled.
@@ -932,8 +994,14 @@ impl ConfirmDialog {
             None => target.name().to_owned(),
         };
         // A create changes no existing object: its fields are listed below, so the row says `new`.
+        // Trigger now and Re-run leave the row they act on alone and create a Job.
         let count_text = if matches!(intent.action, ResourceAction::CreateObject(_)) {
             "new".to_owned()
+        } else if matches!(
+            intent.action,
+            ResourceAction::TriggerCronJob | ResourceAction::RerunJob
+        ) {
+            "creates a Job".to_owned()
         } else {
             let count = intent.request.changed_fields().len();
             let unit = if count == 1 { "field" } else { "fields" };
@@ -986,12 +1054,33 @@ impl ConfirmDialog {
         if let DialogKind::Connect(intent) = &self.kind {
             let theme = cx.theme();
             let mono = theme.mono_font_family.clone();
-            let lines = intent.fields.iter().map(|field| {
-                let text = match &field.value {
-                    Some(value) => format!("{} → {value}", connect_field_label(&field.path)),
-                    None => connect_field_label(&field.path).to_owned(),
-                };
-                div().text_sm().font_family(mono.clone()).child(text)
+            // The field below replaces the fixed line of the local port.
+            let has_port_field = self.local_port.is_some();
+            let lines = intent
+                .fields
+                .iter()
+                .filter(|field| !(has_port_field && field.path == "local_port"))
+                .map(|field| {
+                    let text = match &field.value {
+                        Some(value) => format!("{} → {value}", connect_field_label(&field.path)),
+                        None => connect_field_label(&field.path).to_owned(),
+                    };
+                    div().text_sm().font_family(mono.clone()).child(text)
+                });
+            let port_field = self.local_port.as_ref().map(|input| {
+                let error = self
+                    .local_port_error
+                    .map(|text| div().text_xs().text_color(theme.danger).child(text));
+                v_flex()
+                    .gap_1()
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(theme.muted_foreground)
+                            .child("Local port (empty = automatic)"),
+                    )
+                    .child(Input::new(input).small())
+                    .children(error)
             });
             let warnings = intent.warnings.iter().map(|warning| {
                 div()
@@ -999,7 +1088,13 @@ impl ConfirmDialog {
                     .text_color(tone_color(StatusTone::Warn, cx))
                     .child(warning.clone())
             });
-            return Some(v_flex().gap_1().children(lines).children(warnings));
+            return Some(
+                v_flex()
+                    .gap_1()
+                    .children(lines)
+                    .children(port_field)
+                    .children(warnings),
+            );
         }
         // A batch changes the same field of every item, so it is shown once. An ordered plan
         // (Set default) changes different fields per item, so every item's are shown.
@@ -1017,21 +1112,29 @@ impl ConfirmDialog {
         // The value of a path is `None` when it is not recorded, or in an ordered plan when the
         // key is removed (the beta default annotation).
         let is_ordered = matches!(&self.kind, DialogKind::Batch(batch) if batch.plan.on_failure == BatchFailure::Stop);
+        let is_batch = matches!(self.kind, DialogKind::Batch(_));
         let lines = requests
             .into_iter()
             .flat_map(|request| match request.operation() {
                 // The values edit lists the ConfigMap text before and after; the audit line never has it.
                 WriteOperation::SetDataValues(edit) => edit.confirm_lines(),
-                _ => request
-                    .changed_fields()
-                    .into_iter()
-                    .map(|field| match field.value {
-                        Some(value) if field.path == EVICTION_PATH => eviction_line(&value),
-                        Some(value) => format!("{} → {value}", field.path),
-                        None if is_ordered => format!("{} → removed", field.path),
-                        None => field.path.into_owned(),
-                    })
-                    .collect(),
+                _ => {
+                    let target = request.target();
+                    let source = (!is_batch).then(|| (target.kind_name(), target.name()));
+                    request
+                        .changed_fields()
+                        .into_iter()
+                        .map(|field| match field.value {
+                            Some(value) if field.path == EVICTION_PATH => eviction_line(&value),
+                            Some(value) if field.path == GENERATE_NAME_PATH => {
+                                created_job_line(&value, source)
+                            }
+                            Some(value) => format!("{} → {value}", field.path),
+                            None if is_ordered => format!("{} → removed", field.path),
+                            None => field.path.into_owned(),
+                        })
+                        .collect()
+                }
             })
             .map(|text| div().text_sm().font_family(mono.clone()).child(text));
         let warnings = warnings.iter().map(|warning| {
@@ -1434,6 +1537,23 @@ impl ConfirmDialog {
             .update(cx, |input, cx| input.set_value(text.to_owned(), window, cx));
     }
 
+    /// Types into the local port field of a forward confirm.
+    pub(crate) fn type_local_port(
+        &mut self,
+        text: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(input) = &self.local_port {
+            input.update(cx, |input, cx| input.set_value(text.to_owned(), window, cx));
+        }
+    }
+
+    /// The text under the local port field.
+    pub(crate) fn local_port_error(&self) -> Option<&'static str> {
+        self.local_port_error
+    }
+
     pub(crate) fn press_confirm(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.confirm(window, cx);
     }
@@ -1541,5 +1661,34 @@ mod connect_field_tests {
         assert_eq!(connect_field_label("local_port"), "Local port");
         // Any other field keeps the path the audit line records.
         assert_eq!(connect_field_label("container"), "container");
+    }
+}
+
+#[cfg(test)]
+mod created_job_line_tests {
+    use super::created_job_line;
+
+    #[test]
+    fn a_rerun_names_the_job_it_creates_and_the_job_it_copies() {
+        assert_eq!(
+            created_job_line("report-failed-rerun-", Some(("Job", "report-failed"))),
+            "Create Job report-failed-rerun-… from Job report-failed"
+        );
+    }
+
+    #[test]
+    fn a_trigger_names_the_cronjob_it_runs() {
+        assert_eq!(
+            created_job_line("heartbeat-manual-", Some(("CronJob", "heartbeat"))),
+            "Create Job heartbeat-manual-… from CronJob heartbeat"
+        );
+    }
+
+    #[test]
+    fn a_batch_has_no_single_source() {
+        assert_eq!(
+            created_job_line("a-rerun-", None),
+            "Create one Job from each row"
+        );
     }
 }
