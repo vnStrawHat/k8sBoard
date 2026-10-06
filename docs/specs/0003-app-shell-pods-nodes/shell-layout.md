@@ -26,7 +26,7 @@
 |---|---|---|
 | Logo text "k8sBoard" | `div` | |
 | Cluster switcher | `Button` (ghost) + `DropdownMenu` | label = active context, or "No cluster". One `menu_with_check` item per kubeconfig context (checked = active), then a separator, then "Manage clusters…" **disabled** (reason: "Settings window comes later") |
-| Namespace picker | `Button` + `DropdownMenu`, `.scrollable(true).max_h(px(360.))` | label `ns: all` or `ns: <name>`. Items: "All namespaces", then a separator, then the namespaces from `LiveList`. While loading, one disabled "Loading namespaces…". On failure: "All namespaces", a disabled error line, and the context default namespace. Selecting calls `session.set_scope` |
+| Namespace picker | `Button` + `DropdownMenu`, `.scrollable(true).max_h(px(360.))` | label `Namespace: all` or `Namespace: <name>` (UX batch 5c: worded like the filter bar chip). Items: "All namespaces", then a separator, then the namespaces from `LiveList`. While loading, one disabled "Loading namespaces…". On failure: "All namespaces", a disabled error line, and the context default namespace. Selecting calls `session.set_scope` |
 | Read-only lock | `Tag`/badge with a lock icon if `IconName` has one, else text | always shown: the app is read-only in this phase. Not clickable |
 | Settings | icon `Button`, disabled, tooltip "Settings window comes later" | |
 

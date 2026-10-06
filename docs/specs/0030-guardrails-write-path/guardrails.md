@@ -92,5 +92,5 @@ impl AppShell { pub(crate) fn guard_for(&self, cluster: &ClusterRef, cx: &App) -
 
 ## Badge and key
 
-- `title_bar.rs` `read_only_badge` becomes a ghost button: `Locked` → lock icon + `Read-only`; `Unlocked` → `IconName::LockOpen` + `Unlocked`. Border: 1 px dashed in `environment_color` (W1 `.lock`); without a session the badge is hidden. Click and `ToggleReadOnly` run `AppShell::toggle_write_lock`.
+- `title_bar.rs` `read_only_badge` becomes a ghost button: `Locked` → lock icon + `Read-only`; `Unlocked` → `IconName::LockOpen` + `Writable` (UX batch 5c: the word matches Settings; the tooltip reads `Read-only · click to unlock` or `Writes allowed on {cluster} · click to lock`, with the key hint added by the tooltip). Border: 1 px dashed in `environment_color` (W1 `.lock`); without a session the badge is hidden. Click and `ToggleReadOnly` run `AppShell::toggle_write_lock`.
 - 0028 `keymap.rs`: bind `secondary-shift-r` → `ToggleReadOnly` in `WINDOW`; drop it from `RESERVED_KEYS`; sheet row "Toggle read-only" (General). Tooltip via `tooltip_with_action`.

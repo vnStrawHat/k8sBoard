@@ -182,12 +182,13 @@ fn search_box(width: Pixels, cx: &Context<AppShell>) -> AnyElement {
         .into_any_element()
 }
 
-/// `ns: all`, `ns: kube-system`, or the shortened list of several: the title-bar label of a scope.
+/// `Namespace: all`, `Namespace: kube-system`, or the shortened list of several: the title-bar
+/// label of a scope, worded like the chip of the filter bar.
 pub(crate) fn scope_label(scope: &NamespaceScope) -> String {
     match scope {
-        NamespaceScope::All => "ns: all".to_owned(),
-        NamespaceScope::Named(namespace) => format!("ns: {namespace}"),
-        NamespaceScope::Several(names) => format!("ns: {}", namespaces_label(names)),
+        NamespaceScope::All => "Namespace: all".to_owned(),
+        NamespaceScope::Named(namespace) => format!("Namespace: {namespace}"),
+        NamespaceScope::Several(names) => format!("Namespace: {}", namespaces_label(names)),
     }
 }
 
@@ -223,7 +224,10 @@ impl TitleBarWidths {
 fn namespace_picker(shell: &AppShell, label_width: Pixels, cx: &Context<AppShell>) -> AnyElement {
     let trigger = Button::new("namespace-picker").ghost().small();
     let Some(live) = shell.live(cx) else {
-        return trigger.label("ns: —").disabled(true).into_any_element();
+        return trigger
+            .label("Namespace: —")
+            .disabled(true)
+            .into_any_element();
     };
     let label = scope_label(&live.scope);
     let trigger = trigger
@@ -236,16 +240,19 @@ fn namespace_picker(shell: &AppShell, label_width: Pixels, cx: &Context<AppShell
 fn badge_face(lock: WriteLock) -> (IconName, &'static str) {
     match lock {
         WriteLock::Locked => (IconName::Lock, "Read-only"),
-        WriteLock::Unlocked => (IconName::LockOpen, "Unlocked"),
+        WriteLock::Unlocked => (IconName::LockOpen, "Writable"),
     }
 }
 
-/// `{label}: Read-only` or `{label}: Unlocked`.
+/// What the badge says and what a click does; the key hint is added by the tooltip itself.
 fn badge_tooltip(label: &str, lock: WriteLock) -> String {
-    format!("{label}: {}", badge_face(lock).1)
+    match lock {
+        WriteLock::Locked => "Read-only · click to unlock".to_owned(),
+        WriteLock::Unlocked => format!("Writes allowed on {label} · click to lock"),
+    }
 }
 
-/// The lock of the open cluster: a lock and `Read-only`, or an open lock and `Unlocked`, with a
+/// The lock of the open cluster: a lock and `Read-only`, or an open lock and `Writable`, with a
 /// dashed border in its environment color. A click toggles it. Hidden without a session.
 fn write_lock_badge(shell: &AppShell, cx: &Context<AppShell>) -> Option<AnyElement> {
     let open = shell.active_session()?;
@@ -398,20 +405,21 @@ mod tests {
         assert_eq!(badge_face(WriteLock::Locked), (IconName::Lock, "Read-only"));
         assert_eq!(
             badge_face(WriteLock::Unlocked),
-            (IconName::LockOpen, "Unlocked")
+            (IconName::LockOpen, "Writable")
         );
     }
 
     #[test]
-    fn the_tooltip_names_the_cluster_and_its_state() {
+    fn the_tooltip_says_what_a_click_does() {
         assert_eq!(
             badge_tooltip("prod-a", WriteLock::Locked),
-            "prod-a: Read-only"
+            "Read-only · click to unlock"
         );
         assert_eq!(
             badge_tooltip("stg-b", WriteLock::Unlocked),
-            "stg-b: Unlocked"
+            "Writes allowed on stg-b · click to lock"
         );
+        assert_eq!(scope_label(&NamespaceScope::All), "Namespace: all");
     }
 
     #[test]
