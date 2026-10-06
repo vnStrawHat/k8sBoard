@@ -11,7 +11,7 @@ use std::path::PathBuf;
 use std::rc::Rc;
 use std::time::Duration;
 
-use cluster::{ClusterConnection, WriteError};
+use cluster::{ClusterConnection, NodeScheduling, WriteError};
 use gpui_kit::{
     AnyWindowHandle, AppContext as _, AsyncApp, Context, SharedString, WeakEntity, Window,
 };
@@ -55,6 +55,26 @@ impl AppShell {
     /// Whether a drain runs on `cluster` now: one at a time, so two runs never fight over a node.
     pub(crate) fn has_running_drain(&self, cluster: &ClusterRef, cx: &gpui_kit::App) -> bool {
         self.dock.read(cx).has_running_drain(cluster, cx)
+    }
+
+    /// Which of `nodes` the cluster reports schedulable now: what the drain tab reads to say a node
+    /// is uncordoned again. A cluster that is not open reports none.
+    pub(crate) fn schedulable_nodes(
+        &self,
+        cluster: &ClusterRef,
+        nodes: &[String],
+        cx: &gpui_kit::App,
+    ) -> Vec<String> {
+        let Some(live) = self.live_of(cluster, cx) else {
+            return Vec::new();
+        };
+        live.nodes
+            .items()
+            .iter()
+            .filter(|node| nodes.contains(&node.name))
+            .filter(|node| node.status.scheduling == NodeScheduling::Enabled)
+            .map(|node| node.name.clone())
+            .collect()
     }
 
     /// Why `action` may not start on `cluster` now, `None` when it may: a cordon, an uncordon, or a
@@ -135,7 +155,14 @@ impl AppShell {
             identity,
             note,
         };
-        let tab = cx.new(|_| DrainTab::new(inputs));
+        let session = self.session_of(&inputs.cluster).cloned();
+        let tab = cx.new(|cx| {
+            let mut tab = DrainTab::new(inputs);
+            if let Some(session) = &session {
+                tab.watch_nodes(session, cx);
+            }
+            tab
+        });
         self.dock
             .update(cx, |dock, cx| dock.open_drain(tab.clone(), cx));
         let runtime = cx.global::<ClusterRuntime>().clone();
@@ -158,7 +185,7 @@ impl AppShell {
         let running = self.dock.read(cx).running_drains_of(clusters, cx);
         for (tab, name) in running {
             let reason = format!("{name} is no longer open");
-            let (entries, notice) = stop_tab(&tab, &reason, cx);
+            let (entries, notice) = stop_tab(&tab, DrainStop::Released, &reason, cx);
             if let Some(dir) = AppSettings::config_dir(cx).map(std::path::Path::to_path_buf) {
                 cx.spawn(async move |this, cx| {
                     for entry in entries {
@@ -181,7 +208,7 @@ impl AppShell {
         for (tab, _) in running {
             // Read before the stop: the summary counts the request in the air as unknown.
             let in_flight = tab.read(cx).in_flight_entry();
-            let (mut entries, _) = stop_tab(&tab, "k8sBoard is closing", cx);
+            let (mut entries, _) = stop_tab(&tab, DrainStop::Quit, "k8sBoard is closing", cx);
             entries.extend(in_flight);
             let Some(dir) = &dir else {
                 continue;
@@ -421,15 +448,26 @@ impl AppShell {
     }
 }
 
+/// Why a run is stopped from outside: its cluster is released, or the app quits.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum DrainStop {
+    Released,
+    Quit,
+}
+
 /// Stops the run of `tab` and takes what it owes: the summary lines of the nodes reached and the
 /// notification, both once.
 fn stop_tab(
     tab: &gpui_kit::Entity<DrainTab>,
+    stop: DrainStop,
     reason: &str,
     cx: &mut Context<AppShell>,
 ) -> (Vec<AuditEntry>, Option<String>) {
     tab.update(cx, |tab, cx| {
-        tab.run_mut().stop(reason.to_owned());
+        match stop {
+            DrainStop::Released => tab.run_mut().stop(reason.to_owned()),
+            DrainStop::Quit => tab.run_mut().abandon(reason.to_owned()),
+        }
         let lines = tab.run_mut().take_summaries();
         let entries = summary_entries(tab, &lines);
         let notice = tab.run_mut().take_end_notice();

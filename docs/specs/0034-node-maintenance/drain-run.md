@@ -57,6 +57,10 @@ A `DryRun` step: success or 429 → the dry-run is recorded and the pod stays `P
 
 `on_poll`: an `Evicted`/`Awaited` pod whose uid is no longer present → `Gone`.
 
+## What the drain leaves cordoned (L4, L12)
+
+Every end line says which nodes stay cordoned: those this run cordoned and those that were cordoned before it (`· cordoned: wk-04 (was cordoned before this drain)`), also after a clean `Drained`. The `Uncordon` button offers exactly those nodes the cluster still reports cordoned: the tab watches the session's node list, so after an Uncordon from the tab or the table the header ends `· uncordoned` and the button goes.
+
 ## Cancel (exact semantics)
 
 - `Cancel` sets the flag; the driver checks it before every request, so **no new request** (eviction, dry-run, cordon, poll) is sent after the click.
@@ -65,7 +69,7 @@ A `DryRun` step: success or 429 → the dry-run is recorded and the pod stays `P
 - Every node cordoned in phase 1 **stays cordoned**; nothing is uncordoned automatically.
 - Pending and refused pods stay on their node; later nodes are not drained.
 - The tab shows `Cancelled · {k} of {n} evicted on wk-04 · cordoned: wk-04, wk-05` and an `Uncordon {m} nodes` button (a 0032 `Batch` with its own dialog).
-- Lock or session change mid-run behaves like Cancel, with the reason in the title (the next `checked_write` returns `Blocked`). A switch or slot release asks first through `leaving_work`, then stops the run and closes the tab (decision 45). App exit ends the run the same way (open item 3).
+- Lock or session change mid-run behaves like Cancel, with the reason in the title (the next `checked_write` returns `Blocked`). A switch or slot release asks first through `leaving_work`, then stops the run and closes the tab (decision 45). App exit ends the run the same way (open item 3), with the summary line `abandoned`.
 
 ## Replacements after the end (L1)
 
@@ -80,7 +84,7 @@ An evicted pod that vanishes is not necessarily placed again: a StatefulSet pod 
 
 - Every cordon and accepted or failed eviction commit writes its own line through `checked_write` (0030), with the dialog note.
 - **Not audited** (0030 decision 36): a commit refused with 429 (each retry would add a line; nothing changed), a `Blocked` result, dry-runs, polls.
-- **One summary line per node** when the node ends (S4, decision 39): action `Drain`, object the Node, fields `evicted`, `refused`, `failed`, `skipped` (counts as values), outcome `drained`, `stuck`, `cancelled`, or `stopped`, the dialog note. Written by the driver with the merged `append_audit` (an `AuditEntry` built by a `drain_summary_entry` helper in `audit_log.rs`; `AuditOutcome` gains `Drained`, `Stuck`, `Cancelled`, `Stopped` beside the merged `Applied`, `Failed`, `Unknown`), after the last commit of that node. Nodes never reached write no line.
+- **One summary line per node** when the node ends (S4, decision 39): action `Drain`, object the Node, fields `evicted`, `refused`, `failed`, `skipped` (counts as values), outcome `drained`, `stuck`, `cancelled`, `stopped`, or `abandoned` (the app quit: the line of the node the run was on, even before its pods were read), the dialog note. Written by the driver with the merged `append_audit` (an `AuditEntry` built by a `drain_summary_entry` helper in `audit_log.rs`; `AuditOutcome` gains `Drained`, `Stuck`, `Cancelled`, `Stopped` beside the merged `Applied`, `Failed`, `Unknown`), after the last commit of that node. Nodes never reached write no line.
 
 ## Driver (async)
 
@@ -109,5 +113,5 @@ loop {
 - Header: node list with state (`Waiting`, `Cordoning`, `Evicting 12/23`, `Drained`, `Stuck`, `Cancelled`); kit `Progress` (gone / to evict) for the current node; `Timeout in 3:12`.
 - Rows per pod: `{ns}/{name}` mono + state text: `Waiting`, `Evicting…`, `Refused by PDB: {message} · retry in 8 s (attempt 3)`, `Terminating`, `Gone`, `recreated · Pending: {reason}`, `Failed: {error}`, `Skipped: {reason}`. Bad and warn rows first.
 - After the end (any end) open pods stop reading as live work: `Waiting` → `Not evicted`, `Evicting…` → `Eviction sent, still on node` (`Delete sent, still on node` under Skip PDBs), a refusal → `Blocked by PDB {name}` (the name read from the API message). A stuck header appends the blocking budgets: `Stuck on wk-04: Timed out after 20 min: 11 pods left · blocked by api-pdb`; each name is a link that reveals that PodDisruptionBudget in the pod's namespace.
-- Buttons: `Cancel` (danger outline) while running; after a stuck, failed, or stopped end `Drain again…` (reopens the Drain dialog on the nodes left undrained), then `Uncordon {m} nodes` and `Close`. The tab's ✕ and Ctrl W are disabled while running (`Cancel the drain first`).
+- Buttons: `Cancel` (danger outline) while running; after a stuck, failed, or stopped end `Drain again…` (reopens the Drain dialog on the nodes left undrained, with the timeout, grace period, and toggles of the drain it repeats; Skip PodDisruptionBudgets is never carried over), then `Uncordon {m} node(s)` and `Close`. The tab's ✕ and Ctrl W are disabled while running (`Cancel the drain first`).
 - Ends with a notification: `Drain: wk-04 drained`, `Drain stopped: wk-05 stuck ({reason})`, or `Drain cancelled`.

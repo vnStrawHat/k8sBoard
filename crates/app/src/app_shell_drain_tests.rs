@@ -17,7 +17,9 @@ use super::drain_dialog::DrainDialog;
 use super::write_flow::DryRunState;
 use super::*;
 use crate::app_shell::node_editor::NodeEditKind;
-use crate::drain_plan::{Budget, DrainOption, PodCheck, PodVerdict, PreviewLine};
+use crate::drain_plan::{
+    Budget, BudgetPolicy, DrainOption, DrainOptions, PodCheck, PodVerdict, PreviewLine,
+};
 use crate::drain_tab::DrainTab;
 use crate::environment::Environment;
 use crate::status_tone::StatusTone;
@@ -1003,7 +1005,7 @@ fn a_drain_cordons_evicts_waits_and_ends_drained(cx: &mut TestAppContext) {
     t.wait_for_end(&tab, cx);
     tab.read_with(cx, |tab, _| {
         assert!(tab.run().is_drained());
-        assert_eq!(tab.run().cordoned(), ["node-b".to_owned()]);
+        assert_eq!(tab.run().cordoned_nodes(&[]), ["node-b".to_owned()]);
         assert_eq!(
             tab.run().end_notice().as_deref(),
             Some("Drain: node-b drained")
@@ -1109,7 +1111,7 @@ fn refusals_are_not_audited_and_cancel_keeps_the_node_cordoned(cx: &mut TestAppC
             && request.body.contains("false"))
     }));
     tab.read_with(cx, |tab, _| {
-        assert_eq!(tab.run().cordoned(), ["node-b".to_owned()]);
+        assert_eq!(tab.run().cordoned_nodes(&[]), ["node-b".to_owned()]);
         assert_eq!(tab.run().end_notice().as_deref(), Some("Drain cancelled"));
     });
     // The audit has the cordon, the accepted eviction, and the cancelled summary: the 429 left no
@@ -1274,7 +1276,7 @@ fn a_multi_node_drain_cordons_every_node_first(cx: &mut TestAppContext) {
         .expect("an eviction");
     assert_eq!(first_eviction, 2, "{order:?}");
     tab.read_with(cx, |tab, _| {
-        assert_eq!(tab.run().cordoned().len(), 2);
+        assert_eq!(tab.run().cordoned_nodes(&[]).len(), 2);
         assert_eq!(tab.label(), "Drain 2 nodes");
     });
 }
@@ -1392,7 +1394,7 @@ fn quit_stops_a_drain_of_a_cluster_just_left(cx: &mut TestAppContext) {
     assert!(!tab.read_with(cx, |tab, _| tab.is_running()));
     let summaries = audit_lines(&dir)
         .into_iter()
-        .filter(|line| line["action"] == "Drain" && line["outcome"] == "stopped")
+        .filter(|line| line["action"] == "Drain" && line["outcome"] == "abandoned")
         .count();
     assert_eq!(summaries, 1);
 }
@@ -1410,7 +1412,7 @@ fn the_uncordon_button_offers_a_batch_over_the_cordoned_nodes(cx: &mut TestAppCo
     );
     let (stg, cordoned) = (
         t.t.stg.clone(),
-        tab.read_with(cx, |tab, _| tab.run().cordoned().to_vec()),
+        tab.read_with(cx, |tab, _| tab.run().cordoned_nodes(&[])),
     );
     t.t.fixture.with_window(cx, |window, cx| {
         t.t.fixture.shell.update(cx, |shell, cx| {
@@ -1603,7 +1605,7 @@ fn quitting_mid_eviction_writes_an_unknown_line_and_counts_it(cx: &mut TestAppCo
         .iter()
         .find(|line| line["action"] == "Drain")
         .expect("the stopped summary");
-    assert_eq!(summary["outcome"], "stopped");
+    assert_eq!(summary["outcome"], "abandoned");
     assert!(
         summary["fields"]
             .as_array()
@@ -2139,11 +2141,11 @@ fn an_evicted_pod_recreated_pending_is_not_reported_gone(cx: &mut TestAppContext
         assert!(texts.contains(&("payments/api-2", "Gone")), "{texts:?}");
         assert_eq!(
             tab.run().status_text(tab.now()),
-            "Drained · 1 pending replacement"
+            "Drained · 1 pending replacement · cordoned: node-b"
         );
         assert_eq!(tab.tone(), StatusTone::Warn);
         // The node is still cordoned, and the Uncordon button is still offered for it.
-        assert_eq!(tab.run().cordoned(), ["node-b".to_owned()]);
+        assert_eq!(tab.run().cordoned_nodes(&[]), ["node-b".to_owned()]);
     });
     assert!(!pending_requests(&t.t.stg_api).is_empty());
 }
@@ -2160,4 +2162,86 @@ fn a_drain_with_no_pending_replacement_still_ends_drained(cx: &mut TestAppContex
         assert_eq!(tab.run().pending_replacements(), 0);
         assert_eq!(tab.tone(), StatusTone::Ok);
     });
+}
+
+// ---- What the drain leaves cordoned, and Drain again ----
+
+#[gpui_kit::test]
+fn a_drain_of_a_cordoned_node_offers_its_uncordon_until_the_node_is_schedulable(
+    cx: &mut TestAppContext,
+) {
+    let t = drain_test("drain-was-cordoned", three_pods, cx);
+    t.set_nodes(
+        &t.t.stg,
+        vec![summary("node-b", NodeScheduling::Disabled)],
+        cx,
+    );
+    let tab = t.start(cx);
+    t.wait_for_end(&tab, cx);
+    let stg = t.t.stg.clone();
+    let schedulable = |t: &DrainTest, cx: &mut TestAppContext| {
+        t.t.fixture.shell.read_with(cx, |shell, cx| {
+            shell.schedulable_nodes(&stg, &["node-b".to_owned()], cx)
+        })
+    };
+    tab.read_with(cx, |tab, _| {
+        // The run cordoned nothing, and still leaves the node cordoned.
+        assert_eq!(tab.run().cordoned_nodes(&[]), ["node-b".to_owned()]);
+        let status = tab.run().status_text(tab.now());
+        assert!(
+            status.ends_with(" · cordoned: node-b (was cordoned before this drain)"),
+            "{status}"
+        );
+    });
+    assert!(schedulable(&t, cx).is_empty());
+    // The cluster reports it schedulable (an Uncordon from the tab or the table): the tab says so.
+    t.set_nodes(
+        &t.t.stg,
+        vec![summary("node-b", NodeScheduling::Enabled)],
+        cx,
+    );
+    let uncordoned = schedulable(&t, cx);
+    assert_eq!(uncordoned, ["node-b".to_owned()]);
+    tab.read_with(cx, |tab, _| {
+        assert!(tab.run().cordoned_nodes(&uncordoned).is_empty());
+        let line = tab.run().status_line(tab.now(), &uncordoned);
+        let text = format!("{}{}", line.lead, line.tail);
+        assert!(text.ends_with(" · uncordoned"), "{text}");
+    });
+}
+
+#[gpui_kit::test]
+fn drain_again_opens_on_the_options_of_the_drain_it_repeats(cx: &mut TestAppContext) {
+    let t = drain_test("drain-again-options", three_pods, cx);
+    let previous = DrainOptions {
+        ignore_daemon_sets: false,
+        delete_empty_dir: true,
+        force_unmanaged: true,
+        grace: cluster::GracePeriod::Seconds(30),
+        timeout: Duration::from_secs(10 * 60),
+        // Never remembered: skipping the budgets starts off on every open.
+        budgets: BudgetPolicy::Skip,
+    };
+    let stg = t.t.stg.clone();
+    t.t.fixture.with_window(cx, |window, cx| {
+        t.t.fixture.shell.update(cx, |shell, cx| {
+            shell.start_drain_with(&stg, &["node-b".to_owned()], previous, window, cx);
+        });
+    });
+    let dialog = t.dialog(cx).expect("a drain dialog");
+    dialog.read_with(cx, |dialog, _| {
+        assert_eq!(
+            dialog.options(),
+            DrainOptions {
+                budgets: BudgetPolicy::Respect,
+                ..previous
+            }
+        );
+    });
+    // The selects show them too, so the next change starts from what the user sees.
+    t.settle(&dialog, cx);
+    assert_eq!(
+        dialog.read_with(cx, |dialog, cx| dialog.shown_choices(cx)),
+        ("30 s".to_owned(), "10m".to_owned())
+    );
 }

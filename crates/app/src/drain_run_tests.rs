@@ -284,7 +284,7 @@ fn cancel_sends_nothing_more() {
     }
     assert!(!run.is_running());
     // Nothing was uncordoned: the node a cordoned stays in the list the tab offers.
-    assert_eq!(run.cordoned(), ["a".to_owned()]);
+    assert_eq!(run.cordoned_nodes(&[]), ["a".to_owned()]);
     assert_eq!(run.end(), Some(&RunEnd::Cancelled));
 }
 
@@ -327,7 +327,7 @@ fn multi_node_cordons_all_first() {
     run.on_write(&NextStep::Cordon("b".to_owned()), ok(), secs(0));
     // Only then does the first node start, so evicted pods never land on the next node.
     assert_eq!(run.next_step(secs(0)), NextStep::Read("a".to_owned()));
-    assert_eq!(run.cordoned(), ["a".to_owned(), "b".to_owned()]);
+    assert_eq!(run.cordoned_nodes(&[]), ["a".to_owned(), "b".to_owned()]);
 }
 
 #[test]
@@ -353,7 +353,7 @@ fn cordon_failure_stops_the_run() {
         other => panic!("expected a stopped run, got {other:?}"),
     }
     // a stays cordoned; nothing is evicted.
-    assert_eq!(run.cordoned(), ["a".to_owned()]);
+    assert_eq!(run.cordoned_nodes(&[]), ["a".to_owned()]);
     assert_eq!(run.next_step(secs(1)), NextStep::Finished);
     assert!(run.take_summaries().is_empty(), "no node was reached");
 }
@@ -627,11 +627,14 @@ fn the_status_line_reports_stuck_and_stopped_runs() {
     stopped.stop("prod-a was locked; nothing was changed; drain stopped");
     assert_eq!(
         stopped.status_text(secs(1)),
-        "Stopped: prod-a was locked; nothing was changed; drain stopped"
+        "Stopped: prod-a was locked; nothing was changed; drain stopped · cordoned: wk-04 (was cordoned before this drain)"
     );
     let (mut done, _) = run_over(&[]);
     done.on_node_done(NodeOutcome::Drained);
-    assert_eq!(done.status_text(secs(1)), "Drained");
+    assert_eq!(
+        done.status_text(secs(1)),
+        "Drained · cordoned: wk-04 (was cordoned before this drain)"
+    );
 }
 
 #[test]
@@ -829,7 +832,7 @@ fn the_stuck_header_names_the_blocking_budgets() {
         panic!("the node timed out");
     };
     run.on_node_done(outcome);
-    let line = run.status_line(secs(300));
+    let line = run.status_line(secs(300), &[]);
     assert_eq!(
         line.blockers,
         [
@@ -845,7 +848,7 @@ fn the_stuck_header_names_the_blocking_budgets() {
     );
     assert_eq!(
         run.status_text(secs(300)),
-        "Stuck on wk-04: Timed out after 5m: 3 pods left · blocked by api-pdb, web-pdb"
+        "Stuck on wk-04: Timed out after 5m: 3 pods left · blocked by api-pdb, web-pdb · cordoned: wk-04 (was cordoned before this drain)"
     );
 }
 
@@ -859,7 +862,7 @@ fn a_stuck_header_without_a_known_budget_has_no_blocker_part() {
     run.on_node_done(outcome);
     assert_eq!(
         run.status_text(secs(300)),
-        "Stuck on wk-04: Timed out after 5m: 1 pod left"
+        "Stuck on wk-04: Timed out after 5m: 1 pod left · cordoned: wk-04 (was cordoned before this drain)"
     );
 }
 
@@ -877,6 +880,9 @@ fn replacement(name: &str, reason: Option<&str>) -> PendingPod {
         reason: reason.map(str::to_owned),
     }
 }
+
+/// What a header says of the node `run_over` starts with, which was cordoned already.
+const EARLIER: &str = " · cordoned: wk-04 (was cordoned before this drain)";
 
 const NO_NODE_FITS: &str = "0/3 nodes are available: 1 node(s) had volume node affinity conflict";
 
@@ -904,7 +910,10 @@ fn a_pending_replacement_reads_recreated_instead_of_gone() {
     );
     assert_eq!(rows[0].tone, StatusTone::Warn);
     assert_eq!(run.pending_replacements(), 1);
-    assert_eq!(run.status_text(secs(5)), "Drained · 1 pending replacement");
+    assert_eq!(
+        run.status_text(secs(5)),
+        format!("Drained · 1 pending replacement{EARLIER}")
+    );
 }
 
 #[test]
@@ -956,7 +965,10 @@ fn one_pending_replacement_belongs_to_one_evicted_pod() {
         Ok(vec![replacement("api-8", None), replacement("api-9", None)]),
         secs(8),
     );
-    assert_eq!(run.status_text(secs(8)), "Drained · 2 pending replacements");
+    assert_eq!(
+        run.status_text(secs(8)),
+        format!("Drained · 2 pending replacements{EARLIER}")
+    );
 }
 
 #[test]
@@ -966,11 +978,14 @@ fn following_polls_until_a_quiet_spell_or_the_window_ends() {
     run.on_follow(Ok(Vec::new()), secs(4));
     assert_eq!(run.next_follow(secs(5)), FollowStep::Sleep(secs(2)));
     assert_eq!(run.next_follow(secs(7)), FollowStep::Poll);
-    assert_eq!(run.status_text(secs(5)), "Drained · checking replacements");
+    assert_eq!(
+        run.status_text(secs(5)),
+        format!("Drained · checking replacements{EARLIER}")
+    );
     // Nothing Pending for 15 s: nothing to wait for.
     run.on_follow(Ok(Vec::new()), secs(18));
     assert_eq!(run.next_follow(secs(19)), FollowStep::Done);
-    assert_eq!(run.status_text(secs(19)), "Drained");
+    assert_eq!(run.status_text(secs(19)), format!("Drained{EARLIER}"));
     assert!(run.follow_notice().is_none());
 }
 
@@ -982,7 +997,10 @@ fn a_pending_replacement_keeps_the_look_going_to_the_end_of_the_window() {
     assert_eq!(run.next_follow(secs(63)), FollowStep::Poll);
     assert_eq!(run.next_follow(secs(64)), FollowStep::Done);
     // After the window the line keeps the count, without the word `checking`.
-    assert_eq!(run.status_text(secs(70)), "Drained · 1 pending replacement");
+    assert_eq!(
+        run.status_text(secs(70)),
+        format!("Drained · 1 pending replacement{EARLIER}")
+    );
 }
 
 #[test]
@@ -1019,4 +1037,85 @@ fn progress_of_ended(run: &DrainRun, name: &str) -> PodProgress {
         .find(|pod| pod.key.name == name)
         .map(|pod| pod.progress.clone())
         .expect("the pod is in the run")
+}
+
+// ---- What the drain leaves cordoned ----
+
+#[test]
+fn a_node_cordoned_before_the_drain_is_left_cordoned_and_offered_for_uncordon() {
+    let (mut run, _) = run_over(&[]);
+    run.on_node_done(NodeOutcome::Drained);
+    assert_eq!(run.cordoned_nodes(&[]), ["wk-04".to_owned()]);
+    assert_eq!(
+        run.status_text(secs(1)),
+        "Drained · cordoned: wk-04 (was cordoned before this drain)"
+    );
+}
+
+#[test]
+fn a_node_schedulable_again_leaves_the_header_and_the_button() {
+    let (mut run, _) = run_over(&[]);
+    run.on_node_done(NodeOutcome::Drained);
+    let uncordoned = ["wk-04".to_owned()];
+    assert!(run.cordoned_nodes(&uncordoned).is_empty());
+    assert_eq!(
+        run.status_line(secs(1), &uncordoned).text(),
+        "Drained · uncordoned"
+    );
+}
+
+#[test]
+fn only_one_of_several_nodes_uncordoned_keeps_the_others_listed() {
+    let mut run = DrainRun::new(input(&["a", "b", "c"], &["b", "c"]));
+    for node in ["b", "c"] {
+        run.on_write(&NextStep::Cordon(node.to_owned()), ok(), secs(0));
+    }
+    assert_eq!(
+        run.cordoned_nodes(&[]),
+        ["a".to_owned(), "b".to_owned(), "c".to_owned()]
+    );
+    run.stop("done");
+    assert_eq!(
+        run.status_line(secs(1), &["b".to_owned()]).text(),
+        "Stopped: done · cordoned: a, c (a was cordoned before this drain)"
+    );
+}
+
+#[test]
+fn a_run_that_never_cordoned_anything_says_nothing_of_cordons() {
+    let mut run = DrainRun::new(input(&[], &[]));
+    run.stop("nothing to do");
+    assert_eq!(run.status_text(secs(1)), "Stopped: nothing to do");
+}
+
+// ---- A quit abandons the run ----
+
+#[test]
+fn a_quit_leaves_an_abandoned_summary_where_a_stop_leaves_a_stopped_one() {
+    let (mut stopped, _) = run_over(&["api-1"]);
+    stopped.stop("prod-a is no longer open");
+    let (mut abandoned, _) = run_over(&["api-1"]);
+    abandoned.abandon("k8sBoard is closing");
+    let outcome_of = |run: &mut DrainRun| {
+        let lines = run.take_summaries();
+        let [line] = lines.as_slice() else {
+            panic!("one line for the node the run was on");
+        };
+        line.outcome.clone()
+    };
+    assert_eq!(outcome_of(&mut stopped), SummaryOutcome::Stopped);
+    assert_eq!(outcome_of(&mut abandoned), SummaryOutcome::Abandoned);
+}
+
+#[test]
+fn a_quit_while_cordoning_still_leaves_a_line_for_the_node_it_was_on() {
+    let mut run = DrainRun::new(input(&["a", "b"], &["a", "b"]));
+    run.abandon("k8sBoard is closing");
+    let lines = run.take_summaries();
+    let names: Vec<(&str, &SummaryOutcome)> = lines
+        .iter()
+        .map(|line| (line.node.as_str(), &line.outcome))
+        .collect();
+    // Nodes the run never reached have no line, as for any other end.
+    assert_eq!(names, [("a", &SummaryOutcome::Abandoned)]);
 }

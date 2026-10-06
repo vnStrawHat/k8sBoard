@@ -462,6 +462,7 @@ fn every_drain_outcome_has_its_own_word() {
         (SummaryOutcome::Stuck, "stuck"),
         (SummaryOutcome::Cancelled, "cancelled"),
         (SummaryOutcome::Stopped, "stopped"),
+        (SummaryOutcome::Abandoned, "abandoned"),
     ] {
         let entry = drain_summary_entry(&identity, &summary(outcome), BudgetPolicy::Respect, None);
         let value = serde_json::to_value(&entry).expect("serializes");

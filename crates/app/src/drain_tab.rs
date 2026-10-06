@@ -8,8 +8,9 @@ use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::progress::Progress;
 use gpui_kit::component::{ActiveTheme as _, Sizable as _, h_flex, v_flex};
 use gpui_kit::{
-    Context, InteractiveElement as _, IntoElement, ParentElement as _, Render, SharedString,
-    StatefulInteractiveElement as _, Styled as _, WeakEntity, Window, div, px,
+    App, Context, Entity, InteractiveElement as _, IntoElement, ParentElement as _, Render,
+    SharedString, StatefulInteractiveElement as _, Styled as _, Subscription, WeakEntity, Window,
+    div, px,
 };
 
 use crate::app_shell::AppShell;
@@ -30,6 +31,9 @@ pub(crate) struct DrainTab {
     identity: AuditIdentity,
     /// The dialog's note, written on every summary line.
     note: Option<String>,
+    /// Redraws the tab when the cluster's nodes change, so a node uncordoned from here or from
+    /// the Nodes table reads as such.
+    _nodes_watch: Option<Subscription>,
     started: Instant,
     /// A screenshot fixture pretends the run is this old; a real run has none.
     age: Duration,
@@ -57,11 +61,17 @@ impl DrainTab {
             run: inputs.run,
             identity: inputs.identity,
             note: inputs.note,
+            _nodes_watch: None,
             started: Instant::now(),
             age: Duration::ZERO,
             #[cfg(feature = "screenshot")]
             is_frozen: false,
         }
+    }
+
+    /// Redraws the tab whenever `session` changes: its node list says which nodes are cordoned.
+    pub(crate) fn watch_nodes<T: 'static>(&mut self, session: &Entity<T>, cx: &mut Context<Self>) {
+        self._nodes_watch = Some(cx.observe(session, |_, _, cx| cx.notify()));
     }
 
     /// A tab for `--screen drain-progress`: the run is `age` old and its clock stands still.
@@ -252,6 +262,19 @@ impl DrainTab {
         )
     }
 
+    /// The nodes of this drain the cluster reports schedulable now.
+    fn uncordoned(&self, cx: &App) -> Vec<String> {
+        let candidates = self.run.cordoned_nodes(&[]);
+        self.shell
+            .upgrade()
+            .map(|shell| {
+                shell
+                    .read(cx)
+                    .schedulable_nodes(&self.cluster, &candidates, cx)
+            })
+            .unwrap_or_default()
+    }
+
     fn render_buttons(&self, cx: &mut Context<Self>) -> impl IntoElement {
         if self.is_running() {
             return h_flex().gap_2().child(
@@ -263,14 +286,11 @@ impl DrainTab {
                     .on_click(cx.listener(|tab, _, _, cx| tab.cancel(cx))),
             );
         }
-        let cordoned = self.run.cordoned().len();
-        let (shell, cluster, nodes) = (
-            self.shell.clone(),
-            self.cluster.clone(),
-            self.run.cordoned().to_vec(),
-        );
-        let uncordon = (cordoned > 0).then(|| {
-            let label = match cordoned {
+        // The nodes the cluster still reports cordoned: once they are schedulable the button goes.
+        let nodes = self.run.cordoned_nodes(&self.uncordoned(cx));
+        let (shell, cluster) = (self.shell.clone(), self.cluster.clone());
+        let uncordon = (!nodes.is_empty()).then(|| {
+            let label = match nodes.len() {
                 1 => "Uncordon 1 node".to_owned(),
                 count => format!("Uncordon {count} nodes"),
             };
@@ -286,6 +306,7 @@ impl DrainTab {
                 })
         });
         let again_nodes = self.nodes_to_drain_again();
+        let options = *self.run.options();
         let again = (!again_nodes.is_empty()).then(|| {
             let (shell, cluster) = (self.shell.clone(), self.cluster.clone());
             Button::new("drain-tab-again")
@@ -294,7 +315,7 @@ impl DrainTab {
                 .outline()
                 .on_click(move |_, window, cx| {
                     let _ = shell.update(cx, |shell, cx| {
-                        shell.start_drain(&cluster, &again_nodes, window, cx);
+                        shell.start_drain_with(&cluster, &again_nodes, options, window, cx);
                     });
                 })
         });
@@ -361,7 +382,12 @@ impl Render for DrainTab {
                         v_flex()
                             .gap_1()
                             .min_w_0()
-                            .child(self.render_status(self.run.status_line(now), cx))
+                            .child(
+                                self.render_status(
+                                    self.run.status_line(now, &self.uncordoned(cx)),
+                                    cx,
+                                ),
+                            )
                             .child(self.render_nodes(cx)),
                     )
                     .child(self.render_buttons(cx)),

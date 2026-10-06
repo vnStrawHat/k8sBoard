@@ -74,7 +74,8 @@ pub(crate) enum AuditOutcome {
     /// A commit whose request may have left the client before it failed.
     Unknown,
     /// A session start that was closed or replaced before it reported: its request may have
-    /// reached the server.
+    /// reached the server; or the summary line of the node a drain was working on when the app
+    /// quit.
     Abandoned,
     /// The summary line of a node that was drained (spec 0034).
     Drained,
@@ -261,6 +262,7 @@ pub(crate) fn drain_summary_entry(
             SummaryOutcome::Stuck => AuditOutcome::Stuck,
             SummaryOutcome::Cancelled => AuditOutcome::Cancelled,
             SummaryOutcome::Stopped => AuditOutcome::Stopped,
+            SummaryOutcome::Abandoned => AuditOutcome::Abandoned,
         },
         error: summary.reason.as_ref().map(ToString::to_string),
         note: note.and_then(clean_note),

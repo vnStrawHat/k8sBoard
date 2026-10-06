@@ -196,6 +196,9 @@ struct DrainTarget {
     preview_reason: Option<SharedString>,
     /// The nodes in the order they were ticked, each with whether it is cordoned already.
     nodes: Vec<(String, bool)>,
+    /// What the dialog opens with: the defaults, or the options of the drain it repeats. The budget
+    /// policy is never carried over (spec 0040).
+    options: DrainOptions,
 }
 
 fn select_of(
@@ -221,11 +224,18 @@ impl DrainDialog {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let options = DrainOptions::default();
+        let options = DrainOptions {
+            budgets: BudgetPolicy::Respect,
+            ..target.options
+        };
         let typed = cx.new(|cx| InputState::new(window, cx).placeholder("Type here"));
         let note = cx.new(|cx| InputState::new(window, cx).placeholder("Note"));
         let grace_items: Vec<String> = grace_choices().into_iter().map(grace_text).collect();
-        let grace = select_of(grace_items, 0, window, cx);
+        let grace_index = grace_choices()
+            .iter()
+            .position(|choice| *choice == options.grace)
+            .unwrap_or(0);
+        let grace = select_of(grace_items, grace_index, window, cx);
         let timeout_index = TIMEOUT_CHOICES
             .iter()
             .position(|choice| *choice == options.timeout)
@@ -1510,6 +1520,19 @@ impl AppShell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.start_drain_with(cluster, nodes, DrainOptions::default(), window, cx);
+    }
+
+    /// `start_drain` with the options the dialog opens on: `Drain again…` repeats those of the drain
+    /// that ended short, so a timeout the user chose is not reset to 5 minutes.
+    pub(crate) fn start_drain_with(
+        &mut self,
+        cluster: &ClusterRef,
+        nodes: &[String],
+        options: DrainOptions,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let label = action_label(ResourceAction::Drain);
         let (target, connection) = {
             let (Some(guard), Some(live)) =
@@ -1569,6 +1592,7 @@ impl AppShell {
                 confirm: confirm_step(guard.profile.confirm, ActionRisk::Destructive, expected),
                 preview_reason,
                 nodes: listed,
+                options,
             };
             (target, live.connection().clone())
         };
@@ -1698,6 +1722,7 @@ impl AppShell {
             confirm: confirm_step(ConfirmMode::for_tier(tier), ActionRisk::Destructive, NODE),
             preview_reason: None,
             nodes: vec![(NODE.to_owned(), false)],
+            options: DrainOptions::default(),
         };
         let shell = cx.weak_entity();
         let dialog = cx.new(|cx| {
@@ -1881,6 +1906,20 @@ impl DrainDialog {
             self.live_tier(DrainButton::Drain, cx),
             self.live_tier(DrainButton::CordonOnly, cx),
         )
+    }
+
+    /// The grace and the timeout the two selects show.
+    pub(crate) fn shown_choices(&self, cx: &App) -> (String, String) {
+        let row = |select: &Entity<SelectState<Vec<String>>>| {
+            select.read(cx).selected_index(cx).map(|index| index.row)
+        };
+        let grace = row(&self.grace)
+            .and_then(|row| grace_choices().into_iter().nth(row))
+            .map(grace_text);
+        let timeout = row(&self.timeout)
+            .and_then(|row| TIMEOUT_CHOICES.get(row).copied())
+            .map(timeout_text);
+        (grace.unwrap_or_default(), timeout.unwrap_or_default())
     }
 
     pub(crate) fn recorded_elapsed(&self) -> Duration {

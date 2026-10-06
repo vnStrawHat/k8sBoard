@@ -157,6 +157,11 @@ pub(crate) struct DrainRun {
     to_cordon: Vec<String>,
     /// Cordoned by this run, in order: what the Uncordon button offers.
     cordoned: Vec<String>,
+    /// Cordoned before the run began: the drain leaves them cordoned too, and says so.
+    was_cordoned: Vec<String>,
+    /// The run was cut by the app quitting, not by a lock or a switch: its summary line reads
+    /// `abandoned`.
+    is_abandoned: bool,
     current: usize,
     /// Run-relative start of the current node; the per-node timeout counts from it.
     node_started: Duration,
@@ -195,10 +200,18 @@ pub(crate) enum SummaryOutcome {
     Stuck,
     Cancelled,
     Stopped,
+    /// Cut by the app quitting.
+    Abandoned,
 }
 
 impl DrainRun {
     pub(crate) fn new(input: RunInput) -> Self {
+        let was_cordoned = input
+            .nodes
+            .iter()
+            .filter(|node| !input.to_cordon.contains(node))
+            .cloned()
+            .collect();
         Self {
             nodes: input
                 .nodes
@@ -214,6 +227,8 @@ impl DrainRun {
             options: input.options,
             to_cordon: input.to_cordon,
             cordoned: Vec::new(),
+            was_cordoned,
+            is_abandoned: false,
             current: 0,
             node_started: Duration::ZERO,
             last_poll: None,
@@ -257,9 +272,47 @@ impl DrainRun {
                 .all(|node| node.end == Some(NodeEnd::Drained))
     }
 
-    /// The nodes this run cordoned, in order. They stay cordoned whatever happens.
-    pub(crate) fn cordoned(&self) -> &[String] {
-        &self.cordoned
+    /// The nodes the drain leaves cordoned, in drain order: cordoned by this run or before it, and
+    /// not schedulable again since (`uncordoned`, what the cluster reports). What the Uncordon button
+    /// offers.
+    pub(crate) fn cordoned_nodes(&self, uncordoned: &[String]) -> Vec<String> {
+        self.nodes
+            .iter()
+            .map(|node| &node.name)
+            .filter(|name| self.cordoned.contains(name) || self.was_cordoned.contains(name))
+            .filter(|name| !uncordoned.contains(name))
+            .cloned()
+            .collect()
+    }
+
+    /// ` · cordoned: a, b`, with a note for a node that was cordoned before the drain, or ` ·
+    /// uncordoned` once every node of the drain is schedulable again; empty when it never cordoned.
+    fn cordoned_text(&self, uncordoned: &[String]) -> String {
+        let nodes = self.cordoned_nodes(uncordoned);
+        if nodes.is_empty() {
+            let had_any = !self.cordoned.is_empty() || !self.was_cordoned.is_empty();
+            return if had_any {
+                " · uncordoned".to_owned()
+            } else {
+                String::new()
+            };
+        }
+        let earlier: Vec<&String> = nodes
+            .iter()
+            .filter(|node| self.was_cordoned.contains(node))
+            .collect();
+        let note = match earlier.as_slice() {
+            [] => String::new(),
+            earlier if earlier.len() == nodes.len() => {
+                " (was cordoned before this drain)".to_owned()
+            }
+            [only] => format!(" ({only} was cordoned before this drain)"),
+            several => {
+                let names: Vec<&str> = several.iter().map(|node| node.as_str()).collect();
+                format!(" ({} were cordoned before this drain)", names.join(", "))
+            }
+        };
+        format!(" · cordoned: {}{note}", nodes.join(", "))
     }
 
     pub(crate) fn poll_error(&self) -> Option<&SharedString> {
@@ -652,6 +705,13 @@ impl DrainRun {
         self.end.get_or_insert(RunEnd::Stopped(reason.into()));
     }
 
+    /// The app quits while the run goes on: like `stop`, and the summary line of the node it was on
+    /// reads `abandoned`, because what happens to its pods now is not this app's to say.
+    pub(crate) fn abandon(&mut self, reason: impl Into<SharedString>) {
+        self.is_abandoned = true;
+        self.stop(reason);
+    }
+
     /// The audit lines of the nodes that were reached and have none yet: each node ended
     /// (`drained`, `stuck`), or the run ended while it was current (`cancelled`, `stopped`). A node
     /// never reached has no line.
@@ -661,7 +721,9 @@ impl DrainRun {
         let current = self.current;
         let mut lines = Vec::new();
         for (index, node) in self.nodes.iter_mut().enumerate() {
-            if node.is_summarized || !node.is_read {
+            // An abandoned run leaves a line for the node it was on even before its pods were read.
+            let is_abandoned_here = self.is_abandoned && index == current;
+            if node.is_summarized || (!node.is_read && !is_abandoned_here) {
                 continue;
             }
             let outcome = match (&node.end, &run_end) {
@@ -669,6 +731,7 @@ impl DrainRun {
                 (Some(NodeEnd::Stuck(_)), _) => SummaryOutcome::Stuck,
                 // The node the run was on when it ended.
                 (None, Some(RunEnd::Cancelled)) if index == current => SummaryOutcome::Cancelled,
+                (None, Some(RunEnd::Stopped(_))) if is_abandoned_here => SummaryOutcome::Abandoned,
                 (None, Some(RunEnd::Stopped(_))) if index == current => SummaryOutcome::Stopped,
                 (None, _) => continue,
             };
@@ -921,7 +984,7 @@ impl DrainRun {
     /// `status_line` as one string.
     #[cfg(test)]
     pub(crate) fn status_text(&self, now: Duration) -> String {
-        self.status_line(now).text()
+        self.status_line(now, &[]).text()
     }
 
     /// The budgets that refused the open pods of the node the run is stuck on, in the order the
@@ -947,14 +1010,8 @@ impl DrainRun {
     }
 
     /// The header line of the tab: what the run is doing, or how it ended.
-    pub(crate) fn status_line(&self, now: Duration) -> StatusLine {
-        let cordoned = || {
-            if self.cordoned.is_empty() {
-                String::new()
-            } else {
-                format!(" · cordoned: {}", self.cordoned.join(", "))
-            }
-        };
+    pub(crate) fn status_line(&self, now: Duration, uncordoned: &[String]) -> StatusLine {
+        let cordoned = || self.cordoned_text(uncordoned);
         let lead = match &self.end {
             None if !self.to_cordon.is_empty() => {
                 format!("Cordoning {}…", self.to_cordon.join(", "))
@@ -996,7 +1053,7 @@ impl DrainRun {
                             tail: format!("{}{}", self.replacement_text(now), cordoned()),
                         };
                     }
-                    None => format!("Drained{}", self.replacement_text(now)),
+                    None => format!("Drained{}{}", self.replacement_text(now), cordoned()),
                 }
             }
         };
