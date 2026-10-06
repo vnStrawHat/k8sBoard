@@ -666,6 +666,15 @@ fn appearance_page() -> SettingPage {
                 .item(SettingItem::new("Mode", mode)),
         )
         .group(
+            SettingGroup::new()
+                .title("Fonts")
+                .item(SettingItem::render(|_, _, cx| {
+                    Label::new("Monospace text and the terminal use Lilex, built into the app.")
+                        .text_sm()
+                        .text_color(cx.theme().muted_foreground)
+                })),
+        )
+        .group(
             SettingGroup::new().title("Tables").item(
                 SettingItem::new("Row density", density).description(
                     "The height of every table row, header included. Applies at once.",

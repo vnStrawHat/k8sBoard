@@ -90,6 +90,7 @@ mod monitor_data;
 mod monitor_notices;
 mod monitor_source;
 mod monitor_tab;
+mod mono_font;
 mod name_index;
 mod namespace_picker;
 mod namespace_rows;
@@ -267,7 +268,7 @@ fn run(options: LaunchOptions) -> anyhow::Result<ExitCode> {
     gpui_kit::application()
         .with_assets(gpui_kit::assets::AllAssets)
         .run(move |cx| {
-            gpui_kit::init(cx);
+            mono_font::init_with_lilex(cx);
             AppSettings::install(loaded_settings, cx);
             let saved = AppSettings::get(cx);
             let theme = options.theme.unwrap_or(saved.theme);
