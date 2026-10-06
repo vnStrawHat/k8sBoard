@@ -168,6 +168,7 @@ pub(crate) fn ingress_row(ingress: &IngressSummary) -> KindRow {
         cells: vec![
             KindCell::text_or_absent(ingress.class.as_deref()),
             KindCell::Text(hosts.into()),
+            backends_cell(ingress),
             address,
             // The TLS join fills the expiry once the secrets have loaded.
             if has_tls {
@@ -182,6 +183,35 @@ pub(crate) fn ingress_row(ingress: &IngressSummary) -> KindRow {
         related_pods: None,
         labels: chips(&ingress.labels),
         object: KindObject::Ingress(ingress.clone()),
+    }
+}
+
+/// The backends of an ingress: the distinct service names its rules route to, in rule order, then
+/// the default backend's service. A resource backend reads `Kind/name`. Pure.
+pub(crate) fn ingress_backends(ingress: &IngressSummary) -> Vec<String> {
+    let rules = ingress
+        .rules
+        .iter()
+        .map(|rule| rule.service.as_ref().unwrap_or(&rule.backend));
+    let default = ingress
+        .default_service
+        .as_ref()
+        .or(ingress.default_backend.as_ref());
+    let mut backends: Vec<String> = Vec::new();
+    for backend in rules.chain(default) {
+        if !backends.contains(backend) {
+            backends.push(backend.clone());
+        }
+    }
+    backends
+}
+
+fn backends_cell(ingress: &IngressSummary) -> KindCell {
+    let backends = ingress_backends(ingress);
+    if backends.is_empty() {
+        KindCell::Absent
+    } else {
+        KindCell::Text(backends.join(", ").into())
     }
 }
 

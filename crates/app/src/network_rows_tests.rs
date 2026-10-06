@@ -1,6 +1,7 @@
 use cluster::{IngressPath, IngressTls};
 
 use super::*;
+use crate::kind_join::INGRESS_TLS;
 use crate::resource_kind::ResourceKind;
 
 fn service(service_type: &str) -> ServiceSummary {
@@ -167,18 +168,23 @@ fn ingress_row_cells_match_column_count() {
         .iter()
         .map(|column| column.name)
         .collect();
-    // TLS replaces Ports.
-    assert_eq!(names, ["Class", "Hosts", "Address", "TLS", "Age"]);
+    assert_eq!(
+        names,
+        ["Class", "Hosts", "Backends", "Address", "TLS", "Age"]
+    );
 }
 
 #[test]
 fn ingress_tls_cell_before_join() {
     let mut secured = ingress();
     secured.tls.clear();
-    assert_eq!(ingress_row(&secured).cells.get(3), Some(&KindCell::Absent));
+    assert_eq!(
+        ingress_row(&secured).cells.get(INGRESS_TLS),
+        Some(&KindCell::Absent)
+    );
     secured.tls = vec![tls("a.example.com", "a-tls")];
     assert_eq!(
-        ingress_row(&secured).cells.get(3),
+        ingress_row(&secured).cells.get(INGRESS_TLS),
         Some(&KindCell::Text("yes".into()))
     );
 }
@@ -257,7 +263,7 @@ fn ingress_addresses_join_with_a_comma_like_hosts() {
     let mut balanced = ingress();
     balanced.addresses = vec!["10.1.1.1".to_owned(), "10.1.1.2".to_owned()];
     assert_eq!(
-        ingress_row(&balanced).cells.get(2),
+        ingress_row(&balanced).cells.get(3),
         Some(&KindCell::Mono("10.1.1.1,10.1.1.2".into()))
     );
 }
@@ -617,4 +623,50 @@ fn exposing_ingresses_skip_other_namespaces_and_resource_backends() {
     assert!(
         exposing_ingresses(&service("ClusterIP"), &[elsewhere, assets, other_service]).is_empty()
     );
+}
+
+#[test]
+fn ingress_backends_follow_rule_order_without_duplicates() {
+    let mut web = routed(
+        "web",
+        vec![
+            route(Some("a.example.com"), Some("/api"), Some("api")),
+            route(Some("a.example.com"), Some("/static"), None),
+            route(Some("b.example.com"), Some("/"), Some("api")),
+            route(Some("b.example.com"), Some("/admin"), Some("admin")),
+        ],
+    );
+    web.default_service = Some("fallback".to_owned());
+    // The resource backend reads `Kind/name`, and a repeated service shows once.
+    assert_eq!(
+        ingress_backends(&web),
+        ["api", "Bucket/assets", "admin", "fallback"]
+    );
+}
+
+#[test]
+fn ingress_default_backend_counts_once_and_a_resource_default_reads_kind_name() {
+    let mut shared = routed("shared", vec![route(None, Some("/"), Some("api"))]);
+    shared.default_service = Some("api".to_owned());
+    assert_eq!(ingress_backends(&shared), ["api"]);
+    let mut resource = routed("resource", Vec::new());
+    resource.default_backend = Some("Bucket/assets".to_owned());
+    assert_eq!(ingress_backends(&resource), ["Bucket/assets"]);
+}
+
+#[test]
+fn ingress_backends_cell_joins_names_or_is_absent() {
+    let mut web = routed(
+        "web",
+        vec![
+            route(None, Some("/api"), Some("api")),
+            route(None, Some("/admin"), Some("admin")),
+        ],
+    );
+    assert_eq!(
+        ingress_row(&web).cells.get(2),
+        Some(&KindCell::Text("api, admin".into()))
+    );
+    web.rules.clear();
+    assert_eq!(ingress_row(&web).cells.get(2), Some(&KindCell::Absent));
 }

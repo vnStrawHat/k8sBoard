@@ -5,7 +5,9 @@ use cluster::{
     NetworkPolicySummary, PolicyDirection, PolicyPeer, PolicyPort, PolicyRule, Selector,
 };
 
-use crate::kind_row::{DetailRow, DetailSection, KindCell, KindObject, KindRow, chips};
+use crate::kind_row::{
+    DetailRow, DetailSection, KindCell, KindObject, KindRow, LiveContent, chips,
+};
 use crate::status_tone::{StatusLabel, StatusTone};
 
 /// The label of the namespace that every namespace carries, so a selector on it names one.
@@ -33,10 +35,16 @@ pub(crate) fn network_policy_row(policy: &NetworkPolicySummary) -> KindRow {
     } else {
         DetailRow::Chips(chips(&terms))
     };
-    let mut sections = vec![DetailSection {
-        title: "Applies to",
-        rows: vec![applies_to],
-    }];
+    let mut sections = vec![
+        DetailSection {
+            title: "Applies to",
+            rows: vec![applies_to],
+        },
+        DetailSection {
+            title: "Pods",
+            rows: vec![DetailRow::Live(LiveContent::SelectedPods)],
+        },
+    ];
     sections.extend(direction_section(
         "Allow ingress from",
         &policy.ingress,
@@ -270,6 +278,18 @@ mod tests {
         assert_eq!(row.cells[1], KindCell::Text("Ingress".into()));
         assert_eq!(row.status.text.as_ref(), "Ingress");
         assert_eq!(row.status.tone, StatusTone::Ok);
+    }
+
+    #[test]
+    fn pods_section_follows_applies_to() {
+        let row = network_policy_row(&policy(
+            PolicyDirection::Allowed(Vec::new()),
+            PolicyDirection::NotIsolated,
+        ));
+        let titles: Vec<&str> = row.sections.iter().map(|section| section.title).collect();
+        assert_eq!(&titles[..2], ["Applies to", "Pods"]);
+        let pods = row.section("Pods").expect("a Pods section");
+        assert_eq!(pods.rows, [DetailRow::Live(LiveContent::SelectedPods)]);
     }
 
     #[test]

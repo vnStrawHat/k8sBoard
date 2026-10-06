@@ -420,6 +420,7 @@ static INGRESSES: KindSpec = KindSpec {
     columns: &[
         column("Class", 100., Align::Left),
         column("Hosts", 260., Align::Left),
+        column("Backends", 160., Align::Left),
         column("Address", 180., Align::Left),
         column("TLS", 140., Align::Left),
         AGE_COLUMN,

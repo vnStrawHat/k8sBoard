@@ -37,7 +37,7 @@ Status: **draft 2026-10-05, revised after advisor review**, from the task-based 
 - [x] B2 Pod Overview without new watches (AC 19-21; as built: `Volumes` is always shown, with a note when no container mounts a volume; Env / Mounts links open through `open_link`, A3 adds the denied refusal)
 - [x] B3a Pod Services (AC 20, 22); as built: `key_related_subject` (related_objects.rs) gives the Pod subject from the key, `services_selecting` lives in `kind_join.rs`, and the section is capped at 20 rows
 - [x] B3b Service Exposed by (AC 16, 22); as built: `exposing_ingresses` lives in `network_rows.rs`, a repeated host is spelled once in the routes text, and the list is capped at 20 ingresses
-- [ ] B4 Ingress Backends, NetworkPolicy Pods (AC 15, 18)
+- [x] B4 Ingress Backends, NetworkPolicy Pods (AC 15, 18); as built: `selected_pods_rows(namespace, selector)` serves PDB and NetworkPolicy, and `INGRESS_TLS` moved to cell 4
 - [x] C1 palette searches the live condition feeds in scope (AC 23)
 - [x] C2 `list_object_names` (AC 24; AC 27 for the cluster half)
 - [ ] C3 name index in the palette (AC 25-30)

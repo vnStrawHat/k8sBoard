@@ -8,8 +8,8 @@ use cluster::{
     AccessCheck, BindingSummary, BroadGroup, ConfigMapSummary, ConfigMapValues, CronJobSummary,
     CronSchedule, DeploymentSummary, EndpointSliceSummary, EventSummary, Identity, IngressSummary,
     JobSummary, LimitRangeLimit, LimitRangeSummary, NodeSummary, PersistentVolumeClaimSummary,
-    PersistentVolumeSummary, PodDisruptionBudgetSummary, PodSummary, PvcUsage, RbacSnapshot,
-    ReplicaSetSummary, ResourceQuotaSummary, RoleSummary, SecretSummary, ServiceAccountSummary,
+    PersistentVolumeSummary, PodSummary, PvcUsage, RbacSnapshot, ReplicaSetSummary,
+    ResourceQuotaSummary, RoleSummary, SecretSummary, Selector, ServiceAccountSummary,
     ServiceSummary, Subject, SubjectKind, ValuePreview, VolumeSource,
 };
 use gpui_kit::component::button::{Button, ButtonVariants as _};
@@ -117,7 +117,10 @@ pub(crate) fn live_rows(
             cx,
         ),
         (LiveContent::SelectedPods, KindObject::PodDisruptionBudget(budget)) => {
-            selected_pods_rows(budget, live, cx)
+            selected_pods_rows(&budget.namespace, budget.selector.as_ref(), live, cx)
+        }
+        (LiveContent::SelectedPods, KindObject::NetworkPolicy(policy)) => {
+            selected_pods_rows(&policy.namespace, Some(&policy.pod_selector), live, cx)
         }
         (LiveContent::ConfigMapData, KindObject::ConfigMap(config_map)) => {
             config_map_data_rows(kind, row, config_map, live, cx)
@@ -1370,25 +1373,27 @@ fn ingress_tls_section(
 /// How many selected pods a PodDisruptionBudget drawer lists.
 const MAX_LISTED_SELECTED_PODS: usize = 50;
 
-/// A pod a budget selects, with its health as the PDB controller reads it (the Ready condition).
+/// A pod a budget or network policy selects, with its health as the PDB controller reads it (the
+/// Ready condition).
 #[derive(Debug, PartialEq, Eq)]
 struct SelectedPod<'a> {
     pod: &'a PodSummary,
     is_healthy: bool,
 }
 
-/// The pods of the budget's namespace that its selector matches, unhealthy first, then by name.
-/// A budget without a selector selects none.
+/// The pods of `namespace` that `selector` matches, unhealthy first, then by name. No selector
+/// (a budget without one) selects none; an empty one selects every pod of the namespace.
 fn selected_pods<'a>(
-    budget: &PodDisruptionBudgetSummary,
+    namespace: &str,
+    selector: Option<&Selector>,
     pods: &'a [PodSummary],
 ) -> Vec<SelectedPod<'a>> {
-    let Some(selector) = &budget.selector else {
+    let Some(selector) = selector else {
         return Vec::new();
     };
     let mut selected: Vec<SelectedPod<'a>> = pods
         .iter()
-        .filter(|pod| pod.namespace == budget.namespace && selector.matches(&pod.labels))
+        .filter(|pod| pod.namespace == namespace && selector.matches(&pod.labels))
         .map(|pod| SelectedPod {
             pod,
             is_healthy: pod
@@ -1406,7 +1411,8 @@ fn selected_pods<'a>(
 }
 
 fn selected_pods_rows(
-    budget: &PodDisruptionBudgetSummary,
+    namespace: &str,
+    selector: Option<&Selector>,
     live: &LiveCluster,
     cx: &Context<AppShell>,
 ) -> Vec<AnyElement> {
@@ -1416,7 +1422,7 @@ fn selected_pods_rows(
     let Some(pods) = live.pods.ready_items() else {
         return vec![note("Pods are unavailable", cx)];
     };
-    let selected = selected_pods(budget, pods);
+    let selected = selected_pods(namespace, selector, pods);
     if selected.is_empty() {
         return vec![note("No pods match", cx)];
     }

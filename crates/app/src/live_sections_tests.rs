@@ -1,6 +1,6 @@
 use cluster::{
     ConfigMapKey, ConfigMapValue, ControllerRef, CronSchedule, DeploymentSummary, EndpointPort,
-    EndpointSummary, JobStatus, ServicePortSummary, TemplateContainer,
+    EndpointSummary, JobStatus, PodDisruptionBudgetSummary, ServicePortSummary, TemplateContainer,
 };
 
 use super::*;
@@ -695,7 +695,7 @@ fn selected_pods_unhealthy_first() {
         labelled_pod("team-b", "web-d", "app=web", false),
     ];
     let budget = selected_budget(Some(&["app=web"]));
-    let selected = selected_pods(&budget, &pods);
+    let selected = selected_pods(&budget.namespace, budget.selector.as_ref(), &pods);
     let order: Vec<(&str, bool)> = selected
         .iter()
         .map(|entry| (entry.pod.name.as_str(), entry.is_healthy))
@@ -706,9 +706,12 @@ fn selected_pods_unhealthy_first() {
 #[test]
 fn null_selector_selects_no_pods() {
     let pods = [labelled_pod("team-a", "web-a", "app=web", true)];
-    assert!(selected_pods(&selected_budget(None), &pods).is_empty());
+    let selecting = |budget: PodDisruptionBudgetSummary| {
+        selected_pods("team-a", budget.selector.as_ref(), &pods).len()
+    };
+    assert_eq!(selecting(selected_budget(None)), 0);
     // An empty selector selects every pod of the namespace.
-    assert_eq!(selected_pods(&selected_budget(Some(&[])), &pods).len(), 1);
+    assert_eq!(selecting(selected_budget(Some(&[]))), 1);
 }
 
 // ---- Scaling events and blocked creations ----
@@ -1809,4 +1812,22 @@ fn denied_quotas_note_with_limit_ranges_listed() {
         ),
         QuotaHalf::Note("Quotas are unavailable".to_owned())
     );
+}
+
+#[test]
+fn a_policy_that_selects_everything_lists_the_namespace_pods() {
+    let pods = [
+        labelled_pod("team-a", "web-a", "app=web", true),
+        labelled_pod("team-a", "db-a", "app=db", true),
+        labelled_pod("team-b", "web-b", "app=web", true),
+    ];
+    let names = |selector: &cluster::Selector| -> Vec<String> {
+        selected_pods("team-a", Some(selector), &pods)
+            .iter()
+            .map(|entry| entry.pod.name.clone())
+            .collect()
+    };
+    assert_eq!(names(&cluster::Selector::everything()), ["db-a", "web-a"]);
+    let web = cluster::Selector::of_labels(&["app=web".to_owned()]).expect("a selector");
+    assert_eq!(names(&web), ["web-a"]);
 }

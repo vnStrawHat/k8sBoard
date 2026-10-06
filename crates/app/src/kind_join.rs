@@ -57,7 +57,7 @@ pub(crate) const ACCOUNT_USED_BY: usize = 1;
 /// The index of the Used by cell in a Secrets row.
 pub(crate) const SECRET_USED_BY: usize = 2;
 /// The index of the TLS cell in an Ingresses row.
-pub(crate) const INGRESS_TLS: usize = 3;
+pub(crate) const INGRESS_TLS: usize = 4;
 
 const EXTERNAL_NAME: &str = "ExternalName";
 /// Slices of this address type name hosts, not pods; counting them would double a dual-stack
