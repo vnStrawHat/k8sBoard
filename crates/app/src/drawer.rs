@@ -578,12 +578,15 @@ fn header_row(header: DrawerHeader, cx: &App) -> impl IntoElement {
                 // Like the Topology card captions. It never shrinks, so a long name is the one
                 // that truncates.
                 .child(
-                    div()
-                        .flex_shrink_0()
-                        .text_xs()
-                        .font_family(theme.mono_font_family.clone())
-                        .text_color(theme.muted_foreground)
-                        .child(header.kind_name.to_uppercase()),
+                    truncated_text_with_tooltip(
+                        "drawer-kind",
+                        kind_label(&header.kind_name),
+                        header.kind_name.clone(),
+                    )
+                    .flex_shrink_0()
+                    .text_xs()
+                    .font_family(theme.mono_font_family.clone())
+                    .text_color(theme.muted_foreground),
                 )
                 .child(
                     truncated_text("drawer-title", header.name.clone())
@@ -605,6 +608,15 @@ fn header_row(header: DrawerHeader, cx: &App) -> impl IntoElement {
                 ),
         )
         .child(header.subtitle)
+}
+
+/// The kind caption before the object name. `CustomResourceDefinition` is spelled `CRD`: at full
+/// length it took most of the header and cut the name; its tooltip keeps the full kind.
+fn kind_label(kind_name: &str) -> String {
+    if kind_name == "CustomResourceDefinition" {
+        return "CRD".to_owned();
+    }
+    kind_name.to_uppercase()
 }
 
 /// `← api`: the label is the name of the place Back leads to.
@@ -968,6 +980,12 @@ pub(crate) fn port_row(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_crd_drawer_captions_the_kind_as_crd() {
+        assert_eq!(kind_label("CustomResourceDefinition"), "CRD");
+        assert_eq!(kind_label("StatefulSet"), "STATEFULSET");
+    }
 
     #[test]
     fn created_text_shows_age_or_nothing() {
