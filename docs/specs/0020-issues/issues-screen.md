@@ -5,7 +5,7 @@
 ## Sidebar (`navigation.rs`, step 1a)
 
 - `NavigationCounts` gains `issue_total: Option<(usize, IssueSeverity)>` and `issue_counts: Vec<(Screen, usize, IssueSeverity)>` from `board.summary()` / `count_for`.
-- Pods, Nodes, and kind items: when `count_for(screen)` > 0, the suffix is `h_flex().gap_1()` of the issue count in `tone_color(worst.tone())`, then the muted total (existing). Tooltip `{k} issues`. Denied items keep the lock.
+- Pods, Nodes, and kind items: when `count_for(screen)` > 0, the suffix is `h_flex().gap_1p5()` of the issue count as a pill (tinted `tone_color` background, `px_1`) in `tone_color(worst.tone())`, then the muted total (existing). Tooltip `{k} issues`. Denied items keep the lock.
 - The Issues top item shows the toned total in step 1a while still disabled (tooltip `Issues screen comes in the next step`); step 1b enables it (`screen_of("Issues")` → `Screen::Issues`). Overview and Topology stay disabled.
 
 ## Title bar (`title_bar.rs`, step 1a)

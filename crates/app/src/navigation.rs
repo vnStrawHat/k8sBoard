@@ -28,6 +28,8 @@ const PORT_FORWARDING_ITEM: &str = "Port Forwarding";
 
 /// The section whose items are followed by one submenu per API group of the custom kinds.
 const CUSTOM_RESOURCES: &str = "Custom Resources";
+/// The tint behind an issue count in the sidebar.
+const ISSUE_PILL_TINT: f32 = 0.18;
 
 struct NavigationSection {
     name: &'static str,
@@ -306,10 +308,15 @@ fn issue_badge(
     tooltip: SharedString,
     cx: &App,
 ) -> impl IntoElement + use<> {
+    let color = tone_color(severity.tone(), cx);
+    // A tinted pill, so the issue count never reads as part of the list count beside it.
     div()
         .id(SharedString::from(format!("issues-{name}")))
+        .px_1()
+        .rounded(cx.theme().radius)
+        .bg(color.opacity(ISSUE_PILL_TINT))
         .text_xs()
-        .text_color(tone_color(severity.tone(), cx))
+        .text_color(color)
         .child(count.to_string())
         .tooltip(move |window, cx| Tooltip::new(tooltip.clone()).build(window, cx))
 }
@@ -441,7 +448,7 @@ fn screen_item(
                 .text_color(cx.theme().muted_foreground)
                 .children(count.map(|count| count.to_string()));
             h_flex()
-                .gap_1()
+                .gap_1p5()
                 .children(issues.map(|(issues, severity)| {
                     issue_badge(name, issues, severity, issues_tooltip(issues), cx)
                 }))
