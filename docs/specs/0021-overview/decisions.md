@@ -30,7 +30,7 @@
 | 17 | Capacity labels print a unit on every figure (`104 cores used · 131 cores req · 168 cores`); pairs elsewhere still share the unit through `Measure::format_shared` | W3 wording; one unit rule |
 | 18 | Bar layers stay neutral like W3 (used `foreground`, requested `foreground` at 28 %, track `muted`); the used and requested figures are toned by `usage_tone(x / allocatable)` | wireframe look; the tone still flags overcommit |
 | 19 | No per-node bars on Overview | the heatmap tooltip gives per-node numbers; the Nodes screen has bars |
-| 20 | Heatmap: one fixed 24 px cell per node, in list order. Fill = `foreground` at alpha `0.15 + 0.85 * CPU ratio`, over `muted` (a sampled cell never reads as unsampled). NotReady/Unknown → no fill and a 2 px Bad border. No sample → plain `muted`. Colored by CPU only | W3 "colored by CPU"; theme tokens only |
+| 20 | Heatmap: one 168 px card per node, in list order: name and `CPU n% · MEM n%`. Tone = `usage_tone` of the higher share (the usage bar tokens: warn from 80 %, bad from 90 %), shown as border and a 16 % tint over `muted`. NotReady/Unknown → 2 px Bad border and the status as the line. Loading feed → `Loading usage…`; absent feed → one card note | the numbers belong on the cell; theme tokens only |
 
 ## Layout, refresh, launch
 

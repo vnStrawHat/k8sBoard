@@ -89,14 +89,15 @@ pub(crate) fn capacity_bar(bar: CapacityBar, cx: &App) -> impl IntoElement; // f
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct HeatCell { pub(crate) node: String, pub(crate) usage: NodeUsage, pub(crate) readiness: NodeReadiness, pub(crate) is_cordoned: bool }
 impl HeatCell {
-    pub(crate) fn intensity(&self) -> Option<f32>; // usage.cpu clamped 0..=1; None without a sample or when not Ready
+    pub(crate) fn tone(&self) -> Option<StatusTone>;      // usage_tone of the higher of CPU and memory (warn 80 %, bad 90 %); None without a sample or when not Ready
+    pub(crate) fn usage_line(&self, state: UsageState) -> String; // `CPU 31% · MEM 56%`; `Loading usage…` while the feed loads; the status when the feed is absent
     pub(crate) fn is_not_ready(&self) -> bool;     // NotReady or Unknown
     pub(crate) fn tooltip(&self) -> String;        // `ip-10-0-3-17 · CPU 62% · Memory 48% · Ready` (+ ` · SchedulingDisabled`); `—` when missing
 }
 pub(crate) fn heat_cells(nodes: &[NodeSummary], usage: Option<&NodeUsageHistory>) -> Vec<HeatCell>; // list order
-pub(crate) fn node_heatmap(cells: &[HeatCell], cx: &Context<AppShell>) -> impl IntoElement;
+pub(crate) fn node_heatmap(cells: &[HeatCell], state: UsageState, cx: &Context<AppShell>) -> impl IntoElement;
 ```
 
-- **Render.** `h_flex().flex_wrap().gap(px(3.)).p_3()`. Each cell is `size(px(24.))`, `rounded(theme.radius)`, `id("node-{name}")` (stable across list changes). Fill per decision 20 (a `theme.muted` base plus a child `theme.foreground.opacity(0.15 + 0.85 * intensity)`). A not-ready cell gets `border_2().border_color(tone_color(Bad))` and no fill. Each cell has a tooltip; a click calls `shell.reveal(ResourceKey::Node { name })`.
+- **Render.** `h_flex().flex_wrap().gap(px(4.)).p_3()`. Each cell is a 168 px card, `id("node-{name}")` (stable across list changes): the node name (truncated, semibold) and the usage line (mono muted) under it. A cell with a tone gets that tone as its border and a 16 % tint (decision 20); a not-ready cell gets `border_2` Bad and its status as the line. Each cell has a tooltip; a click calls `shell.reveal(ResourceKey::Node { name })`. When the node feed is absent the card says `Node usage unavailable: {reason}.` once under the grid and the cells show their status only.
 - **Inputs.** `usage` = `node_usage(node, history.latest(&node.name))` (0010); cordon comes from `NodeScheduling::Disabled`.
-- **Size ceiling.** About 20 cells fit per row in a 560 px panel, so 500 nodes is ~25 rows (~675 px) and the page scrolls. `ponytail:` fixed 24 px cells; shrink them or group by node pool above ~300 nodes.
+- **Size ceiling.** About 3 cells fit per row in a 560 px panel, so 500 nodes is ~170 rows and the page scrolls. `ponytail:` fixed 168 px cards; group by node pool above ~300 nodes.

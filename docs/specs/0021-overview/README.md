@@ -7,7 +7,7 @@ Status: amended after the advisor review (should-fix 1–6, nice-to-haves 7–13
 - An **Overview** screen that answers, in W3 order: what is broken, how much room is left, what just changed.
 - **Header**: `{context} · Kubernetes {version} · {region}`, `Last 15 min ▾`, Export report. A **stats line** sits under it (nodes ready/total, pods running/total, namespaces). It was **user-requested and is not in W3**, so the ui-verifier must not flag it.
 - **Capacity**: three-layer bars (used, requested, allocatable) for CPU and Memory, plus Pods and Volumes bars.
-- **Nodes heatmap**: one cell per node, colored by CPU. NotReady nodes are outlined; a click reveals the node.
+- **Nodes heatmap**: one card per node with its CPU and memory shares, tinted from 80 %. NotReady nodes are outlined; a click reveals the node.
 - **Recent changes**: Deployment rollouts and scaling plus HPA rescales (selected server-side), node readiness transitions, joined nodes, and new namespaces.
 - **Needs attention**: the first 6 issues of the 0020 board in the W3 row anatomy (pill, `ns / name · container c`, cause, one read-only action). With it, Overview becomes the **default landing** screen.
 

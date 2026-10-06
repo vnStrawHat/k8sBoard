@@ -36,7 +36,7 @@ use crate::issue_board::IssueBoard;
 use crate::issue_feeds::{FeedState, volume_usage_state};
 use crate::issue_table::{coverage_status, logs_pod, short_kind};
 use crate::kind_row::KindObject;
-use crate::node_heatmap::{heat_cells, node_heatmap};
+use crate::node_heatmap::{UsageState, heat_cells, node_heatmap};
 use crate::recent_changes::{
     CHANGE_ROWS, ChangeEntry, ChangeInputs, ChangeKind, ChangeWindow, recent_changes,
 };
@@ -504,10 +504,18 @@ fn nodes_panel(live: &LiveCluster, cx: &Context<AppShell>) -> Stateful<Div> {
     };
     let is_live = is_polling(&node_feed.status);
     let cells = heat_cells(nodes, is_live.then_some(&node_feed.history));
-    let mut subtitle = format!("{} · colored by CPU", group_digits(cells.len()));
-    if !is_live {
-        subtitle.push_str(" · metrics unavailable");
-    }
+    let state = UsageState::of(&node_feed.status);
+    let subtitle = format!(
+        "{} · tinted from 80% CPU or memory",
+        group_digits(cells.len())
+    );
+    // Said once here, so the cells do not repeat it.
+    let absent_note = (state == UsageState::Absent).then(|| {
+        let reason = node_feed.status.reason().unwrap_or("not reachable");
+        muted_text(format!("Node usage unavailable: {reason}."), cx)
+            .px_3()
+            .pb_3()
+    });
     let not_ready = cells.iter().filter(|cell| cell.is_not_ready()).count();
     let warning = (not_ready > 0).then(|| {
         div()
@@ -521,7 +529,9 @@ fn nodes_panel(live: &LiveCluster, cx: &Context<AppShell>) -> Stateful<Div> {
         "Nodes",
         Some(muted_text(subtitle, cx).into_any_element()),
         warning,
-        node_heatmap(&cells, cx),
+        v_flex()
+            .child(node_heatmap(&cells, state, cx))
+            .children(absent_note),
         cx,
     )
 }

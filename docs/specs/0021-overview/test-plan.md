@@ -9,7 +9,7 @@
 | `cluster_capacity.rs` | `cpu_and_memory_sum_used_requested_allocatable`, `requests_are_none_without_all_scope_pods`, `finished_pods_do_not_request`, `used_notes_unsampled_nodes`, `used_is_none_without_node_feed`, `pods_row_counts_pods_that_take_room`, `pods_row_note_without_all_scope`, `volumes_sum_claims_with_capacity`, `volumes_omitted_without_claims`, `volumes_note_limited_polling`, `zero_allocatable_omits_row`, `cpu_label_prints_unit_once`, `label_drops_req_without_requests`, `pods_label_groups_digits`, `volumes_label_shares_unit`, `compute_rows_name_their_ceilings`, `pods_on_unlisted_nodes_do_not_count`, `volumes_skip_shared_filesystem_claims`, `volumes_row_without_feed_shows_dash_and_reason`, `pods_loading_shows_dash_without_scope_note` |
 | `usage_format.rs` | `format_shared_prints_unit_once`, `format_shared_keeps_units_that_differ`, `format_shared_never_shares_millicores` |
 | `usage_bar.rs` | `capacity_bar_clamps_layers`, `capacity_bar_without_usage_has_no_used_layer` |
-| `node_heatmap.rs` | `cells_keep_node_list_order`, `intensity_is_clamped_cpu_ratio`, `not_ready_and_unknown_have_no_intensity`, `missing_sample_has_no_intensity`, `tooltip_names_cpu_memory_status`, `tooltip_marks_cordoned_node` |
+| `node_heatmap.rs` | `cells_keep_node_list_order`, `tone_follows_the_higher_of_cpu_and_memory`, `not_ready_and_unknown_have_no_tone`, `missing_sample_has_no_tone`, `the_usage_line_shows_shares_or_the_reason_there_are_none`, `feed_status_maps_to_a_usage_state`, `tooltip_names_cpu_memory_status`, `tooltip_marks_cordoned_node` |
 | `overview.rs` | `headline_has_context_version_region`, `region_single_value`, `region_counts_several`, `region_absent_without_labels`, `stats_count_ready_nodes`, `stats_count_running_and_not_ready_pods`, `stats_parts_are_none_while_loading` |
 | `navigation.rs` | `enabled_items_are_overview_issues_pods_nodes_and_explorer_kinds` (Overview first) |
 | `launch_options.rs` | `screen_overview_parses` |
@@ -54,7 +54,7 @@
 - `--screen overview` at 1320 px: two columns at ≈ 1.5 : 1, with Needs attention top-left, Capacity top-right, Nodes bottom-left, and Recent changes bottom-right (W3 pins 1–4). Before step 3, row 1 holds only Capacity.
 - `--screen overview --window-width 1000` (step 3): one column, in the order Needs attention, Capacity, Nodes, Recent changes. No horizontal overflow; rows truncate with an ellipsis.
 - Capacity: CPU and Memory show three layers (used darker than requested), the legend matches, labels are right-aligned mono with a unit on every figure (`104 cores used · 131 cores req · 168 cores`).
-- Heatmap: square cells, intensity varies, NotReady outlined in the Bad tone, header `{n} · colored by CPU`.
+- Heatmap: cards with name and `CPU n% · MEM n%`, a tone from 80 %, NotReady outlined in the Bad tone, header `{n} · tinted from 80% CPU or memory`.
 - Recent changes: time | text | who columns, and the muted footnote `… events kept ~1 h by the API server`.
 - Needs attention rows: the pill in a 118 px column, a mono object line, a muted cause, and one ghost button (`View logs`, `See why`, `Open Secret`). The count pill is toned.
 - No hardcoded colors; both light and dark themes (`--theme light|dark`) are legible.

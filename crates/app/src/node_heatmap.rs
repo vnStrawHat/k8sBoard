@@ -1,24 +1,46 @@
-//! The Nodes panel of Overview: one cell per node, shaded by CPU, with NotReady nodes outlined.
+//! The Nodes panel of Overview: one cell per node with its CPU and memory shares, tinted when
+//! either is high, and NotReady nodes outlined.
 
 use cluster::{NodeReadiness, NodeScheduling, NodeSummary};
 use gpui_kit::component::ActiveTheme as _;
-use gpui_kit::component::{h_flex, tooltip::Tooltip};
+use gpui_kit::component::{StyledExt as _, h_flex, tooltip::Tooltip, v_flex};
 use gpui_kit::{
     Context, InteractiveElement as _, IntoElement, ParentElement as _, SharedString,
     StatefulInteractiveElement as _, Styled as _, div, px,
 };
 
 use crate::app_shell::AppShell;
+use crate::cluster_metrics::FeedStatus;
 use crate::metrics_history::NodeUsageHistory;
 use crate::node_usage::{NodeUsage, node_usage};
 use crate::status_tone::{StatusTone, tone_color};
 use crate::table_selection::ResourceKey;
-use crate::usage_format::format_percent;
+use crate::usage_format::{format_percent, usage_tone};
 
-const CELL_SIZE: f32 = 24.;
-const CELL_GAP: f32 = 3.;
-/// A sampled cell is never fully faint: the lowest share still tints it, so it reads as measured.
-const MIN_FILL_ALPHA: f32 = 0.15;
+const CELL_WIDTH: f32 = 168.;
+const CELL_GAP: f32 = 4.;
+/// The tint of a cell whose usage is high, over the muted base.
+const TINT_ALPHA: f32 = 0.16;
+
+/// Where the node usage numbers stand, so a cell can say why it has none.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum UsageState {
+    /// The feed is still being checked or has no sample yet.
+    Loading,
+    Live,
+    /// Denied or failing: no sample will come.
+    Absent,
+}
+
+impl UsageState {
+    pub(crate) fn of(status: &FeedStatus) -> Self {
+        match status {
+            FeedStatus::Checking | FeedStatus::Waiting => Self::Loading,
+            FeedStatus::Live | FeedStatus::Interrupted(_) => Self::Live,
+            FeedStatus::Failed(_) | FeedStatus::Unavailable(_) => Self::Absent,
+        }
+    }
+}
 
 /// One node of the heatmap.
 #[derive(Clone, Debug, PartialEq)]
@@ -30,37 +52,62 @@ pub(crate) struct HeatCell {
 }
 
 impl HeatCell {
-    /// The CPU share clamped to 0..=1; `None` without a sample, or when the node is not Ready.
-    pub(crate) fn intensity(&self) -> Option<f32> {
+    /// The warn or bad tone of the higher of the CPU and memory shares, like the usage bars;
+    /// `None` below 80 %, without a sample, or when the node is not Ready.
+    pub(crate) fn tone(&self) -> Option<StatusTone> {
         if self.is_not_ready() {
             return None;
         }
-        let cpu = self.usage.cpu?;
-        Some(if cpu.is_nan() {
-            0.
-        } else {
-            cpu.clamp(0., 1.) as f32
-        })
+        let highest = [self.usage.cpu, self.usage.memory]
+            .into_iter()
+            .flatten()
+            .filter(|ratio| !ratio.is_nan())
+            .fold(f64::NEG_INFINITY, f64::max);
+        usage_tone(highest)
     }
 
-    /// NotReady and Unknown nodes are outlined instead of shaded.
+    /// NotReady and Unknown nodes are outlined instead of tinted.
     pub(crate) fn is_not_ready(&self) -> bool {
         self.readiness != NodeReadiness::Ready
+    }
+
+    /// The line under the node name: `CPU 31% · MEM 56%`, or why there is none.
+    pub(crate) fn usage_line(&self, state: UsageState) -> String {
+        if self.is_not_ready() {
+            return self.status_text().to_owned();
+        }
+        match state {
+            UsageState::Loading => "Loading usage…".to_owned(),
+            UsageState::Absent => self.status_text().to_owned(),
+            UsageState::Live => {
+                let share =
+                    |ratio: Option<f64>| ratio.map_or_else(|| "—".to_owned(), format_percent);
+                format!(
+                    "CPU {} · MEM {}",
+                    share(self.usage.cpu),
+                    share(self.usage.memory)
+                )
+            }
+        }
+    }
+
+    fn status_text(&self) -> &'static str {
+        match self.readiness {
+            NodeReadiness::Ready => "Ready",
+            NodeReadiness::NotReady => "NotReady",
+            NodeReadiness::Unknown => "Unknown",
+        }
     }
 
     /// `ip-10-0-3-17 · CPU 62% · Memory 48% · Ready`, plus ` · SchedulingDisabled` when cordoned.
     pub(crate) fn tooltip(&self) -> String {
         let share = |ratio: Option<f64>| ratio.map_or_else(|| "—".to_owned(), format_percent);
-        let status = match self.readiness {
-            NodeReadiness::Ready => "Ready",
-            NodeReadiness::NotReady => "NotReady",
-            NodeReadiness::Unknown => "Unknown",
-        };
         let mut text = format!(
-            "{} · CPU {} · Memory {} · {status}",
+            "{} · CPU {} · Memory {} · {}",
             self.node,
             share(self.usage.cpu),
-            share(self.usage.memory)
+            share(self.usage.memory),
+            self.status_text()
         );
         if self.is_cordoned {
             text.push_str(" · SchedulingDisabled");
@@ -82,13 +129,12 @@ pub(crate) fn heat_cells(nodes: &[NodeSummary], usage: Option<&NodeUsageHistory>
         .collect()
 }
 
-/// The fill opacity of a cell at CPU share `intensity`: `0.15 + 0.85 * intensity`.
-fn fill_alpha(intensity: f32) -> f32 {
-    MIN_FILL_ALPHA + (1. - MIN_FILL_ALPHA) * intensity
-}
-
 /// The wrapped grid. A click reveals the node with its drawer.
-pub(crate) fn node_heatmap(cells: &[HeatCell], cx: &Context<AppShell>) -> impl IntoElement {
+pub(crate) fn node_heatmap(
+    cells: &[HeatCell],
+    state: UsageState,
+    cx: &Context<AppShell>,
+) -> impl IntoElement {
     let theme = cx.theme();
     h_flex()
         .flex_wrap()
@@ -99,28 +145,45 @@ pub(crate) fn node_heatmap(cells: &[HeatCell], cx: &Context<AppShell>) -> impl I
                 name: cell.node.clone(),
             };
             let tooltip = cell.tooltip();
-            let base = div()
+            let base = v_flex()
                 .id(SharedString::from(format!("node-{}", cell.node)))
-                .relative()
                 .flex_none()
-                .size(px(CELL_SIZE))
+                .w(px(CELL_WIDTH))
+                .px_2()
+                .py_1()
                 .rounded(theme.radius)
                 .overflow_hidden()
                 .cursor_pointer()
                 .bg(theme.muted)
+                .border_1()
+                .border_color(theme.border)
                 .tooltip(move |window, cx| Tooltip::new(tooltip.clone()).build(window, cx))
-                .on_click(cx.listener(move |shell, _, _, cx| shell.reveal(key.clone(), cx)));
+                .on_click(cx.listener(move |shell, _, _, cx| shell.reveal(key.clone(), cx)))
+                .child(
+                    div()
+                        .text_xs()
+                        .font_semibold()
+                        .truncate()
+                        .child(cell.node.clone()),
+                )
+                .child(
+                    div()
+                        .text_xs()
+                        .font_family(theme.mono_font_family.clone())
+                        .text_color(theme.muted_foreground)
+                        .truncate()
+                        .child(cell.usage_line(state)),
+                );
             if cell.is_not_ready() {
-                return base
-                    .border_2()
-                    .border_color(tone_color(StatusTone::Bad, cx));
+                return base.border_color(tone_color(StatusTone::Bad, cx));
             }
-            base.children(cell.intensity().map(|intensity| {
-                div()
-                    .absolute()
-                    .size_full()
-                    .bg(theme.foreground.opacity(fill_alpha(intensity)))
-            }))
+            match cell.tone() {
+                Some(tone) => {
+                    let color = tone_color(tone, cx);
+                    base.border_color(color).bg(color.opacity(TINT_ALPHA))
+                }
+                None => base,
+            }
         }))
 }
 
@@ -187,38 +250,70 @@ mod tests {
     }
 
     #[test]
-    fn intensity_is_clamped_cpu_ratio() {
+    fn tone_follows_the_higher_of_cpu_and_memory() {
         let nodes = [ready("a")];
-        let cell =
-            |millicores| heat_cells(&nodes, Some(&history("a", millicores, 1)))[0].intensity();
-        assert_eq!(cell(2_000), Some(0.5));
-        assert_eq!(cell(9_000), Some(1.));
+        let tone = |millicores, gibibytes| {
+            heat_cells(&nodes, Some(&history("a", millicores, gibibytes)))[0].tone()
+        };
+        // The node has 4 cores and 8Gi.
+        assert_eq!(tone(2_000, 1), None);
+        assert_eq!(tone(3_300, 1), Some(StatusTone::Warn));
+        assert_eq!(tone(1_000, 7), Some(StatusTone::Warn));
+        assert_eq!(tone(1_000, 8), Some(StatusTone::Bad));
     }
 
     #[test]
-    fn fill_alpha_starts_at_a_visible_tint() {
-        assert_eq!(fill_alpha(0.), MIN_FILL_ALPHA);
-        assert_eq!(fill_alpha(1.), 1.);
-        assert!((fill_alpha(0.5) - 0.575).abs() < 1e-6);
-    }
-
-    #[test]
-    fn not_ready_and_unknown_have_no_intensity() {
+    fn not_ready_and_unknown_have_no_tone() {
         for readiness in [NodeReadiness::NotReady, NodeReadiness::Unknown] {
             let nodes = [node("a", readiness, NodeScheduling::Enabled)];
-            let cells = heat_cells(&nodes, Some(&history("a", 2_000, 1)));
-            assert_eq!(cells[0].intensity(), None);
+            let cells = heat_cells(&nodes, Some(&history("a", 4_000, 8)));
+            assert_eq!(cells[0].tone(), None);
             assert!(cells[0].is_not_ready());
         }
     }
 
     #[test]
-    fn missing_sample_has_no_intensity() {
+    fn missing_sample_has_no_tone() {
         let nodes = [ready("a")];
-        assert_eq!(heat_cells(&nodes, None)[0].intensity(), None);
+        assert_eq!(heat_cells(&nodes, None)[0].tone(), None);
         assert_eq!(
-            heat_cells(&nodes, Some(&history("other", 1_000, 1)))[0].intensity(),
+            heat_cells(&nodes, Some(&history("other", 4_000, 8)))[0].tone(),
             None
+        );
+    }
+
+    #[test]
+    fn the_usage_line_shows_shares_or_the_reason_there_are_none() {
+        let nodes = [ready("a")];
+        let live = heat_cells(&nodes, Some(&history("a", 1_240, 4)));
+        assert_eq!(live[0].usage_line(UsageState::Live), "CPU 31% · MEM 50%");
+        assert_eq!(live[0].usage_line(UsageState::Loading), "Loading usage…");
+        assert_eq!(live[0].usage_line(UsageState::Absent), "Ready");
+        let unsampled = heat_cells(&nodes, None);
+        assert_eq!(unsampled[0].usage_line(UsageState::Live), "CPU — · MEM —");
+        let down = [node("a", NodeReadiness::NotReady, NodeScheduling::Enabled)];
+        assert_eq!(
+            heat_cells(&down, None)[0].usage_line(UsageState::Loading),
+            "NotReady"
+        );
+    }
+
+    #[test]
+    fn feed_status_maps_to_a_usage_state() {
+        assert_eq!(UsageState::of(&FeedStatus::Checking), UsageState::Loading);
+        assert_eq!(UsageState::of(&FeedStatus::Waiting), UsageState::Loading);
+        assert_eq!(UsageState::of(&FeedStatus::Live), UsageState::Live);
+        assert_eq!(
+            UsageState::of(&FeedStatus::Interrupted("x".to_owned())),
+            UsageState::Live
+        );
+        assert_eq!(
+            UsageState::of(&FeedStatus::Failed("x".to_owned())),
+            UsageState::Absent
+        );
+        assert_eq!(
+            UsageState::of(&FeedStatus::Unavailable("x".to_owned())),
+            UsageState::Absent
         );
     }
 

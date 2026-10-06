@@ -40,7 +40,7 @@ v_flex().id("overview").overflow_y_scroll().p_4().gap_3()
 |---|---|---|
 | Needs attention | title, count pill (total, `tone_color(worst)`) | muted `auto-detected · live`, or Warn `Partial coverage` with the 0020 `coverage.note()` as tooltip (same helper as the Issues header) |
 | Capacity | title | legend: three 9 px swatches `used`, `requested`, `allocatable` (muted mono `text_xs`); `requested` is hidden when the scope is not All |
-| Nodes | title, muted `{n} · colored by CPU` | `{k} NotReady`, toned Bad, when k > 0 |
+| Nodes | title, muted `{n} · tinted from 80% CPU or memory` | `{k} NotReady`, toned Bad, when k > 0 |
 | Recent changes | title | muted link `View all →` (decision 27: `set_event_filter(EventFilter::All)`, then `show_screen(Screen::Kind(ResourceKind::Events))`) |
 
 Recent changes ends with a muted `text_xs` footnote: `Deployment rollouts, HPA rescales, nodes, namespaces · events kept ~1 h by the API server`.
@@ -53,7 +53,7 @@ Recent changes ends with a muted `text_xs` footnote: `Deployment rollouts, HPA r
 | Board `summary()` is `None` | Needs attention | spinner `Checking the cluster…` |
 | Zero issues | Needs attention | `No issues found.`; with partial coverage: `No issues found in what k8sBoard watches.` (0020 wording) |
 | Nodes list Loading / Failed | Capacity, Nodes | spinner `Loading nodes…` / `Nodes unavailable · {message}` |
-| Node metrics feed not Live/Interrupted | Capacity, Nodes | Capacity used = `—` with `{FeedStatus::reason}` as tooltip; heatmap cells plain, and the header adds `· metrics unavailable` |
+| Node metrics feed not Live/Interrupted | Capacity, Nodes | Capacity used = `—` with `{FeedStatus::reason}` as tooltip; heatmap cells show their status only, and the card adds `Node usage unavailable: {reason}.` |
 | Change feed Loading / Failed / denied | Recent changes | `Loading changes…` / `Changes unavailable · {message}` / `Not permitted: list events` |
 | No change in the window | Recent changes | `No tracked changes seen in the last 15 min.` (window label), followed by the footnote, which names what is tracked |
 
