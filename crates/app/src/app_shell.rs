@@ -864,10 +864,11 @@ impl AppShell {
             // The flow of the selected edges stands still, so the capture is deterministic.
             cx.set_reduce_motion(true);
         }
+        let launch_node = shell.launch_select.clone();
         shell.topology.update(cx, |view, cx| {
             view.set_problems_only(wants_problems, cx);
             view.set_rbac(wants_rbac, cx);
-            view.select_first_deployment_once(wants_selection);
+            view.select_first_deployment_once(wants_selection, launch_node);
             view.set_launch_zoom(options.zoom_percent);
             view.start_in_traffic(wants_traffic);
             #[cfg(feature = "screenshot")]

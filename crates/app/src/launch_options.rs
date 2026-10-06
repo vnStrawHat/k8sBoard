@@ -21,7 +21,8 @@ Options:
   --namespace <a[,b]>    namespaces to show, at most 5 (default: all namespaces if allowed)
   --filter <text>        quick filter of the start screen; label:k=v,k2!=v2 becomes label chips
   --select <name>       with a drawer screen, open the row named <name> or <namespace>/<name>
-                         (default: the first row)
+                         (default: the first row); with topology-selected, the node of that name
+                         (default: the first Deployment)
   --theme system|light|dark
                          colour theme (default: the saved theme, else follow the system)
   --color-theme default|zed-one

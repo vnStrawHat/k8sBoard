@@ -1,24 +1,19 @@
 //! The port text on the `routes to` edges (spec 0050): the Service ports on a Service to Pod
-//! edge, the backend port on an Ingress to Service edge. A chip sits on the arc-length midpoint of
-//! the curve, only at a zoom where cards show text. Pure screen math, no GPUI context.
+//! edge, the backend port on an Ingress to Service edge. Only the edges of the focused node get a
+//! chip, on the arc-length midpoint of the curve or beside it where a card is in the way, and only
+//! at a zoom where cards show text. Pure screen math, no GPUI context.
 
 use cluster::{IngressSummary, ServicePortSummary};
 
 use crate::topology_graph::{Relation, TopologyGraph};
 use crate::topology_layout::TopologyLayout;
-use crate::topology_traffic::label_anchor;
-use crate::topology_traffic_labels::{EdgeLabel, LABEL_HEIGHT, label_width};
+use crate::topology_route::EdgeRoute;
+use crate::topology_traffic::point_along;
+use crate::topology_traffic_labels::{EdgeLabel, LABEL_HEIGHT, label_width, screen_box};
 use crate::topology_viewport::{MIN_TEXT_ZOOM, Viewport};
 
 /// More ports than this on one edge read `+N` for the rest.
 const MAX_LISTED_PORTS: usize = 3;
-
-/// A port chip and whether its edge touches the focused node.
-#[derive(Clone, Debug, PartialEq)]
-pub(crate) struct PortChip {
-    pub(crate) label: EdgeLabel,
-    pub(crate) is_focused: bool,
-}
 
 /// Whether the chips are drawn at this zoom: below it the text would not be readable.
 pub(crate) fn shows_port_labels(zoom: f32) -> bool {
@@ -71,45 +66,75 @@ fn join_ports(mut ports: Vec<String>) -> String {
     text
 }
 
-/// The chips to draw on a `canvas` of the given size, the ones on the focused node's edges last so
-/// they stay on top. Labels may overlap where edges bundle: no collision solver.
+/// Where along a route a chip is tried, as shares of its arc length: the midpoint first, then
+/// either side of it, so the chip leaves the cards that stand beside a narrow gutter.
+const CHIP_SHARES: [f32; 7] = [0.5, 0.4, 0.6, 0.3, 0.7, 0.2, 0.8];
+
+/// The chips of the `routes to` edges of the `focus` node (the hovered or selected one) on a
+/// `canvas` of the given size; none at rest. Each sits on the first of `CHIP_SHARES` where it is
+/// clear of every card, else on the midpoint, over the cards. Chips may overlap each other.
 pub(crate) fn port_chips(
     graph: &TopologyGraph,
     layout: &TopologyLayout,
     viewport: Viewport,
     canvas: (f32, f32),
     focus: Option<usize>,
-) -> Vec<PortChip> {
-    if !shows_port_labels(viewport.zoom()) {
+) -> Vec<EdgeLabel> {
+    let Some(focus) = focus.filter(|_| shows_port_labels(viewport.zoom())) else {
         return Vec::new();
-    }
-    let mut chips: Vec<PortChip> = graph
+    };
+    let cards: Vec<(f32, f32, f32, f32)> = layout
+        .rects
+        .iter()
+        .map(|rect| screen_box(viewport, *rect))
+        .collect();
+    graph
         .edges
         .iter()
         .zip(&layout.routes)
-        .filter(|(edge, _)| edge.relation == Relation::RoutesTo)
+        .filter(|(edge, _)| {
+            edge.relation == Relation::RoutesTo && (edge.from == focus || edge.to == focus)
+        })
         .filter_map(|(edge, route)| {
             let text = graph.port_labels.get(&(edge.from, edge.to))?;
-            let (x, y) = viewport.to_screen(label_anchor(route));
-            let width = label_width(text);
-            let label = EdgeLabel {
-                text: text.clone().into(),
-                left: x - width / 2.,
-                top: y - LABEL_HEIGHT / 2.,
-                width,
-            };
-            let is_on_canvas = label.left + width > 0.
-                && label.left < canvas.0
-                && label.top + LABEL_HEIGHT > 0.
-                && label.top < canvas.1;
-            is_on_canvas.then_some(PortChip {
-                label,
-                is_focused: focus.is_some_and(|node| node == edge.from || node == edge.to),
-            })
+            let chip = place_chip(text, route, viewport, &cards);
+            let is_on_canvas = chip.left + chip.width > 0.
+                && chip.left < canvas.0
+                && chip.top + LABEL_HEIGHT > 0.
+                && chip.top < canvas.1;
+            is_on_canvas.then_some(chip)
         })
-        .collect();
-    chips.sort_by_key(|chip| chip.is_focused);
-    chips
+        .collect()
+}
+
+/// The chip of `text` on the first of `CHIP_SHARES` of `route` where it overlaps no card, else on
+/// the midpoint.
+fn place_chip(
+    text: &str,
+    route: &EdgeRoute,
+    viewport: Viewport,
+    cards: &[(f32, f32, f32, f32)],
+) -> EdgeLabel {
+    let width = label_width(text);
+    let at = |share: f32| {
+        let (x, y) = viewport.to_screen(point_along(route, share));
+        EdgeLabel {
+            text: text.to_owned().into(),
+            left: x - width / 2.,
+            top: y - LABEL_HEIGHT / 2.,
+            width,
+        }
+    };
+    CHIP_SHARES
+        .iter()
+        .map(|share| at(*share))
+        .find(|chip| chip_fits(chip, cards))
+        .unwrap_or_else(|| at(CHIP_SHARES[0]))
+}
+
+/// Whether `chip` overlaps none of the `cards` (`(left, top, right, bottom)` boxes).
+fn chip_fits(chip: &EdgeLabel, cards: &[(f32, f32, f32, f32)]) -> bool {
+    !cards.iter().any(|card| chip.overlaps(*card))
 }
 
 #[cfg(test)]

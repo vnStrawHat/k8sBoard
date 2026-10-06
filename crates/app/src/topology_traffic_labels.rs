@@ -37,7 +37,7 @@ impl EdgeLabel {
         )
     }
 
-    fn overlaps(&self, other: (f32, f32, f32, f32)) -> bool {
+    pub(crate) fn overlaps(&self, other: (f32, f32, f32, f32)) -> bool {
         let (left, top, right, bottom) = other;
         self.left < right
             && self.left + self.width > left
@@ -107,7 +107,7 @@ pub(crate) fn edge_labels(
 }
 
 /// `(left, top, right, bottom)` of a card on the canvas.
-fn screen_box(viewport: Viewport, rect: GraphRect) -> (f32, f32, f32, f32) {
+pub(crate) fn screen_box(viewport: Viewport, rect: GraphRect) -> (f32, f32, f32, f32) {
     let (left, top) = viewport.to_screen(rect.origin);
     let zoom = viewport.zoom();
     (

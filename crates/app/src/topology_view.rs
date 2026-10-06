@@ -18,7 +18,7 @@ use gpui_kit::component::{
     ActiveTheme as _, Disableable as _, IconName, Selectable as _, Sizable as _, h_flex, v_flex,
 };
 use gpui_kit::{
-    AnyElement, App, Context, Div, Entity, FocusHandle, Hsla, InteractiveElement as _, IntoElement,
+    AnyElement, App, Context, Div, Entity, FocusHandle, InteractiveElement as _, IntoElement,
     KeyDownEvent, MouseButton, MouseDownEvent, ParentElement as _, Pixels, Point, Render,
     ScrollDelta, SharedString, StatefulInteractiveElement as _, Styled as _, Subscription, Task,
     WeakEntity, Window, div, prelude::FluentBuilder as _, px,
@@ -330,6 +330,8 @@ pub(crate) struct TopologyView {
     pending_focus: Option<NodeId>,
     /// `--screen topology-selected`: select the first Deployment once a graph has one.
     wants_first_deployment: bool,
+    /// `--select` with that screen: the name of the node to select instead of the Deployment.
+    launch_node: Option<String>,
     /// `--zoom`: the zoom the first view takes instead of its own, once.
     launch_zoom: Option<f32>,
     /// The card under the pointer: its edges stand out, the others fade.
@@ -380,6 +382,7 @@ impl TopologyView {
             highlighted: None,
             pending_focus: None,
             wants_first_deployment: false,
+            launch_node: None,
             launch_zoom: None,
             hovered: None,
             drag: Drag::None,
@@ -509,9 +512,11 @@ impl TopologyView {
         self.build.is_some()
     }
 
-    /// `--screen topology-selected`: the first Deployment of the first graph is selected.
-    pub(crate) fn select_first_deployment_once(&mut self, is_wanted: bool) {
+    /// `--screen topology-selected`: the node named by `--select`, else the first Deployment, of
+    /// the first graph is selected.
+    pub(crate) fn select_first_deployment_once(&mut self, is_wanted: bool, name: Option<String>) {
         self.wants_first_deployment = is_wanted;
+        self.launch_node = name;
     }
 
     /// `--zoom`: the first view opens at the grid zoom nearest to `percent` hundredths.
@@ -741,7 +746,7 @@ impl TopologyView {
         }
         if self.wants_first_deployment
             && let Some(Ok(graph)) = &self.build
-            && let Some(id) = first_deployment(graph)
+            && let Some(id) = launch_node(graph, self.launch_node.as_deref())
         {
             self.wants_first_deployment = false;
             self.pending_focus = Some(id);
@@ -2022,10 +2027,11 @@ impl TopologyView {
                         colors,
                     ))
                     .children(self.render_edge_labels(&graph, &layout, colors, cx))
-                    .children(self.render_port_labels(&graph, &layout, paint_focus, colors, cx))
                     .child(self.render_controls(cx))
                     .child(self.render_legend(colors, minimap_size.0 + drawer, width, cx))
-                    .child(self.render_minimap(&graph, &layout, colors, minimap_size, drawer, cx)),
+                    .child(self.render_minimap(&graph, &layout, colors, minimap_size, drawer, cx))
+                    // After the overlays, so a chip is never under the legend or the minimap.
+                    .children(self.render_port_labels(&graph, &layout, paint_focus, colors, cx)),
             )
             .into_any_element()
     }
@@ -2139,12 +2145,12 @@ impl TopologyView {
         let mono = cx.theme().mono_font_family.clone();
         edge_labels(graph, layout, layer, self.viewport, canvas)
             .into_iter()
-            .map(|label| edge_chip(label, colors, colors.foreground, mono.clone()))
+            .map(|label| edge_chip(label, colors, mono.clone()))
             .collect()
     }
 
-    /// The port chips on the `routes to` edges (not in Traffic mode, which labels them with their
-    /// rate): muted, and in the foreground tone on the edges of the focused node.
+    /// The port chips on the `routes to` edges of the focused node, none at rest and none in
+    /// Traffic mode (which labels them with their rate).
     fn render_port_labels(
         &self,
         graph: &TopologyGraph,
@@ -2160,14 +2166,7 @@ impl TopologyView {
         let mono = cx.theme().mono_font_family.clone();
         port_chips(graph, layout, self.viewport, canvas, focus)
             .into_iter()
-            .map(|chip| {
-                let text = if chip.is_focused {
-                    colors.foreground
-                } else {
-                    colors.muted_foreground
-                };
-                edge_chip(chip.label, colors, text, mono.clone())
-            })
+            .map(|chip| edge_chip(chip, colors, mono.clone()))
             .collect()
     }
 
@@ -2311,12 +2310,7 @@ impl Render for TopologyView {
 }
 
 /// A small chip on an edge, on the canvas surface so it stays readable over other edges.
-fn edge_chip(
-    label: EdgeLabel,
-    colors: CanvasColors,
-    text_color: Hsla,
-    mono: SharedString,
-) -> AnyElement {
+fn edge_chip(label: EdgeLabel, colors: CanvasColors, mono: SharedString) -> AnyElement {
     div()
         .absolute()
         .left(px(label.left))
@@ -2330,7 +2324,7 @@ fn edge_chip(
         .border_1()
         .border_color(colors.card_border)
         .bg(colors.background)
-        .text_color(text_color)
+        .text_color(colors.foreground)
         .font_family(mono)
         .text_size(px(LABEL_TEXT_SIZE))
         .whitespace_nowrap()
@@ -2368,6 +2362,19 @@ fn saved_detail(file_name: &str, scale: Option<f32>) -> String {
 }
 
 /// The first Deployment node with an object behind it, in graph order.
+/// The node a screenshot launch selects: the first one named `name` that has an object, else the
+/// first Deployment when there is no name.
+fn launch_node(graph: &TopologyGraph, name: Option<&str>) -> Option<NodeId> {
+    let Some(name) = name else {
+        return first_deployment(graph);
+    };
+    graph
+        .nodes
+        .iter()
+        .find(|node| node.name.as_ref() == name && node.key.is_some())
+        .map(|node| node.id.clone())
+}
+
 fn first_deployment(graph: &TopologyGraph) -> Option<NodeId> {
     graph
         .nodes
