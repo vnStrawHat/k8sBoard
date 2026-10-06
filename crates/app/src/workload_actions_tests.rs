@@ -494,13 +494,22 @@ fn hpa_warning_only_when_targeting_and_loaded() {
         warnings(&scale_to(&target, 5)),
         ["HPA api-hpa manages replicas (2–8); it will override this"]
     );
-    // The warning follows the scale-down line.
+    // The warning follows the scale-down line; a value outside the range says it is reverted.
     assert_eq!(
         warnings(&scale_to(&target, 1)),
         [
             "Scaling down from 3 to 1",
-            "HPA api-hpa manages replicas (2–8); it will override this"
+            "HPA api-hpa keeps 2–8; a value outside is reverted"
         ]
+    );
+    assert_eq!(
+        warnings(&scale_to(&target, 9)),
+        ["HPA api-hpa keeps 2–8; a value outside is reverted"]
+    );
+    // The bounds themselves are inside.
+    assert_eq!(
+        warnings(&scale_to(&target, 8)),
+        ["HPA api-hpa manages replicas (2–8); it will override this"]
     );
     // An HPA of another workload or another kind is not this workload's.
     for other in [

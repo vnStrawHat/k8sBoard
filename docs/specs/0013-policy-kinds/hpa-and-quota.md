@@ -115,3 +115,4 @@ WHY **AT QUOTA** (Bad), the fullest item (highest ratio), when its ratio is ≥ 
 - Event times in Scaling events and Blocked creations use `run_label` in the system time zone.
 - A denied related watch is not started: the shell filters the subject with `denied_related_check`, and the section paints "Not permitted: {check}".
 - A quota item with no `used` yet reads `— / {hard}` and has no bar (a plain field).
+- **An HPA undoes a manual scale (UX round 3, M6):** the Scale popover and confirm read the HPA range when the Issues feed has the HPAs loaded: inside it `HPA web manages replicas (1–3); it will override this`, outside `HPA web keeps 1–3; a value outside is reverted`. After a Scale of a workload that such an HPA targets, `hpa_watch.rs` follows `spec.replicas` of the row for 30 s and, when it moves away from the requested count, shows the warn toast `HPA web set replicas back to 3 (max 3)` (the bound is named when the HPA stopped at its min or max).

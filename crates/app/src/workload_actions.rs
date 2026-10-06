@@ -591,13 +591,19 @@ pub(crate) fn scale_warnings(target: &ScaleTarget, replicas: u32) -> Vec<SharedS
         warnings.push(format!("Scaling down from {} to {replicas}", target.desired).into());
     }
     if let Some(hpa) = &target.hpa {
-        warnings.push(
+        // A value inside the range may still move with the load; one outside is always reverted.
+        let text = if (hpa.min..=hpa.max).contains(&replicas) {
             format!(
                 "HPA {} manages replicas ({}–{}); it will override this",
                 hpa.name, hpa.min, hpa.max
             )
-            .into(),
-        );
+        } else {
+            format!(
+                "HPA {} keeps {}–{}; a value outside is reverted",
+                hpa.name, hpa.min, hpa.max
+            )
+        };
+        warnings.push(text.into());
     }
     if target.is_helm_managed {
         warnings.push(HELM_MANAGED_WARNING.into());

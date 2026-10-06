@@ -1261,8 +1261,44 @@ fn finish_commit(
                 } else {
                     notify_with_restart(window, cx, notice, shell, &intent.cluster, consumers);
                 }
+                if result.is_ok() {
+                    watch_hpa_after_scale(shell, intent, window.window_handle(), cx);
+                }
             }
         }
+    });
+}
+
+/// After a Scale of a workload that an HPA targets: follows its replicas for a while, because the
+/// HPA may set them back. The HPA is read from the Issues feed as the Scale warning reads it.
+fn watch_hpa_after_scale(
+    shell: &WeakEntity<AppShell>,
+    intent: &WriteIntent,
+    window: AnyWindowHandle,
+    cx: &mut App,
+) {
+    let (ResourceAction::Scale(_), WriteOperation::ScaleWorkload { replicas }) =
+        (intent.action, intent.request.operation())
+    else {
+        return;
+    };
+    let target = intent.request.target();
+    let Some(key) = ResourceKey::of_object(target.kind_name(), target.namespace(), target.name())
+    else {
+        return;
+    };
+    let subject = ClusterObject::new(intent.cluster.clone(), key);
+    let hpa = shell
+        .read_with(cx, |shell, cx| shell.scale_target_of(&subject, cx))
+        .ok()
+        .flatten()
+        .and_then(|target| target.hpa);
+    let Some(hpa) = hpa else {
+        return;
+    };
+    let replicas = *replicas;
+    let _ = shell.update(cx, |shell, cx| {
+        shell.watch_hpa_scale(subject, replicas, hpa, window, cx);
     });
 }
 

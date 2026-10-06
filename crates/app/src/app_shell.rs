@@ -155,6 +155,8 @@ pub(crate) mod drain_dialog;
 pub(crate) mod drain_driver;
 #[path = "edit_yaml_flow.rs"]
 mod edit_yaml_flow;
+#[path = "hpa_watch.rs"]
+mod hpa_watch;
 #[path = "keyboard_navigation.rs"]
 mod keyboard_navigation;
 #[path = "leaving_work.rs"]
