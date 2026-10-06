@@ -840,3 +840,14 @@ fn a_text_over_two_mebibytes_is_refused_before_parsing() {
         Err(EditError::TooLarge)
     ));
 }
+
+#[test]
+fn the_managed_by_label_marks_a_helm_object() {
+    assert!(!deployment_base().is_helm_managed());
+    let mut object = deployment();
+    object["metadata"]["labels"] = json!({"app.kubernetes.io/managed-by": "Helm"});
+    assert!(base(ObjectKind::Deployment, "api", object).is_helm_managed());
+    let mut other = deployment();
+    other["metadata"]["labels"] = json!({"app.kubernetes.io/managed-by": "Tiller"});
+    assert!(!base(ObjectKind::Deployment, "api", other).is_helm_managed());
+}

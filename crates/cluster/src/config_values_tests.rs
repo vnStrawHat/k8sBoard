@@ -478,3 +478,18 @@ fn change_paths_are_sorted_by_key_with_markers() {
         ]
     );
 }
+
+#[test]
+fn label_terms_and_pairs_agree_on_helm() {
+    let terms = [
+        "app=api".to_owned(),
+        "app.kubernetes.io/managed-by=Helm".to_owned(),
+    ];
+    assert!(terms_are_helm_managed(&terms));
+    assert!(!terms_are_helm_managed(&terms[..1]));
+    assert!(!terms_are_helm_managed(&[
+        "app.kubernetes.io/managed-by=helm".to_owned()
+    ]));
+    assert!(is_helm_managed([("app.kubernetes.io/managed-by", "Helm")]));
+    assert!(!is_helm_managed([("other", "Helm")]));
+}

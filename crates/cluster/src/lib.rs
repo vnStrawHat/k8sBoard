@@ -99,8 +99,9 @@ pub use config_map::{
     ConfigMapKey, ConfigMapSummary, ConfigMapValue, ConfigMapValues, ValuePreview,
 };
 pub use config_values::{
-    BaseNotes, DataField, DataFieldChange, KeyChange, KeyContent, MAX_INLINE_VALUE, NewValue,
-    ValueKey, ValuesBase, ValuesBaseError, ValuesEdit, ValuesEditError, is_valid_key_name,
+    BaseNotes, DataField, DataFieldChange, HELM_MANAGED_WARNING, KeyChange, KeyContent,
+    MAX_INLINE_VALUE, NewValue, ValueKey, ValuesBase, ValuesBaseError, ValuesEdit, ValuesEditError,
+    is_helm_managed, is_valid_key_name, terms_are_helm_managed,
 };
 pub use connection::{ClusterConnection, ClusterError, ServerVersion};
 pub use container_spec::{

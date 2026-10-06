@@ -5,7 +5,8 @@
 use std::cell::Cell;
 
 use cluster::{
-    DeploymentSummary, ObjectKind, ObjectRef, ReplicaSetSummary, WriteOperation, WriteRequest,
+    DeploymentSummary, HELM_MANAGED_WARNING, ObjectKind, ObjectRef, ReplicaSetSummary,
+    WriteOperation, WriteRequest, terms_are_helm_managed,
 };
 use gpui_kit::SharedString;
 
@@ -433,7 +434,11 @@ pub(crate) fn roll_back_intent(
             replica_set: target.replica_set.clone(),
             revision: target.revision,
         },
-        warnings: Vec::new(),
+        warnings: if terms_are_helm_managed(&deployment.labels) {
+            vec![HELM_MANAGED_WARNING.into()]
+        } else {
+            Vec::new()
+        },
     };
     intent_of(scope, &workload, described)
 }
@@ -481,19 +486,22 @@ pub(crate) struct ScaleTarget {
     pub(crate) ready: u32,
     /// Set only when the HPA list is already loaded and an HPA targets this workload.
     pub(crate) hpa: Option<ManagingHpa>,
+    /// Helm renders the workload, so its next upgrade sets the replicas again.
+    pub(crate) is_helm_managed: bool,
 }
 
 impl ScaleTarget {
     /// `None` for a row that does not scale (anything but a Deployment or a StatefulSet).
     /// `hpas` is the HPA list when it is loaded, else empty: no list starts for a hint.
     pub(crate) fn of(object: &KindObject, hpas: &[KindObject]) -> Option<Self> {
-        let (kind, namespace, name, desired, ready) = match object {
+        let (kind, namespace, name, desired, ready, labels) = match object {
             KindObject::Deployment(d) => (
                 ObjectKind::Deployment,
                 &d.namespace,
                 &d.name,
                 d.desired,
                 d.ready,
+                &d.labels,
             ),
             KindObject::StatefulSet(s) => (
                 ObjectKind::StatefulSet,
@@ -501,6 +509,7 @@ impl ScaleTarget {
                 &s.name,
                 s.desired,
                 s.ready,
+                &s.labels,
             ),
             _ => return None,
         };
@@ -511,6 +520,7 @@ impl ScaleTarget {
             desired,
             ready,
             hpa: managing_hpa(hpas, kind, namespace, name),
+            is_helm_managed: terms_are_helm_managed(labels),
         })
     }
 
@@ -588,6 +598,9 @@ pub(crate) fn scale_warnings(target: &ScaleTarget, replicas: u32) -> Vec<SharedS
             )
             .into(),
         );
+    }
+    if target.is_helm_managed {
+        warnings.push(HELM_MANAGED_WARNING.into());
     }
     warnings
 }

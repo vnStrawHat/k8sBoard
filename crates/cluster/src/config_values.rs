@@ -33,6 +33,22 @@ const HELM_OWNER: &str = "helm";
 const MANAGED_BY_LABEL: &str = "app.kubernetes.io/managed-by";
 const HELM_MANAGER: &str = "Helm";
 
+/// What every write dialog and check says about an object that Helm owns: the next `helm upgrade`
+/// renders it again from the chart.
+pub const HELM_MANAGED_WARNING: &str = "Managed by Helm: the next upgrade replaces this change";
+
+/// Whether the labels (`key`, `value` pairs) say Helm manages the object.
+pub fn is_helm_managed<'a>(labels: impl IntoIterator<Item = (&'a str, &'a str)>) -> bool {
+    labels
+        .into_iter()
+        .any(|(key, value)| key == MANAGED_BY_LABEL && value == HELM_MANAGER)
+}
+
+/// `is_helm_managed` for the `key=value` label terms of a workload summary.
+pub fn terms_are_helm_managed(terms: &[String]) -> bool {
+    is_helm_managed(terms.iter().filter_map(|term| term.split_once('=')))
+}
+
 /// What the editor opens: key metadata, flags, and ConfigMap text. Built only by `values_base`.
 // Debug is manual: kind, namespace, name, resourceVersion, key count.
 pub struct ValuesBase {
@@ -500,11 +516,13 @@ fn finish_base(
                 source: MISSING_VERSION.into(),
             })
         })?;
-    let is_helm_managed = metadata
-        .labels
-        .as_ref()
-        .and_then(|labels| labels.get(MANAGED_BY_LABEL))
-        .is_some_and(|manager| manager == HELM_MANAGER);
+    let is_helm_managed = is_helm_managed(
+        metadata
+            .labels
+            .iter()
+            .flatten()
+            .map(|(key, value)| (key.as_str(), value.as_str())),
+    );
     let owner = metadata
         .owner_references
         .iter()

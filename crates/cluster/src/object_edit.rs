@@ -7,6 +7,7 @@ use std::fmt;
 
 use serde_json::Value;
 
+use crate::config_values::is_helm_managed;
 use crate::connection::{ClusterConnection, ClusterError};
 use crate::edit_placeholders::{self, Unrestorable};
 use crate::edit_preview::{FieldPath, copy_path, field_paths, has_last_applied};
@@ -108,6 +109,20 @@ impl EditBase {
 
     pub fn is_secret(&self) -> bool {
         self.target.builtin_kind() == Some(ObjectKind::Secret)
+    }
+
+    /// Whether the object's `managed-by` label says Helm renders it.
+    pub fn is_helm_managed(&self) -> bool {
+        let labels = self
+            .masked
+            .pointer("/metadata/labels")
+            .and_then(Value::as_object);
+        is_helm_managed(
+            labels
+                .into_iter()
+                .flatten()
+                .filter_map(|(key, value)| Some((key.as_str(), value.as_str()?))),
+        )
     }
 
     /// Whether the object carries `kubectl.kubernetes.io/last-applied-configuration`.

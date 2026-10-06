@@ -303,7 +303,7 @@ fn container_terminated_exit_zero_is_done_nonzero_is_bad() {
         false,
     );
     let label = container_state_label(&failed);
-    assert_eq!(label.text, "Error");
+    assert_eq!(label.text, "Error · exit 1");
     assert_eq!(label.tone, StatusTone::Bad);
 }
 
@@ -472,4 +472,20 @@ fn scheduling_label_names_schedulable_and_cordoned() {
         (cordoned.text.as_ref(), cordoned.tone),
         ("Cordoned", StatusTone::Warn)
     );
+}
+
+#[test]
+fn a_failed_container_names_its_exit_code_and_keeps_its_reason() {
+    let text_of = |reason, exit_code| {
+        let state = ContainerState::Terminated(termination(reason, exit_code));
+        container_state_label(&container(ContainerKind::Main, state, false)).text
+    };
+    assert_eq!(
+        text_of(Some(StatusReason::OomKilled), 137),
+        "OOMKilled · exit 137"
+    );
+    // Without a reason the label falls back to Error, still with the code.
+    assert_eq!(text_of(None, 2), "Error · exit 2");
+    assert_eq!(text_of(Some(StatusReason::Completed), 0), "Completed");
+    assert_eq!(text_of(None, 0), "Completed");
 }

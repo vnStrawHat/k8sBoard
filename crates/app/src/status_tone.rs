@@ -282,12 +282,17 @@ pub(crate) fn container_state_label(container: &ContainerSummary) -> StatusLabel
         ContainerState::Terminated(termination) => {
             let is_clean_exit = termination.exit_code == 0;
             let fallback = if is_clean_exit { "Completed" } else { "Error" };
+            let mut text = termination
+                .reason
+                .as_ref()
+                .map_or_else(|| fallback.to_owned(), ToString::to_string);
+            // A failed container names its exit code, so the reason (Error, OOMKilled) is not all
+            // there is to read; the reason stays as the server gave it.
+            if !is_clean_exit {
+                text.push_str(&format!(" · exit {}", termination.exit_code));
+            }
             StatusLabel {
-                text: termination
-                    .reason
-                    .as_ref()
-                    .map_or_else(|| fallback.to_owned(), ToString::to_string)
-                    .into(),
+                text: text.into(),
                 tone: if is_clean_exit {
                     StatusTone::Done
                 } else {

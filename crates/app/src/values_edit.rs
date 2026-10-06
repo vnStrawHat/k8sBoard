@@ -14,8 +14,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use cluster::{
-    ClusterConnection, KeyChange, KeyContent, NewValue, ObjectKind, ObjectRef, ValueKey,
-    ValuesBase, ValuesBaseError, ValuesEditError, WriteOperation, WriteRequest, is_valid_key_name,
+    ClusterConnection, HELM_MANAGED_WARNING, KeyChange, KeyContent, NewValue, ObjectKind,
+    ObjectRef, ValueKey, ValuesBase, ValuesBaseError, ValuesEditError, WriteOperation,
+    WriteRequest, is_valid_key_name,
 };
 use gpui_kit::component::input::{InputEvent, InputState, TextareaState};
 use gpui_kit::{
@@ -1065,7 +1066,7 @@ fn key_of_field(field: &str) -> Option<&str> {
 fn warnings_of(base: &ValuesBase) -> Vec<SharedString> {
     let mut lines: Vec<SharedString> = Vec::new();
     if base.notes().is_helm_managed {
-        lines.push("Managed by Helm: the next upgrade replaces this change".into());
+        lines.push(HELM_MANAGED_WARNING.into());
     }
     if let Some(owner) = &base.notes().owner {
         lines.push(format!("Owned by {owner}: its controller may replace this change").into());
@@ -1134,10 +1135,7 @@ impl ValuesEditView {
         view.rows.sort_by(|left, right| left.name.cmp(&right.name));
         view.is_fixture = true;
         view.resource_version = Some("88412093".into());
-        view.warnings = vec![
-            "Managed by Helm: the next upgrade replaces this change".into(),
-            RESTART_WARNING.into(),
-        ];
+        view.warnings = vec![HELM_MANAGED_WARNING.into(), RESTART_WARNING.into()];
         view
     }
 }

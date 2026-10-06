@@ -2,7 +2,7 @@
 //! side panel of changes and checks, and the footer. A child of `yaml_edit` because it reads the
 //! view's state; it changes none of it except through the buttons' handlers.
 
-use cluster::ObjectKind;
+use cluster::{EditBase, HELM_MANAGED_WARNING, ObjectKind};
 use gpui_kit::component::alert::Alert;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::Editor;
@@ -399,6 +399,14 @@ impl YamlEditView {
                     .text_xs()
                     .text_color(tone_color(StatusTone::Warn, cx))
                     .child(line.clone()),
+            );
+        }
+        if self.base.as_ref().is_some_and(EditBase::is_helm_managed) {
+            side = side.child(
+                div()
+                    .text_xs()
+                    .text_color(tone_color(StatusTone::Warn, cx))
+                    .child(HELM_MANAGED_WARNING),
             );
         }
         if let PreviewState::Passed(passed) = &self.preview {

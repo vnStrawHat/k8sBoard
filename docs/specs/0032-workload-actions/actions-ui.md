@@ -47,7 +47,7 @@ Every builder returns a 0030 `GuardedIntent { cluster, kind: Write(request), war
 
 | Action | Label | `warnings` (each only when it applies) |
 |---|---|---|
-| Scale | `Scale deployment api from 3 to 5` | `Scaling down from 3 to 1`; `HPA {name} manages replicas ({min}–{max}); it will override this` (HPA list loaded and targets the row) |
+| Scale | `Scale deployment api from 3 to 5` | `Scaling down from 3 to 1`; `HPA {name} manages replicas ({min}–{max}); it will override this` (HPA list loaded and targets the row); `Managed by Helm: the next upgrade replaces this change` (label `app.kubernetes.io/managed-by=Helm`) |
 | Restart | `Restart rollout of statefulset kafka` | `Strategy OnDelete: pods restart only when deleted` |
 | Pause / Resume | `Pause rollout of deployment api` | — |
 | Roll back | `Roll back deployment api to rev 37 (2.13.4)` | — |
@@ -90,3 +90,5 @@ No replicas input in the drawer (W7 note 4). `ValuePopover { form: ValueForm, ta
 - No optimistic UI: rows and drawers update from the existing watches.
 
 **One vocabulary (UX walkthrough 5a):** the menu and the selection bar use the same words: `Restart rollout`, `Re-run job`, `Edit min / max`; drawers and columns say `Strategy`, `Up-to-date`, `Last run` for every workload kind.
+
+The Helm line (`cluster::HELM_MANAGED_WARNING`, detection `is_helm_managed` shared with Edit values and Edit YAML) is also a warning of Roll back, and Edit YAML shows it in its Checks panel. A terminated container reads `Error · exit 1` (reason kept, exit code appended for a non-zero exit; `OOMKilled · exit 137`).

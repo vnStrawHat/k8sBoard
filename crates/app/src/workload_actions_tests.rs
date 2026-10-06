@@ -929,3 +929,39 @@ fn bulk_refuses_an_action_with_no_bulk_form() {
         Some("Not a bulk action")
     );
 }
+
+fn helm_managed(mut summary: DeploymentSummary) -> DeploymentSummary {
+    summary
+        .labels
+        .push("app.kubernetes.io/managed-by=Helm".to_owned());
+    summary
+}
+
+#[test]
+fn scale_warns_when_helm_manages_the_workload() {
+    let object = KindObject::Deployment(helm_managed(deployment("api")));
+    let target = ScaleTarget::of(&object, &[]).expect("a scale target");
+    let intent = scale_to(&target, 5);
+    assert_eq!(intent.warnings, [HELM_MANAGED_WARNING]);
+    // A workload that Helm does not manage has no such line.
+    assert!(scale_to(&deployment_target(&[]), 5).warnings.is_empty());
+}
+
+#[test]
+fn roll_back_warns_when_helm_manages_the_deployment() {
+    let cluster = test_cluster();
+    let scope = WorkloadScope {
+        cluster: &cluster,
+        cluster_name: "stg-b",
+    };
+    let target = RevisionTarget {
+        replica_set: "api-6c".to_owned(),
+        revision: 6,
+        tag: None,
+    };
+    let helm =
+        roll_back_intent(&scope, &helm_managed(deployment("api")), &target).expect("an intent");
+    assert_eq!(helm.warnings, [HELM_MANAGED_WARNING]);
+    let plain = roll_back_intent(&scope, &deployment("api"), &target).expect("an intent");
+    assert!(plain.warnings.is_empty());
+}
