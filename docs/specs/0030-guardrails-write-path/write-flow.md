@@ -65,7 +65,7 @@ The steps below are `run_guarded`'s. **Dry-run in steps 3–4:** `Write`, `Batch
 3. Start the dry-run at once.
 4. Open the confirm dialog; Apply is enabled only while `commit_block` is `None`.
 5. Commit (from the dialog): `Write` → `checked_write(WriteStep { intent, generation, mode: Commit { confirmed }, note })`, which re-resolves `guard_for(&intent.cluster)`, runs `commit_block`, and only on `None` sends `connection.write(&request, Commit)`. `Connect` → the lock re-check, then its callback. `Batch` → one `checked_write` per item (0032 bulk-write.md).
-6. Audit line (inside `checked_write` for writes; audit-log.md), then a notification: success `{label}: done`, or `{label}: created {created_name}` when the outcome names one (theme success); failure per the table below.
+6. Audit line (inside `checked_write` for writes; audit-log.md), then a notification: success `{Past-tense label}.` (`Cordoned node wk-04.`; `{label}: done` when the verb is not in the table), with `Watching rollout…` added for Restart rollout and Roll back, and a View button that reveals the workload, or `{label}: created {created_name}` when the outcome names one (theme success); failure per the table below.
 
 `commit_block` reasons, first match wins: guard `None` or generation changed → `{cluster} is no longer open; nothing was changed`; `Locked` → `{cluster} was locked; nothing was changed`; dry-run `Running` → `Waiting for the dry-run…`; `Failed(text)` → text; `Rejected(reason)` → `An admission webhook does not support dry-run, so this change cannot be checked: {reason}. Nothing was changed.`; `Differs` → `Type {expected} to confirm`.
 

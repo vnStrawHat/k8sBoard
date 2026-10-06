@@ -804,3 +804,37 @@ fn workload_kinds_share_one_vocabulary() {
     assert!(columns(ResourceKind::StatefulSets).contains(&"Strategy"));
     assert!(columns(ResourceKind::CronJobs).contains(&"Last run"));
 }
+
+#[test]
+fn deployment_and_stateful_set_lead_with_rollout_bars_like_a_daemon_set() {
+    let leads = |row: &KindRow, title: &str| -> Vec<DetailRow> {
+        row.section(title).expect("section").rows.clone()
+    };
+    let mut rolling = deployment();
+    (rolling.desired, rolling.ready, rolling.up_to_date) = (4, 2, 4);
+    let rows = leads(&deployment_row(&rolling), "Replicas");
+    assert_eq!(
+        rows[0],
+        DetailRow::Bar {
+            label: "Ready".into(),
+            percent: 50,
+            text: "2 / 4".into(),
+            tone: Some(StatusTone::Warn),
+        }
+    );
+    assert!(matches!(&rows[1], DetailRow::Bar { label, text, .. }
+        if label == "Up-to-date" && text == "4 / 4"));
+    let repeated = |rows: &[DetailRow]| {
+        rows.iter().any(|row| {
+            matches!(row, DetailRow::Field { label, .. }
+            if label == "Ready" || label == "Up-to-date")
+        })
+    };
+    assert!(!repeated(&rows));
+    let rows = leads(&stateful_set_row(&stateful_set()), "Replicas");
+    assert!(matches!(&rows[0], DetailRow::Bar { label, .. } if label == "Ready"));
+    assert!(matches!(&rows[1], DetailRow::Bar { label, .. } if label == "Up-to-date"));
+    assert!(!repeated(&rows));
+    let rollout = leads(&daemon_set_row(&daemon_set()), "Rollout by node");
+    assert!(!repeated(&rollout));
+}

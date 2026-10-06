@@ -44,10 +44,11 @@ pub(crate) fn deployment_row(deployment: &DeploymentSummary) -> KindRow {
             tone: None,
         },
     ];
+    // The bars carry Ready and Up-to-date, so the rows below do not repeat them.
     let mut replicas = vec![
+        rollout_bar("Ready", deployment.ready, deployment.desired),
+        rollout_bar("Up-to-date", deployment.up_to_date, deployment.desired),
         DetailRow::field("Desired", KindCell::count(deployment.desired)),
-        DetailRow::field("Ready", KindCell::count(deployment.ready)),
-        DetailRow::field("Up-to-date", KindCell::count(deployment.up_to_date)),
         DetailRow::field("Available", KindCell::count(deployment.available)),
         DetailRow::field(
             "Strategy",
@@ -209,10 +210,10 @@ pub(crate) fn stateful_set_row(set: &StatefulSetSummary) -> KindRow {
         DetailSection {
             title: "Replicas",
             rows: vec![
+                rollout_bar("Ready", set.ready, set.desired),
+                rollout_bar("Up-to-date", set.updated, set.desired),
                 DetailRow::field("Desired", KindCell::count(set.desired)),
-                DetailRow::field("Ready", KindCell::count(set.ready)),
                 DetailRow::field("Current", KindCell::count(set.current)),
-                DetailRow::field("Up-to-date", KindCell::count(set.updated)),
                 DetailRow::field(
                     "Service",
                     KindCell::mono_or_absent(set.service_name.as_deref().unwrap_or_default()),
@@ -283,8 +284,6 @@ pub(crate) fn daemon_set_row(set: &DaemonSetSummary) -> KindRow {
         rollout_bar("Up-to-date", set.up_to_date, set.desired),
         DetailRow::field("Desired", KindCell::count(set.desired)),
         DetailRow::field("Current", KindCell::count(set.current)),
-        DetailRow::field("Ready", KindCell::count(set.ready)),
-        DetailRow::field("Up-to-date", KindCell::count(set.up_to_date)),
         DetailRow::field("Available", KindCell::count(set.available)),
     ];
     if set.misscheduled > 0 {

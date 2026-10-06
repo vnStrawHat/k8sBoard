@@ -336,12 +336,16 @@ fn a_stream_start_has_no_dry_run_to_wait_for_but_still_checks_lock_and_name() {
 #[test]
 fn a_create_names_what_it_made_in_the_notice() {
     assert_eq!(
-        success_notice("Run cronjob reconcile now", Some("reconcile-manual-x7k2p")),
+        success_notice(
+            "Run cronjob reconcile now",
+            Some("reconcile-manual-x7k2p"),
+            ResourceAction::TriggerCronJob
+        ),
         "Run cronjob reconcile now: created reconcile-manual-x7k2p"
     );
     assert_eq!(
-        success_notice("Cordon node wk-04", None),
-        "Cordon node wk-04: done"
+        success_notice("Cordon node wk-04", None, ResourceAction::Cordon),
+        "Cordoned node wk-04."
     );
 }
 

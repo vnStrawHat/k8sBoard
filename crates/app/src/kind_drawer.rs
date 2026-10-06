@@ -34,7 +34,8 @@ use crate::kind_diagnosis::{DiagnosisInputs, KindDiagnosis, kind_diagnosis};
 use crate::kind_join::{matching_pods, service_health_of};
 use crate::kind_row::{DetailRow, KindCell, KindObject, KindRow, LiveContent};
 use crate::live_sections::{
-    RollBackGate, helm_history_rows, live_rows, loaded_replica_sets, next_run_text, owned_pods,
+    RollBackGate, all_pods_ready, helm_history_rows, live_rows, loaded_replica_sets, next_run_text,
+    owned_pods,
 };
 use crate::monitor_tab::{MonitorView, monitor_tab};
 use crate::object_events::{event_subject, recent_events};
@@ -305,6 +306,11 @@ fn overview(paint: &DrawerPaint, cx: &Context<AppShell>) -> Overview {
         sections.push(why_box(&diagnosis, cx));
     }
     for section in &row.sections {
+        // An all-ready DaemonSet has nothing to list under "Not ready"; the bars already say so.
+        if section.rows == [DetailRow::Live(LiveContent::NotReadyPods)] && all_pods_ready(row, live)
+        {
+            continue;
+        }
         section_starts.push((section.title, sections.len()));
         // The values view draws its own heading, which names the revision.
         if section.title != VALUES_CHANGE_TITLE {

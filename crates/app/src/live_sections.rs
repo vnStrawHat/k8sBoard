@@ -47,7 +47,7 @@ use crate::kind_join::{
     endpoint_ports, secret_user_list, secret_users, service_slices, users_of,
 };
 use crate::kind_join::{UsageSample, claim_sample, is_shared_filesystem};
-use crate::kind_row::{DetailRow, KindObject, KindRow, LiveContent, owns_pod, percent};
+use crate::kind_row::{DetailRow, KindObject, KindRow, LiveContent, PodOwner, owns_pod, percent};
 use crate::network_rows::{ExposingIngress, TlsSecrets, exposing_ingresses, ingress_tls_rows};
 use crate::object_events::event_subject;
 use crate::permission_table::{CanDoChips, can_do_chips, permission_table};
@@ -696,6 +696,21 @@ fn not_ready_label(pod: &PodSummary, nodes: &[NodeSummary]) -> StatusLabel {
     }
 }
 
+/// Whether the loaded pods leave nothing to list under "Not ready": the drawer then hides the
+/// section instead of saying so.
+pub(crate) fn all_pods_ready(row: &KindRow, live: &LiveCluster) -> bool {
+    match (&row.related_pods, live.pods.ready_items()) {
+        (Some(owner), Some(pods)) => all_owned_ready(owner, pods),
+        _ => false,
+    }
+}
+
+fn all_owned_ready(owner: &PodOwner, pods: &[PodSummary]) -> bool {
+    !pods
+        .iter()
+        .any(|pod| owns_pod(owner, pod) && is_pod_not_ready(pod))
+}
+
 fn not_ready_rows(row: &KindRow, live: &LiveCluster, cx: &Context<AppShell>) -> Vec<AnyElement> {
     if live.pods.is_loading() {
         return vec![note("Loading pods…", cx)];
@@ -707,9 +722,6 @@ fn not_ready_rows(row: &KindRow, live: &LiveCluster, cx: &Context<AppShell>) -> 
         .into_iter()
         .filter(|pod| is_pod_not_ready(pod))
         .collect();
-    if not_ready.is_empty() {
-        return vec![note("All pods are ready", cx)];
-    }
     let hidden = not_ready.len().saturating_sub(MAX_NOT_READY_PODS);
     not_ready
         .iter()

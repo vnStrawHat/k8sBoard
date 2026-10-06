@@ -14,7 +14,9 @@ use cluster::{
     ObjectRef, PortForwardPermit, WriteError, WriteMode, WriteOperation, WriteOutcome,
     WriteRequest,
 };
+use gpui_kit::component::Sizable as _;
 use gpui_kit::component::WindowExt as _;
+use gpui_kit::component::button::Button;
 use gpui_kit::component::notification::Notification;
 use gpui_kit::{
     AnyWindowHandle, App, AppContext as _, AsyncApp, Context, Entity, SharedString, WeakEntity,
@@ -38,7 +40,7 @@ use crate::resource_actions::{
     unavailable_text,
 };
 use crate::settings::AppSettings;
-use crate::table_selection::ClusterObject;
+use crate::table_selection::{ClusterObject, ResourceKey};
 use crate::value_popover::ValuePopover;
 use crate::workload_actions::{
     PAUSED_REASON, RevisionTarget, ScaleTarget, WorkloadScope, roll_back_intent, row_block,
@@ -604,12 +606,58 @@ pub(crate) fn failure_notice(label: &str, error: &CheckedWriteError) -> String {
     }
 }
 
-/// The notice of a commit that went through: a create names what it made.
-fn success_notice(label: &str, created: Option<&str>) -> String {
-    match created {
-        Some(name) => format!("{label}: created {name}"),
-        None => format!("{label}: done"),
+/// The leading verb of an intent label and its past tense: `Cordon node wk-04` reads
+/// `Cordoned node wk-04` once it went through.
+const PAST_TENSE: [(&str, &str); 14] = [
+    ("Restart", "Restarted"),
+    ("Pause", "Paused"),
+    ("Resume", "Resumed"),
+    ("Suspend", "Suspended"),
+    ("Scale", "Scaled"),
+    ("Roll back", "Rolled back"),
+    ("Re-run", "Re-ran"),
+    ("Run", "Ran"),
+    ("Uncordon", "Uncordoned"),
+    ("Cordon", "Cordoned"),
+    ("Expand", "Expanded"),
+    ("Edit", "Edited"),
+    ("Set", "Set"),
+    ("Make", "Made"),
+];
+
+/// The notice of a commit that went through: a create names what it made, a rollout action says
+/// the rollout is under way, and a label of an unknown verb keeps the plain `done`.
+fn success_notice(label: &str, created: Option<&str>, action: ResourceAction) -> String {
+    if let Some(name) = created {
+        return format!("{label}: created {name}");
     }
+    let past = PAST_TENSE.iter().find_map(|(verb, past)| {
+        let rest = label.strip_prefix(verb)?.strip_prefix(' ')?;
+        Some(format!("{past} {rest}"))
+    });
+    match (past, starts_rollout(action)) {
+        (Some(past), true) => format!("{past}. Watching rollout…"),
+        (Some(past), false) => format!("{past}."),
+        (None, _) => format!("{label}: done"),
+    }
+}
+
+/// Whether the action starts a rollout the drawer can show progress for.
+fn starts_rollout(action: ResourceAction) -> bool {
+    matches!(
+        action,
+        ResourceAction::RestartRollout(_) | ResourceAction::RollBack
+    )
+}
+
+/// The workload a rollout action started a rollout of, for the notice's View button.
+fn rollout_subject(intent: &WriteIntent) -> Option<ClusterObject> {
+    if !starts_rollout(intent.action) {
+        return None;
+    }
+    let target = intent.request.target();
+    let key = ResourceKey::of_object(target.kind_name(), target.namespace(), target.name())?;
+    Some(ClusterObject::new(intent.cluster.clone(), key))
 }
 
 /// `Created ConfigMap payments/new-config` (a Namespace has no `payments/`).
@@ -1058,7 +1106,7 @@ impl AppShell {
                     shell.create_commit_finished(&intent, &result, cx)
                 });
             }
-            finish_commit(&dialog, &intent, handle, result, cx);
+            finish_commit(&shell, &dialog, &intent, handle, result, cx);
         })
         .detach();
     }
@@ -1067,6 +1115,7 @@ impl AppShell {
 /// Shows the result of a commit: the dialog closes with a notice, or stays with a Retry when the
 /// failure is one the user can retry and the dialog is still open.
 fn finish_commit(
+    shell: &WeakEntity<AppShell>,
     dialog: &WeakEntity<ConfirmDialog>,
     intent: &WriteIntent,
     window: AnyWindowHandle,
@@ -1114,7 +1163,7 @@ fn finish_commit(
         Ok(()) if intent.action == ResourceAction::RenewCertificate => {
             renewal_notice(intent.request.target())
         }
-        Ok(()) => success_notice(&label, created.as_deref()),
+        Ok(()) => success_notice(&label, created.as_deref(), intent.action),
         Err(error) => failure_notice(&label, error),
     };
     let _ = cx.update_window(window, |_, window, cx| {
@@ -1125,12 +1174,39 @@ fn finish_commit(
                 dialog.close(window, cx);
             }
         });
-        notify_with(window, cx, notice, result.is_ok());
+        match rollout_subject(intent).filter(|_| result.is_ok()) {
+            Some(subject) => notify_with_view(window, cx, notice, shell, subject),
+            None => notify_with(window, cx, notice, result.is_ok()),
+        }
     });
 }
 
 pub(super) fn notify(window: &mut Window, cx: &mut App, text: String) {
     notify_with(window, cx, text, false);
+}
+
+/// A success notice with a View button that reveals `subject` (recorded for Back).
+fn notify_with_view(
+    window: &mut Window,
+    cx: &mut App,
+    text: String,
+    shell: &WeakEntity<AppShell>,
+    subject: ClusterObject,
+) {
+    let shell = shell.clone();
+    let notification = Notification::success(text).action(move |_, _, cx| {
+        let (shell, subject) = (shell.clone(), subject.clone());
+        Button::new("rollout-view")
+            .label("View")
+            .small()
+            .outline()
+            .on_click(cx.listener(move |notification, _, window, cx| {
+                notification.dismiss(window, cx);
+                let subject = subject.clone();
+                let _ = shell.update(cx, |shell, cx| shell.reveal_object(subject, cx));
+            }))
+    });
+    window.push_notification(notification, cx);
 }
 
 pub(super) fn notify_with(window: &mut Window, cx: &mut App, text: String, is_success: bool) {

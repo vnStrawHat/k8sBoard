@@ -1831,3 +1831,20 @@ fn a_policy_that_selects_everything_lists_the_namespace_pods() {
     let web = cluster::Selector::of_labels(&["app=web".to_owned()]).expect("a selector");
     assert_eq!(names(&web), ["web-a"]);
 }
+
+#[test]
+fn a_node_whose_pods_are_all_ready_has_no_not_ready_section() {
+    let owner = PodOwner::Node {
+        name: "wk-1".to_owned(),
+    };
+    let on_node = |name: &str, node: &str, ready: u32| {
+        let mut pod = labelled_pod("shop", name, "app=api", true);
+        pod.node_name = Some(node.to_owned());
+        pod.ready = cluster::ReadyCount { ready, total: 1 };
+        pod
+    };
+    let ready = [on_node("a", "wk-1", 1), on_node("b", "wk-2", 0)];
+    assert!(all_owned_ready(&owner, &ready));
+    let broken = [on_node("a", "wk-1", 1), on_node("b", "wk-1", 0)];
+    assert!(!all_owned_ready(&owner, &broken));
+}
