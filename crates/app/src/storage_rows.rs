@@ -21,14 +21,15 @@ const RESIZE_PENDING: &str = "Resize pending";
 const RESIZE_PENDING_DETAIL: &str = "Resize pending; restart the pod";
 
 /// The phase as the status the tables and drawers show. The tones are the app's own: idle
-/// states are Ok or Done, because Info and Warn count as unhealthy in the table chips.
+/// states are Ok or Done, because Info and Warn count as unhealthy in the table chips. Released
+/// is Warn on purpose: the volume still holds data and storage nobody is using.
 pub(crate) fn phase_label(phase: &str, is_terminating: bool) -> StatusLabel {
     let tone = if is_terminating {
         StatusTone::Info
     } else {
         match phase {
             "Bound" | "Available" => StatusTone::Ok,
-            "Released" => StatusTone::Done,
+            "Released" => StatusTone::Warn,
             "Lost" | "Failed" => StatusTone::Bad,
             _ => StatusTone::Warn,
         }

@@ -105,7 +105,7 @@ fn phase_label_tones() {
     assert_eq!(tone("Bound"), StatusTone::Ok);
     assert_eq!(tone("Available"), StatusTone::Ok);
     assert_eq!(tone("Pending"), StatusTone::Warn);
-    assert_eq!(tone("Released"), StatusTone::Done);
+    assert_eq!(tone("Released"), StatusTone::Warn);
     assert_eq!(tone("Lost"), StatusTone::Bad);
     assert_eq!(tone("Failed"), StatusTone::Bad);
     assert_eq!(tone("Something"), StatusTone::Warn);

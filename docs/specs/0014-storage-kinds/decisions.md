@@ -26,7 +26,7 @@
 | 13 | Links: PVC → PV and → StorageClass; PV → claim and → StorageClass; Mounted by → Pod. Menus: PVCs **Go to pod** (first mounting pod by name), PVs **Go to claim** | W7 menus and "related objects"; `go_to_item` from 0013 |
 | 14 | PV **RELEASED** box (Warn) explains Retain vs Delete; **RECLAIM FAILED** (Bad) for `Failed`; PVC **VOLUME LOST** (Bad) for `Lost` | W7 note "Released has a clean-up hint, Retain keeps the data"; the Clean up action itself is 0033 |
 | 15 | Badges: PVCs `Pc`, PVs `Pv` (W7 uses `Pv` for both) | the drawer header must tell a claim from a volume |
-| 16 | Status tones: Bound Ok, Available Ok, Pending Warn, Released Done, Lost and Failed Bad, terminating Info; non-default StorageClass Done | Info and Warn count as "Unhealthy" in the 0009 chip, so idle states use Ok or Done |
+| 16 | Status tones: Bound Ok, Available Ok, Pending Warn, Released Warn (the volume still holds data and space nobody uses), Lost and Failed Bad, terminating Info; non-default StorageClass Done | Info and Warn count as "Unhealthy" in the 0009 chip, so idle states use Ok or Done |
 | 17 | Columns follow W7; StorageClasses add **PVs** and keep **Age** last | W7 drawer meta "58 volumes"; 0013 decision 20 |
 | 18 | Screenshot screens: `<plural>` and `<plural>-drawer` for the three kinds; `--filter` picks a Bound PVC; empty states when UAT has none | 0005 decision 25 |
 | 19 | PV Source shows **Node affinity** chips (all required terms, `matchExpressions` and `matchFields`) instead of W7's single "Zone" row | the zone is one affinity term among others, under driver-specific keys (`topology.kubernetes.io/zone`, `topology.ebs.csi.aws.com/zone`, …); chips show it without guessing the key |

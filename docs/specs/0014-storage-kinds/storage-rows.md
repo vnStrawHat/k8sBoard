@@ -10,7 +10,7 @@ fn size_cell(text: Option<&str>) -> KindCell; // Quantity { text as written, Byt
 fn modes_text(modes: &[String]) -> String;    // short names joined ","
 ```
 
-`phase_label`: terminating → Info "Terminating"; Bound, Available → Ok; Pending → Warn; Released → Done; Lost, Failed → Bad; other text → Warn.
+`phase_label`: terminating → Info "Terminating"; Bound, Available → Ok; Pending → Warn; Released → Warn; Lost, Failed → Bad; other text → Warn.
 
 ## PVCs (step 2)
 
