@@ -574,3 +574,21 @@ fn the_date_room_is_reserved_when_the_oldest_line_is_from_another_day() {
     buffer.clear();
     assert!(!spans_other_day(buffer.oldest_timestamp(), &zone, today));
 }
+
+#[test]
+fn visible_text_in_writes_only_the_rows_of_the_range() {
+    let mut buffer = LogBuffer::new();
+    push_checked(
+        &mut buffer,
+        vec![line("a"), line("b"), line("c"), line("d")],
+    );
+    assert_eq!(
+        buffer.visible_text_in(1..3, LineTime::Hidden, &TimeZone::UTC, &[]),
+        "b\nc"
+    );
+    // A range past the end stops at the last row.
+    assert_eq!(
+        buffer.visible_text_in(3..9, LineTime::Hidden, &TimeZone::UTC, &[]),
+        "d"
+    );
+}

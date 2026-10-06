@@ -85,6 +85,9 @@ gpui_kit::actions!(
         TerminalPaste,
         TerminalFind,
         CloseTerminalFind,
+        // A log tab with selected rows (spec 0004): Ctrl C copies them and Esc clears them.
+        CopyLogLines,
+        ClearLogSelection,
         // Edit YAML (0031): applies the edit in the editor.
         ApplyEdit,
     ]
@@ -112,6 +115,9 @@ const PALETTE_INPUT: &str = "Command > Input";
 const TERMINAL: &str = "Terminal";
 /// The Find field of a shell tab.
 const TERMINAL_FIND_INPUT: &str = "ShellFind > Input";
+/// A log tab with rows selected (it adds `LogSelection` to its key context). Without a selection
+/// Ctrl C and Esc keep their workspace meaning.
+const LOG_SELECTION: &str = "LogSelection && !Input";
 /// The content of the confirm dialog, and the text field inside it.
 const WRITE_CONFIRM: &str = "WriteConfirm";
 const WRITE_CONFIRM_INPUT: &str = "WriteConfirm > Input";
@@ -260,6 +266,8 @@ pub(crate) fn bind_keys(cx: &mut App) {
         KeyBinding::new("ctrl-shift-v", TerminalPaste, Some(TERMINAL)),
         KeyBinding::new("ctrl-shift-f", TerminalFind, Some(TERMINAL)),
         KeyBinding::new("escape", CloseTerminalFind, Some(TERMINAL_FIND_INPUT)),
+        KeyBinding::new("secondary-c", CopyLogLines, Some(LOG_SELECTION)),
+        KeyBinding::new("escape", ClearLogSelection, Some(LOG_SELECTION)),
     ]);
     // On macOS the platform key is Cmd, which a shell never receives.
     #[cfg(target_os = "macos")]
@@ -413,6 +421,8 @@ pub(crate) fn shortcut_rows() -> Vec<ShortcutRow> {
         row(Dock, "Next dock tab", NextDockTab),
         row(Dock, "Previous dock tab", PreviousDockTab),
         row(Dock, "Close the dock tab", CloseDockTab),
+        row(Dock, "Copy the selected log lines", CopyLogLines),
+        row(Dock, "Clear the log selection", ClearLogSelection),
         row(Terminal, "Copy the selection (shell tab)", TerminalCopy),
         row(Terminal, "Paste (shell tab)", TerminalPaste),
         row(Terminal, "Find in the terminal (shell tab)", TerminalFind),

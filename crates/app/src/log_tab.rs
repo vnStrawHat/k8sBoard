@@ -3,6 +3,7 @@
 
 use std::cell::Cell;
 use std::collections::HashMap;
+use std::ops::Range;
 use std::rc::Rc;
 use std::time::Duration;
 
@@ -17,8 +18,9 @@ use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::{ActiveTheme as _, Disableable as _, Icon, Sizable as _, h_flex, v_flex};
 use gpui_kit::{
     AnyElement, App, AppContext as _, Bounds, ClipboardItem, Context, Entity, EventEmitter,
-    IntoElement, ParentElement as _, Pixels, Render, SharedString, StyleRefinement, Styled as _,
-    Subscription, Task, WeakEntity, Window, div, prelude::FluentBuilder as _, px,
+    FocusHandle, InteractiveElement as _, IntoElement, MouseButton, ParentElement as _, Pixels,
+    Render, SharedString, StyleRefinement, Styled as _, Subscription, Task, WeakEntity, Window,
+    div, prelude::FluentBuilder as _, px,
 };
 use jiff::tz::TimeZone;
 
@@ -27,6 +29,7 @@ use crate::cluster_runtime::{ClusterRuntime, WatchSubscription};
 use crate::cluster_session::{ClusterSession, error_text};
 use crate::dock::LogOrigin;
 use crate::file_export::{ExportState, export_file_name, start_export};
+use crate::keymap::{ClearLogSelection, CopyLogLines};
 use crate::kind_row::PodOwner;
 use crate::line_matcher::{FilterMode, InvalidRegex, LineMatcher};
 use crate::log_buffer::{
@@ -36,6 +39,7 @@ use crate::log_buffer::{
 use crate::log_legend::{LegendChip, legend_row, pod_color};
 use crate::log_level::{LevelSet, LogLevel};
 use crate::log_rows::{RowPrefix, RowStyle, log_row};
+use crate::log_selection::RowSelection;
 use crate::log_since::LogSince;
 use crate::log_target::{LogTarget, PodTarget, WorkloadTarget};
 use crate::log_volume::{
@@ -325,6 +329,9 @@ pub(crate) struct LogTab {
     is_popped_out: bool,
     /// The histogram of the visible lines, computed for the buffer revision it carries.
     volume_memo: Option<(u64, Option<Rc<Volume>>)>,
+    /// The rows a click picked, as indexes into the visible list.
+    selection: Option<RowSelection>,
+    focus_handle: FocusHandle,
     /// The drag across the histogram in progress.
     brush: Option<BrushDrag>,
     /// Where the histogram sits, from its last prepaint (the brush maps the pointer onto it).
@@ -392,6 +399,8 @@ impl LogTab {
             is_popped_out: false,
             volume_memo: None,
             brush: None,
+            selection: None,
+            focus_handle: cx.focus_handle(),
             chart_bounds: Rc::new(Cell::new(None)),
             export_state: ExportState::Idle,
             exported_lines: 0,
@@ -475,6 +484,7 @@ impl LogTab {
             workload.members.clear();
         }
         self.buffer.clear();
+        self.selection = None;
         // A restarted buffer holds other lines, so a window over the old ones means nothing.
         self.brush = None;
         if self.buffer.view().window.is_some() {
@@ -607,6 +617,11 @@ impl LogTab {
 
     fn push_lines(&mut self, lines: Vec<SourcedLine>, cx: &mut Context<Self>) {
         let change = self.buffer.push(lines);
+        if change.removed_visible > 0 {
+            self.selection = self
+                .selection
+                .and_then(|selection| selection.after_front_removal(change.removed_visible));
+        }
         self.scroller.update(cx, |scroller, cx| {
             scroller.splice(0..change.removed_visible, 0, cx);
             scroller.append(change.added_visible, cx);
@@ -813,6 +828,8 @@ impl LogTab {
                 self.buffer.view().matcher.clone()
             }
         };
+        // The rows under the old view are other rows now.
+        self.selection = None;
         self.buffer.set_view(LineView {
             matcher,
             hidden_levels: self.hidden_levels,
@@ -1175,24 +1192,62 @@ impl LogTab {
         self.export_state.is_busy() || self.buffer.visible_len() == 0
     }
 
+    /// The visible rows at `rows` as the screen shows them: the clock time when Timestamps is on,
+    /// and the `{pod}/{container}` column of a workload tab.
+    fn rows_text(&self, rows: Range<usize>) -> String {
+        let time = if self.shows_timestamps {
+            LineTime::Clock
+        } else {
+            LineTime::Hidden
+        };
+        // A pod tab has one source and no prefix column.
+        let prefixes: Vec<SharedString> = if self.is_workload() {
+            self.streams
+                .iter()
+                .map(|stream| stream.prefix.clone())
+                .collect()
+        } else {
+            Vec::new()
+        };
+        self.buffer
+            .visible_text_in(rows, time, &self.time_zone, &prefixes)
+    }
+
+    /// A click selects the row, a Shift-click extends the range from the last plain click. The tab
+    /// takes the focus so Ctrl C and Esc reach it.
+    fn select_row(
+        &mut self,
+        index: usize,
+        extends: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        window.focus(&self.focus_handle, cx);
+        self.selection = Some(match self.selection {
+            Some(selection) if extends => selection.extended_to(index),
+            _ => RowSelection::single(index),
+        });
+        cx.notify();
+    }
+
+    fn copy_selected_lines(&mut self, cx: &mut Context<Self>) {
+        let Some(selection) = self.selection else {
+            return;
+        };
+        let text = self.rows_text(selection.rows());
+        cx.write_to_clipboard(ClipboardItem::new_string(text));
+    }
+
+    fn clear_selection(&mut self, cx: &mut Context<Self>) {
+        if self.selection.take().is_some() {
+            cx.notify();
+        }
+    }
+
     fn run_toolbar_action(&mut self, action: ToolbarAction, cx: &mut Context<Self>) {
         match action {
             ToolbarAction::Copy => {
-                let time = if self.shows_timestamps {
-                    LineTime::Clock
-                } else {
-                    LineTime::Hidden
-                };
-                // A pod tab has one source and no prefix column.
-                let prefixes: Vec<SharedString> = if self.is_workload() {
-                    self.streams
-                        .iter()
-                        .map(|stream| stream.prefix.clone())
-                        .collect()
-                } else {
-                    Vec::new()
-                };
-                let text = self.buffer.visible_text(time, &self.time_zone, &prefixes);
+                let text = self.rows_text(0..self.buffer.visible_len());
                 cx.write_to_clipboard(ClipboardItem::new_string(text));
             }
             ToolbarAction::Export => self.export(cx),
@@ -1552,7 +1607,7 @@ impl LogTab {
         .into_any_element()
     }
 
-    fn render_row(&self, index: usize, cx: &App) -> AnyElement {
+    fn render_row(&self, index: usize, tab: &WeakEntity<Self>, cx: &App) -> AnyElement {
         let Some(line) = self.buffer.visible_line(index) else {
             return div().into_any_element();
         };
@@ -1577,7 +1632,19 @@ impl LogTab {
             matcher: self.buffer.view().matcher.as_ref(),
             prefix,
         };
-        log_row(index, line, &style, cx)
+        let is_selected = self
+            .selection
+            .is_some_and(|selection| selection.contains(index));
+        let tab = tab.clone();
+        div()
+            .id(("log-row", index))
+            .when(is_selected, |row| row.bg(cx.theme().selection))
+            .on_mouse_down(MouseButton::Left, move |event, window, cx| {
+                let extends = event.modifiers.shift;
+                let _ = tab.update(cx, |tab, cx| tab.select_row(index, extends, window, cx));
+            })
+            .child(log_row(index, line, &style, cx))
+            .into_any_element()
     }
 }
 
@@ -1596,7 +1663,7 @@ fn since_items(selected: LogSince, prefix: &str, tab: &WeakEntity<LogTab>) -> Ve
 }
 
 fn row_of(tab: &WeakEntity<LogTab>, index: usize, cx: &App) -> AnyElement {
-    tab.read_with(cx, |tab, cx| tab.render_row(index, cx))
+    tab.read_with(cx, |view, cx| view.render_row(index, tab, cx))
         .unwrap_or_else(|_| div().into_any_element())
 }
 
@@ -1640,6 +1707,14 @@ impl Render for LogTab {
         };
         v_flex()
             .size_full()
+            .key_context(if self.selection.is_some() {
+                "LogLines LogSelection"
+            } else {
+                "LogLines"
+            })
+            .track_focus(&self.focus_handle)
+            .on_action(cx.listener(|tab, _: &CopyLogLines, _, cx| tab.copy_selected_lines(cx)))
+            .on_action(cx.listener(|tab, _: &ClearLogSelection, _, cx| tab.clear_selection(cx)))
             .children(legend)
             .child(self.render_toolbar(cx))
             .children(histogram)

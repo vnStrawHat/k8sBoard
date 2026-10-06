@@ -74,6 +74,8 @@ Copy, Export, Pop out, and Reconnect (the last two when they apply) are one butt
 
 The level toggles (ERROR, WARN, INFO, DEBUG) take Alt-click: only that level stays on, and a second Alt-click on it shows all four again (`LevelSet::toggled_only`). The Since picker (`tail`, `5m`, `15m`, `1h`, `6h`; `log_since.rs`) sits in the toolbar of the zoomed and popped-out tabs and at the end of the `⋯` menu of the docked tab. Picking a window restarts the streams with `since_seconds` and no tail; the status text then ends with `· last {window}`. The status text is not in the toolbar: the dock shows it in its tab strip beside the zoom buttons (`Dock::render_tab_bar`), and a popped-out tab, which has no strip, keeps it in its toolbar. The zoomed histogram draws the start of its first bucket and the end of its last one as two small time labels under it.
 
+A click on a row selects it (the `selection` theme token as its background), a Shift-click extends the range from the last plain click, and the tab takes the focus (`log_selection.rs`). While rows are selected the tab's key context carries `LogSelection`: Ctrl C (`CopyLogLines`) copies the selected rows as `Copy visible lines` writes them (clock time when Timestamps is on, the pod column of a workload tab), and Esc (`ClearLogSelection`) clears the selection. Without a selection both keys keep their workspace meaning. A filter, level, or window change, or a restart, clears the selection; evicted rows shift it.
+
 | State | Status text (`{count}` = `N lines`, or `V of N lines` when filtering; then `· older lines dropped` if any were dropped) |
 |---|---|
 | Connecting | `Opening…` |

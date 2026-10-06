@@ -368,3 +368,91 @@ fn picking_the_same_since_window_keeps_the_stream(cx: &mut TestAppContext) {
     cx.run_until_parked();
     assert_eq!(fixture.log_reads(), 1);
 }
+
+fn select(
+    fixture: &crate::log_fixtures::LogFixture,
+    tab: &Entity<LogTab>,
+    index: usize,
+    extends: bool,
+    cx: &mut TestAppContext,
+) {
+    fixture.with_window(cx, |window, cx| {
+        tab.update(cx, |tab, cx| tab.select_row(index, extends, window, cx));
+    });
+}
+
+fn clipboard_text(cx: &mut TestAppContext) -> Option<String> {
+    cx.read_from_clipboard().and_then(|item| item.text())
+}
+
+#[gpui_kit::test]
+fn copying_a_selection_writes_the_selected_rows_with_their_times(cx: &mut TestAppContext) {
+    let (fixture, tab) = open_full_tab(cx);
+    tab.update(cx, |tab, _| tab.time_zone = TimeZone::UTC);
+    select(&fixture, &tab, 0, false, cx);
+    tab.update(cx, |tab, cx| tab.copy_selected_lines(cx));
+    assert_eq!(clipboard_text(cx).as_deref(), Some("10:00:00.000 first"));
+
+    select(&fixture, &tab, 1, true, cx);
+    tab.update(cx, |tab, cx| tab.copy_selected_lines(cx));
+    assert_eq!(
+        clipboard_text(cx).as_deref(),
+        Some("10:00:00.000 first\n10:00:01.000 second")
+    );
+}
+
+#[gpui_kit::test]
+fn copying_without_a_selection_leaves_the_clipboard(cx: &mut TestAppContext) {
+    let (_fixture, tab) = open_full_tab(cx);
+    cx.write_to_clipboard(ClipboardItem::new_string("before".to_owned()));
+    tab.update(cx, |tab, cx| tab.copy_selected_lines(cx));
+    assert_eq!(clipboard_text(cx).as_deref(), Some("before"));
+}
+
+#[gpui_kit::test]
+fn clearing_the_selection_and_changing_the_view_drop_it(cx: &mut TestAppContext) {
+    let (fixture, tab) = open_full_tab(cx);
+    select(&fixture, &tab, 0, false, cx);
+    tab.update(cx, |tab, cx| tab.clear_selection(cx));
+    assert_eq!(tab.read_with(cx, |tab, _| tab.selection), None);
+
+    select(&fixture, &tab, 1, false, cx);
+    tab.update(cx, |tab, cx| {
+        tab.hidden_levels = tab.hidden_levels.toggled(LogLevel::Debug);
+        tab.refresh_view(cx);
+    });
+    assert_eq!(tab.read_with(cx, |tab, _| tab.selection), None);
+}
+
+#[gpui_kit::test]
+fn copy_visible_lines_still_copies_every_row(cx: &mut TestAppContext) {
+    let (fixture, tab) = open_full_tab(cx);
+    tab.update(cx, |tab, _| tab.time_zone = TimeZone::UTC);
+    select(&fixture, &tab, 1, false, cx);
+    tab.update(cx, |tab, cx| {
+        tab.run_toolbar_action(ToolbarAction::Copy, cx)
+    });
+    assert_eq!(
+        clipboard_text(cx).as_deref(),
+        Some("10:00:00.000 first\n10:00:01.000 second")
+    );
+}
+
+#[gpui_kit::test]
+fn the_selection_actions_copy_and_clear_through_the_focused_tab(cx: &mut TestAppContext) {
+    use gpui_kit::Action as _;
+
+    let (fixture, tab) = open_full_tab(cx);
+    tab.update(cx, |tab, _| tab.time_zone = TimeZone::UTC);
+    select(&fixture, &tab, 0, true, cx);
+    fixture.draw(cx);
+    fixture.with_window(cx, |window, cx| {
+        window.dispatch_action(CopyLogLines.boxed_clone(), cx);
+    });
+    assert_eq!(clipboard_text(cx).as_deref(), Some("10:00:00.000 first"));
+
+    fixture.with_window(cx, |window, cx| {
+        window.dispatch_action(ClearLogSelection.boxed_clone(), cx);
+    });
+    assert_eq!(tab.read_with(cx, |tab, _| tab.selection), None);
+}

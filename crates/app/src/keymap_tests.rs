@@ -987,3 +987,43 @@ fn alt_arrows_never_navigate_in_fields_editors_and_the_terminal(cx: &mut TestApp
         }
     }
 }
+
+const LOG_TAB_PATH: [&str; 4] = ["Root", "AppShell", "Dock", "LogLines"];
+const LOG_SELECTION_PATH: [&str; 4] = ["Root", "AppShell", "Dock", "LogLines LogSelection"];
+const LOG_FILTER_PATH: [&str; 5] = ["Root", "AppShell", "Dock", "LogLines LogSelection", "Input"];
+
+#[gpui_kit::test]
+fn selected_log_rows_take_copy_and_escape(cx: &mut TestAppContext) {
+    bind_all(cx);
+    assert_eq!(
+        resolve("secondary-c", &LOG_SELECTION_PATH, cx),
+        Some("k8sboard::CopyLogLines")
+    );
+    assert_eq!(
+        resolve("escape", &LOG_SELECTION_PATH, cx),
+        Some("k8sboard::ClearLogSelection")
+    );
+}
+
+#[gpui_kit::test]
+fn a_log_tab_without_a_selection_keeps_the_workspace_keys(cx: &mut TestAppContext) {
+    bind_all(cx);
+    assert_eq!(
+        resolve("secondary-c", &LOG_TAB_PATH, cx),
+        Some("k8sboard::CopyName")
+    );
+    assert_eq!(
+        resolve("escape", &LOG_TAB_PATH, cx),
+        Some("k8sboard::Dismiss")
+    );
+}
+
+#[gpui_kit::test]
+fn the_filter_field_of_a_log_tab_keeps_its_own_copy_and_escape(cx: &mut TestAppContext) {
+    bind_all(cx);
+    assert!(!is_app_action(resolve("secondary-c", &LOG_FILTER_PATH, cx)));
+    assert_ne!(
+        resolve("escape", &LOG_FILTER_PATH, cx),
+        Some("k8sboard::ClearLogSelection")
+    );
+}

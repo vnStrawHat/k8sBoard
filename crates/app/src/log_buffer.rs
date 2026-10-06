@@ -2,6 +2,7 @@
 //! line. The only GPUI type is `SharedString`, a plain string.
 
 use std::collections::VecDeque;
+use std::ops::Range;
 
 use cluster::LogLine;
 use gpui_kit::SharedString;
@@ -329,8 +330,22 @@ impl LogBuffer {
         zone: &TimeZone,
         prefixes: &[SharedString],
     ) -> String {
+        self.visible_text_in(0..self.visible_len(), time, zone, prefixes)
+    }
+
+    /// `visible_text` of the visible lines at `range` (indexes into the visible list).
+    pub(crate) fn visible_text_in(
+        &self,
+        range: Range<usize>,
+        time: LineTime,
+        zone: &TimeZone,
+        prefixes: &[SharedString],
+    ) -> String {
         let mut text = String::new();
-        for (index, buffered) in self.visible_lines().enumerate() {
+        for (index, buffered) in range
+            .filter_map(|index| self.visible_line(index))
+            .enumerate()
+        {
             if index > 0 {
                 text.push('\n');
             }

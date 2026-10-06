@@ -783,9 +783,10 @@ fn the_shell_handles_every_key_action_of_its_tree(cx: &mut TestAppContext) {
     let (window, _) = open_shell(cx);
     render(window, cx);
     // Ctrl , is handled by the app (no window), Ctrl O and the Alt arrows belong to the Settings
-    // window, and the terminal chords belong to a focused shell tab (`shell_tab_tests` dispatches each of them), and
+    // window, and the terminal chords belong to a focused shell tab (`shell_tab_tests` dispatches each of them), the
+    // log selection keys belong to a log tab with rows selected (`log_tab_tests` dispatches them), and
     // Ctrl S belongs to the Edit YAML view (`app_shell_edit_tests` presses it there).
-    let elsewhere: [&dyn gpui_kit::Action; 8] = [
+    let elsewhere: [&dyn gpui_kit::Action; 10] = [
         &crate::settings_window::OpenSettings,
         &crate::settings_window::ImportKubeconfig,
         &crate::settings_window::MoveClusterUp,
@@ -794,6 +795,8 @@ fn the_shell_handles_every_key_action_of_its_tree(cx: &mut TestAppContext) {
         &crate::keymap::TerminalPaste,
         &crate::keymap::TerminalFind,
         &crate::keymap::ApplyEdit,
+        &crate::keymap::CopyLogLines,
+        &crate::keymap::ClearLogSelection,
     ];
     for row in crate::keymap::shortcut_rows() {
         if elsewhere.iter().any(|other| other.partial_eq(&*row.action)) {
