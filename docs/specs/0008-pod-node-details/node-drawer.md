@@ -42,3 +42,5 @@ CPU/Memory usage and allocated (requested) totals (0010, 0021), node shell, cord
 ## Later changes
 
 The Pods section sits above Addresses and tags each pod `DS`, `emptyDir`, `PDB 0`, or `no controller` (see 0034 `drain-dialog.md`).
+
+The CPU and Memory rows of "Allocatable used" read `3.3 used · 6.9 requested / 26 cores` when the pods of every namespace are known (bar tick = requests; the bar's tooltip names used, requested, and allocatable). The Nodes table has two opt-in columns, `CPU req` and `Mem req` (the pods' requests as a share of allocatable), hidden until ticked in the Columns menu; they read `—` under a namespace scope.

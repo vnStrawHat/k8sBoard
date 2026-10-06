@@ -81,6 +81,23 @@ pub(crate) fn node_requests(node: &str, pods: &[PodSummary]) -> (CpuAmount, Byte
     requests_of(pods_on_node(node, pods))
 }
 
+/// What the pods on `node` request as a share of its allocatable (1.0 is all of it); `None` for a
+/// resource without an allocatable entry.
+pub(crate) fn node_request_share(node: &NodeSummary, pods: &[PodSummary]) -> NodeUsage {
+    let (cpu, memory) = node_requests(&node.name, pods);
+    let (cpu_total, memory_total) = node_allocatable(node);
+    NodeUsage {
+        cpu: ratio(
+            cpu.nanocores() as f64,
+            cpu_total.map(|total| total.nanocores() as f64),
+        ),
+        memory: ratio(
+            memory.bytes() as f64,
+            memory_total.map(|total| total.bytes() as f64),
+        ),
+    }
+}
+
 /// The `cpu` and `memory` requests of `pods`, which the caller has limited to those that take room:
 /// main and sidecar containers, since init containers do not run alongside them.
 pub(crate) fn requests_of<'a>(
@@ -313,5 +330,39 @@ mod tests {
         assert_eq!(node_quantity_text("pods", "110"), "110");
         assert_eq!(node_quantity_text("example.com/gpu", "2"), "2");
         assert_eq!(node_quantity_text("memory", "lots"), "lots");
+    }
+
+    #[test]
+    fn node_request_share_divides_the_requests_by_allocatable() {
+        let mut node = node(&[("cpu", "4"), ("memory", "8Gi")]);
+        node.name = "wk-1".to_owned();
+        let pods = [
+            pod(
+                Some("wk-1"),
+                StatusReason::Running,
+                vec![container(
+                    ContainerKind::Main,
+                    &[("cpu", "1"), ("memory", "2Gi")],
+                )],
+            ),
+            // Another node's pod and a finished one add nothing.
+            pod(
+                Some("wk-2"),
+                StatusReason::Running,
+                vec![container(ContainerKind::Main, &[("cpu", "3")])],
+            ),
+            pod(
+                Some("wk-1"),
+                StatusReason::Completed,
+                vec![container(ContainerKind::Main, &[("cpu", "3")])],
+            ),
+        ];
+        let share = node_request_share(&node, &pods);
+        assert_eq!(share.cpu, Some(0.25));
+        assert_eq!(share.memory, Some(0.25));
+        // No allocatable entry, no share.
+        let mut no_memory = self::node(&[("cpu", "4")]);
+        no_memory.name = "wk-1".to_owned();
+        assert_eq!(node_request_share(&no_memory, &pods).memory, None);
     }
 }

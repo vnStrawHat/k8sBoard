@@ -537,6 +537,7 @@ mod tests {
         let node_row = crate::node_table::NodeRow {
             node: &node,
             usage: crate::node_usage::NodeUsage::default(),
+            requests: crate::node_usage::NodeUsage::default(),
         };
         assert!(node_row.in_preset(&FilterPreset::HideSystem));
     }

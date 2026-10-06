@@ -1,6 +1,7 @@
 use std::borrow::Cow;
+use std::collections::BTreeSet;
 
-use cluster::{NodeSummary, NodeTaint};
+use cluster::{NodeSummary, NodeTaint, PodSummary};
 use gpui_kit::component::menu::PopupMenu;
 use gpui_kit::component::table::{Column, TableDelegate, TableState};
 use gpui_kit::component::{ActiveTheme as _, h_flex};
@@ -16,7 +17,7 @@ use crate::drawer::{truncated_text, truncated_text_with_tooltip};
 use crate::filter_bar::filtered_empty_state;
 use crate::metrics_history::NodeUsageHistory;
 use crate::node_summary::{NodeCounts, node_counts, node_in_group};
-use crate::node_usage::{NodeUsage, node_usage};
+use crate::node_usage::{NodeUsage, node_request_share, node_usage};
 use crate::resource_actions::node_menu;
 use crate::resource_kind::{Align, KindColumn, column};
 use crate::row_context::TableSession;
@@ -39,17 +40,22 @@ const VERSION: usize = 4;
 const INTERNAL_IP: usize = 5;
 const CPU: usize = 6;
 const MEMORY: usize = 7;
-const AGE: usize = 8;
+const CPU_REQUESTED: usize = 8;
+const MEMORY_REQUESTED: usize = 9;
+const AGE: usize = 10;
 
 /// Marks a value the node does not have.
 const ABSENT: &str = "—";
 
 const USAGE_BAR_WIDTH: f32 = 46.;
 
-/// The base widths add up to what a 1100 px window leaves for the table, so Memory and Age stay
-/// inside it. Taints takes most of the spare width (it holds the longest values) and is the column
-/// that gives way first; Internal IP is fixed at the width of `255.255.255.255`.
-const NODE_COLUMNS: [KindColumn; 9] = [
+/// What the pods request, not what they use: shown only when the user asks for it.
+const HIDDEN_BY_DEFAULT: [usize; 2] = [CPU_REQUESTED, MEMORY_REQUESTED];
+
+/// The base widths of the default columns add up to what a 1100 px window leaves for the table, so
+/// Memory and Age stay inside it. Taints takes most of the spare width (it holds the longest values)
+/// and is the column that gives way first; Internal IP is fixed at the width of `255.255.255.255`.
+const NODE_COLUMNS: [KindColumn; 11] = [
     column("Name", 96., Align::Left).grows(1).up_to(200.),
     column("Status", 76., Align::Left).grows(2).up_to(250.),
     column("Roles", 96., Align::Left).grows(1).up_to(220.),
@@ -58,6 +64,8 @@ const NODE_COLUMNS: [KindColumn; 9] = [
     column("Internal IP", 140., Align::Left),
     column("CPU", 92., Align::Left),
     column("Memory", 92., Align::Left),
+    column("CPU req", 92., Align::Left),
+    column("Mem req", 92., Align::Left),
     column("Age", 56., Align::Right),
 ];
 
@@ -88,6 +96,8 @@ impl NodeTableDelegate {
     pub(crate) fn new(shell: WeakEntity<AppShell>, saved: Option<&TablePrefs>) -> Self {
         let plan = node_plan();
         let mut view = TableView::new(default_filter(Screen::Nodes));
+        // The request columns are opt-in from the Columns menu; a saved choice replaces this.
+        view.hidden = BTreeSet::from(HIDDEN_BY_DEFAULT);
         if let Some(saved) = saved {
             view.apply_prefs(saved, &plan);
         }
@@ -152,7 +162,17 @@ impl NodeTableDelegate {
             .as_ref()
             .and_then(|session| session.session.read(cx).live())
             .map(|live| &live.metrics.nodes.history);
-        node_rows(self.nodes(cx), history)
+        node_rows(self.nodes(cx), history, self.pods_of_all_namespaces(cx))
+    }
+
+    /// The pods list when it holds every namespace: a namespace scope would understate what a
+    /// node's pods request, so the request columns read "—" then.
+    fn pods_of_all_namespaces<'a>(&self, cx: &'a App) -> Option<&'a [PodSummary]> {
+        let live = self.session.as_ref()?.session.read(cx).live()?;
+        if live.scope != cluster::NamespaceScope::All {
+            return None;
+        }
+        live.pods.ready_items()
     }
 
     /// The nodes of the open cluster; none while its session is not live.
@@ -172,6 +192,11 @@ impl NodeTableDelegate {
         node_usage(node, latest)
     }
 
+    fn requests_of(&self, node: &NodeSummary, cx: &App) -> NodeUsage {
+        self.pods_of_all_namespaces(cx)
+            .map_or_else(NodeUsage::default, |pods| node_request_share(node, pods))
+    }
+
     /// The node shown at table row `row_ix`, and the session it belongs to.
     fn node_at<'a>(&self, row_ix: usize, cx: &'a App) -> Option<(&TableSession, &'a NodeSummary)> {
         let session = self.session.as_ref()?;
@@ -181,18 +206,25 @@ impl NodeTableDelegate {
     }
 }
 
-/// A node with its usage as a share of its allocatable resources.
+/// A node with its usage, and what its pods request, as shares of its allocatable resources.
 pub(crate) struct NodeRow<'a> {
     pub(crate) node: &'a NodeSummary,
     pub(crate) usage: NodeUsage,
+    /// All `None` while the pods of every namespace are not known.
+    pub(crate) requests: NodeUsage,
 }
 
-fn node_rows<'a>(nodes: &'a [NodeSummary], history: Option<&NodeUsageHistory>) -> Vec<NodeRow<'a>> {
+fn node_rows<'a>(
+    nodes: &'a [NodeSummary],
+    history: Option<&NodeUsageHistory>,
+    pods: Option<&[PodSummary]>,
+) -> Vec<NodeRow<'a>> {
     nodes
         .iter()
         .map(|node| NodeRow {
             node,
             usage: node_usage(node, history.and_then(|history| history.latest(&node.name))),
+            requests: pods.map_or_else(NodeUsage::default, |pods| node_request_share(node, pods)),
         })
         .collect()
 }
@@ -244,6 +276,8 @@ impl TableRow for NodeRow<'_> {
                 .map_or(CellValue::Absent, |ip| CellValue::Text(Cow::Borrowed(ip))),
             CPU => per_mille(self.usage.cpu),
             MEMORY => per_mille(self.usage.memory),
+            CPU_REQUESTED => per_mille(self.requests.cpu),
+            MEMORY_REQUESTED => per_mille(self.requests.memory),
             AGE => CellValue::Age(node.created_at),
             _ => CellValue::Absent,
         }
@@ -301,6 +335,7 @@ impl NodeTableDelegate {
                 self.view.is_checked(&NodeRow {
                     node,
                     usage: NodeUsage::default(),
+                    requests: NodeUsage::default(),
                 })
             });
             return select_cell(row_ix, is_checked, &self.shell);
@@ -351,6 +386,15 @@ impl NodeTableDelegate {
                     usage.cpu
                 } else {
                     usage.memory
+                };
+                usage_cell(ratio, mono, cx)
+            }
+            CPU_REQUESTED | MEMORY_REQUESTED => {
+                let requests = self.requests_of(node, cx);
+                let ratio = if logical == CPU_REQUESTED {
+                    requests.cpu
+                } else {
+                    requests.memory
                 };
                 usage_cell(ratio, mono, cx)
             }
@@ -622,6 +666,7 @@ mod tests {
         NodeRow {
             node,
             usage: NodeUsage::default(),
+            requests: NodeUsage::default(),
         }
     }
 
@@ -676,6 +721,7 @@ mod tests {
                 cpu: Some(0.314),
                 memory: None,
             },
+            requests: NodeUsage::default(),
         };
         assert!(matches!(with_usage.value(CPU), CellValue::Number(314)));
         assert!(matches!(with_usage.value(MEMORY), CellValue::Absent));
@@ -703,10 +749,10 @@ mod tests {
             }],
         );
         let nodes = [node];
-        let rows = node_rows(&nodes, Some(&history));
+        let rows = node_rows(&nodes, Some(&history), None);
         assert_eq!(rows[0].usage.cpu, Some(0.5));
         assert_eq!(rows[0].usage.memory, None);
-        assert_eq!(node_rows(&nodes, None)[0].usage, NodeUsage::default());
+        assert_eq!(node_rows(&nodes, None, None)[0].usage, NodeUsage::default());
     }
 
     #[test]
@@ -729,5 +775,34 @@ mod tests {
         assert_eq!(roles_cell(&[]), ABSENT);
         let roles = ["control-plane".to_owned(), "etcd".to_owned()];
         assert_eq!(roles_cell(&roles), "control-plane, etcd");
+    }
+
+    #[test]
+    fn request_columns_are_hidden_until_asked_for() {
+        assert_eq!(NODE_COLUMNS[CPU_REQUESTED].name, "CPU req");
+        assert_eq!(NODE_COLUMNS[MEMORY_REQUESTED].name, "Mem req");
+        assert_eq!(HIDDEN_BY_DEFAULT, [CPU_REQUESTED, MEMORY_REQUESTED]);
+    }
+
+    #[test]
+    fn node_row_requests_are_per_mille_and_absent_when_unknown() {
+        let node = node();
+        let with_requests = NodeRow {
+            node: &node,
+            usage: NodeUsage::default(),
+            requests: NodeUsage {
+                cpu: Some(0.6),
+                memory: Some(0.0725),
+            },
+        };
+        assert!(matches!(
+            with_requests.value(CPU_REQUESTED),
+            CellValue::Number(600)
+        ));
+        assert!(matches!(
+            with_requests.value(MEMORY_REQUESTED),
+            CellValue::Number(73)
+        ));
+        assert!(matches!(row(&node).value(CPU_REQUESTED), CellValue::Absent));
     }
 }

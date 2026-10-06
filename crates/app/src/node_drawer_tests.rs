@@ -102,8 +102,8 @@ fn allocatable_rows_show_used_of_allocatable_with_bars() {
     assert_eq!(
         values,
         [
-            ("CPU", "9.8 / 15.8 cores"),
-            ("Memory", "43 / 61Gi"),
+            ("CPU", "9.8 used · 7.9 requested / 15.8 cores"),
+            ("Memory", "43 used · 30 requested / 61Gi"),
             ("Pods", "55 / 110")
         ]
     );
@@ -111,6 +111,14 @@ fn allocatable_rows_show_used_of_allocatable_with_bars() {
     assert!((cpu_bar.fill - 0.620).abs() < 0.001, "{}", cpu_bar.fill);
     assert_eq!(cpu_bar.marker, Some(0.5));
     assert_eq!(rows[2].bar.as_ref().expect("a pods bar").marker, None);
+    assert_eq!(
+        rows[0].tooltip.as_deref(),
+        Some("CPU: 9.8 used, 7.9 requested, 15.8 cores allocatable")
+    );
+    assert_eq!(
+        rows[1].tooltip.as_deref(),
+        Some("Memory: 43 used, 30 requested, 61Gi allocatable")
+    );
 }
 
 #[test]
@@ -137,4 +145,17 @@ fn pod_count_row_needs_a_limit_for_a_bar() {
     assert_eq!(pod_count_row(7, None).bar, None);
     assert_eq!(pod_count_row(7, Some(0)).bar, None);
     assert!(pod_count_row(7, Some(14)).bar.is_some());
+}
+
+#[test]
+fn allocatable_rows_keep_each_unit_when_they_differ() {
+    let node = node_with(&[("cpu", "4"), ("memory", "8Gi")]);
+    let pods = NodePods {
+        cpu_request: CpuAmount::from_nanocores(250_000_000),
+        memory_request: cluster::ByteAmount::from_bytes(1 << 30),
+        count: 3,
+    };
+    let rows = allocatable_rows(&node, Some(usage(0.5, 2)), Some(&pods));
+    assert_eq!(rows[0].value, "500m used · 250m requested / 4 cores");
+    assert_eq!(rows[1].value, "2 used · 1 requested / 8Gi");
 }

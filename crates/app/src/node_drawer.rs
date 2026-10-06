@@ -292,46 +292,70 @@ struct AllocatableRow {
     label: &'static str,
     value: String,
     bar: Option<UsageBar>,
+    /// Names the numbers behind the bar: used, requested, and allocatable.
+    tooltip: Option<String>,
 }
 
 /// CPU, Memory, and (with `pods`) Pods rows. A value without a sample or without an allocatable
-/// is "—" and has no bar.
+/// is "—" and has no bar. Requests are part of the value when the pods are known: a node can be
+/// idle and still full, and only the requests say so.
 fn allocatable_rows(
     node: &NodeSummary,
     latest: Option<ResourceUsage>,
     pods: Option<&NodePods>,
 ) -> Vec<AllocatableRow> {
     let (cpu, memory) = node_allocatable(node);
-    let share = |measure: Measure, used: Option<f64>, total: Option<f64>, request: Option<f64>| {
+    let share = |label: &'static str,
+                 measure: Measure,
+                 used: Option<f64>,
+                 total: Option<f64>,
+                 request: Option<f64>| {
         let (Some(used), Some(total)) = (used, total.filter(|total| *total > 0.)) else {
-            return (ABSENT_VALUE.to_owned(), None);
+            return AllocatableRow {
+                label,
+                value: ABSENT_VALUE.to_owned(),
+                bar: None,
+                tooltip: None,
+            };
         };
         let bar = UsageBar::of_ratio(used / total, request.map(|request| request / total));
-        (measure.format_pair(used, total, " / "), Some(bar))
+        let (value, tooltip) = match request {
+            Some(request) => {
+                // The unit is printed once, on the last number, when all three share it.
+                let mut texts = measure.format_shared(&[used, request, total]).into_iter();
+                let mut next = || texts.next().unwrap_or_default();
+                let (used, request, total) = (next(), next(), next());
+                (
+                    format!("{used} used · {request} requested / {total}"),
+                    Some(format!(
+                        "{label}: {used} used, {request} requested, {total} allocatable"
+                    )),
+                )
+            }
+            None => (measure.format_pair(used, total, " / "), None),
+        };
+        AllocatableRow {
+            label,
+            value,
+            bar: Some(bar),
+            tooltip,
+        }
     };
-    let (cpu_value, cpu_bar) = share(
-        Measure::Cpu,
-        latest.map(|usage| usage.cpu.cores()),
-        cpu.map(CpuAmount::cores),
-        pods.map(|pods| pods.cpu_request.cores()),
-    );
-    let (memory_value, memory_bar) = share(
-        Measure::Bytes,
-        latest.map(|usage| usage.memory.bytes() as f64),
-        memory.map(|memory| memory.bytes() as f64),
-        pods.map(|pods| pods.memory_request.bytes() as f64),
-    );
     let mut rows = vec![
-        AllocatableRow {
-            label: "CPU",
-            value: cpu_value,
-            bar: cpu_bar,
-        },
-        AllocatableRow {
-            label: "Memory",
-            value: memory_value,
-            bar: memory_bar,
-        },
+        share(
+            "CPU",
+            Measure::Cpu,
+            latest.map(|usage| usage.cpu.cores()),
+            cpu.map(CpuAmount::cores),
+            pods.map(|pods| pods.cpu_request.cores()),
+        ),
+        share(
+            "Memory",
+            Measure::Bytes,
+            latest.map(|usage| usage.memory.bytes() as f64),
+            memory.map(|memory| memory.bytes() as f64),
+            pods.map(|pods| pods.memory_request.bytes() as f64),
+        ),
     ];
     if let Some(pods) = pods {
         rows.push(pod_count_row(pods.count, node_pod_limit(node)));
@@ -345,12 +369,14 @@ fn pod_count_row(count: usize, limit: Option<u64>) -> AllocatableRow {
             label: "Pods",
             value: count.to_string(),
             bar: None,
+            tooltip: None,
         };
     };
     AllocatableRow {
         label: "Pods",
         value: format!("{count} / {limit}"),
         bar: Some(UsageBar::of_ratio(count as f64 / limit as f64, None)),
+        tooltip: None,
     }
 }
 
@@ -394,7 +420,20 @@ fn allocatable_used(node: &NodeSummary, live: Option<&LiveCluster>, cx: &App) ->
                         .w_full()
                         .gap_1()
                         .child(div().font_family(mono.clone()).child(row.value))
-                        .children(row.bar.map(|bar| usage_bar(bar, relative(1.), cx)));
+                        .children(row.bar.map(|bar| {
+                            let bar = usage_bar(bar, relative(1.), cx);
+                            let Some(text) = row.tooltip else {
+                                return bar.into_any_element();
+                            };
+                            div()
+                                .id(row.label)
+                                .w_full()
+                                .tooltip(move |window, cx| {
+                                    Tooltip::new(text.clone()).build(window, cx)
+                                })
+                                .child(bar)
+                                .into_any_element()
+                        }));
                     wide_detail_row(row.label, value, cx)
                 }),
         )
