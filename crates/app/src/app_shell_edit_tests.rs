@@ -2009,3 +2009,15 @@ fn a_missing_quota_feed_is_off_not_loading(cx: &mut TestAppContext) {
         crate::edit_quota::QuotaInput::Off(reason) if reason == "quotas are not watched"
     ));
 }
+
+#[gpui_kit::test]
+fn closing_the_main_window_releases_the_open_editor(cx: &mut TestAppContext) {
+    let t = edit_test("edit-window-close", cx);
+    t.open(cx);
+    assert!(t.edit(cx).is_some());
+    t.t.fixture
+        .with_window(cx, |window, _| window.remove_window());
+    cx.run_until_parked();
+    // The editor's inputs must not outlive the window: a debug build reports them at exit.
+    assert!(t.shell().read_with(cx, |shell, _| shell.edit.is_none()));
+}

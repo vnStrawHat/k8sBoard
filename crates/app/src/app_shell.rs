@@ -866,12 +866,17 @@ impl AppShell {
             }
         })
         .detach();
-        // However the main window goes, its pop-outs go with it: a log tab must not outlive it.
-        let (main_window, popped_dock) =
-            (window.window_handle().window_id(), shell.dock.downgrade());
+        // However the main window goes, its pop-outs go with it: a log tab must not outlive it. An open
+        // editor goes too: its inputs would outlive the app, which a debug build reports at exit.
+        let (main_window, popped_dock, closing) = (
+            window.window_handle().window_id(),
+            shell.dock.downgrade(),
+            cx.weak_entity(),
+        );
         cx.on_window_closed(move |cx, closed| {
             if closed == main_window {
                 let _ = popped_dock.update(cx, |dock, cx| dock.close_popped(cx));
+                let _ = closing.update(cx, |shell, cx| shell.close_edit(cx));
             }
         })
         .detach();

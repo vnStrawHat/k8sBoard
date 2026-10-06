@@ -781,6 +781,7 @@ async fn release_open_ui(
     shell.update(cx, |shell, cx| {
         shell.close_cluster_switcher(cx);
         shell.close_value_popover(cx);
+        shell.close_edit(cx);
     });
     window.update(cx, |_, window, cx| window.close_all_dialogs(cx))?;
     window.update(cx, |_, window, _| window.refresh())?;
