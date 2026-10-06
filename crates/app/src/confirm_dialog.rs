@@ -39,6 +39,7 @@ use crate::cluster_registry::ClusterRef;
 use crate::environment::{Environment, environment_badge};
 use crate::resource_actions::{ResourceAction, with_next_step};
 use crate::settings::AppSettings;
+use crate::status_tone::{StatusTone, tone_color};
 use crate::write_guard::{ActionRisk, DialogConfirm, confirm_step};
 
 const DIALOG_WIDTH: f32 = 480.;
@@ -672,11 +673,11 @@ impl ConfirmDialog {
         let theme = cx.theme();
         let mono = theme.mono_font_family.clone();
         let tone = |progress: &ItemProgress| match progress {
-            ItemProgress::Passed | ItemProgress::Done => theme.success,
+            ItemProgress::Passed | ItemProgress::Done => tone_color(StatusTone::Ok, cx),
             ItemProgress::Rejected(_) | ItemProgress::Failed(_) | ItemProgress::Unknown => {
-                theme.danger
+                tone_color(StatusTone::Bad, cx)
             }
-            ItemProgress::Pending(_) => theme.warning,
+            ItemProgress::Pending(_) => tone_color(StatusTone::Warn, cx),
             ItemProgress::Waiting
             | ItemProgress::Checking
             | ItemProgress::Applying
@@ -842,7 +843,7 @@ impl ConfirmDialog {
             let warnings = intent.warnings.iter().map(|warning| {
                 div()
                     .text_sm()
-                    .text_color(theme.warning)
+                    .text_color(tone_color(StatusTone::Warn, cx))
                     .child(warning.clone())
             });
             return Some(v_flex().gap_1().children(lines).children(warnings));
@@ -878,7 +879,7 @@ impl ConfirmDialog {
         let warnings = warnings.iter().map(|warning| {
             div()
                 .text_sm()
-                .text_color(theme.warning)
+                .text_color(tone_color(StatusTone::Warn, cx))
                 .child(warning.clone())
         });
         Some(v_flex().gap_1().children(lines).children(warnings))
@@ -922,7 +923,7 @@ impl ConfirmDialog {
                 let passed = total - self.gone_count();
                 (
                     format!("Server dry-run passed for {passed} of {total}"),
-                    theme.success,
+                    tone_color(StatusTone::Ok, cx),
                 )
             }
             DryRunState::Passed { elapsed } => (
@@ -931,12 +932,12 @@ impl ConfirmDialog {
                     elapsed.as_millis(),
                     self.passed_note()
                 ),
-                theme.success,
+                tone_color(StatusTone::Ok, cx),
             ),
-            DryRunState::Failed(text) => (text.to_string(), theme.danger),
+            DryRunState::Failed(text) => (text.to_string(), tone_color(StatusTone::Bad, cx)),
             DryRunState::Rejected(reason) => (
                 format!("An admission webhook does not support dry-run: {reason}"),
-                theme.danger,
+                tone_color(StatusTone::Bad, cx),
             ),
         };
         Some(
@@ -1004,11 +1005,12 @@ impl ConfirmDialog {
                         .gap_2()
                         .items_center()
                         .child(div().flex_1().child(Input::new(&self.typed)))
-                        .children(
-                            matches.then(|| {
-                                div().text_sm().text_color(theme.success).child("matches")
-                            }),
-                        ),
+                        .children(matches.then(|| {
+                            div()
+                                .text_sm()
+                                .text_color(tone_color(StatusTone::Ok, cx))
+                                .child("matches")
+                        })),
                 )
                 .into_any_element(),
         )

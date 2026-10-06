@@ -27,6 +27,7 @@ use super::{
 };
 use crate::keymap::{ApplyEdit, VALUES_EDIT};
 use crate::secret_values::ValueAccess;
+use crate::status_tone::{StatusTone, tone_color};
 
 const NAME_WIDTH: f32 = 220.;
 const STATE_WIDTH: f32 = 70.;
@@ -264,9 +265,9 @@ impl ValuesEditView {
         let theme = cx.theme();
         let state = row.state().map(|state| {
             let (text, color) = match state {
-                RowState::Added => ("added", theme.success),
-                RowState::Changed => ("changed", theme.warning),
-                RowState::Removed => ("removed", theme.danger),
+                RowState::Added => ("added", tone_color(StatusTone::Ok, cx)),
+                RowState::Changed => ("changed", tone_color(StatusTone::Warn, cx)),
+                RowState::Removed => ("removed", tone_color(StatusTone::Bad, cx)),
             };
             chip(text.into(), color, color)
         });
@@ -274,7 +275,12 @@ impl ValuesEditView {
             .row_errors
             .iter()
             .find(|(key, _)| key == &row.name)
-            .map(|(_, text)| div().text_xs().text_color(theme.danger).child(text.clone()));
+            .map(|(_, text)| {
+                div()
+                    .text_xs()
+                    .text_color(tone_color(StatusTone::Bad, cx))
+                    .child(text.clone())
+            });
         h_flex()
             .gap_3()
             .px_4()
@@ -416,7 +422,6 @@ impl ValuesEditView {
 
     /// `+ Add key`: the name is checked here; the value is typed in the new row.
     fn render_add(&self, cx: &Context<Self>) -> AnyElement {
-        let theme = cx.theme();
         let can_add = self.base.is_some() && !self.is_running();
         v_flex()
             .gap_1()
@@ -441,18 +446,19 @@ impl ValuesEditView {
                             .on_click(cx.listener(|view, _, window, cx| view.add_key(window, cx))),
                     ),
             )
-            .children(
-                self.add_error
-                    .clone()
-                    .map(|text| div().text_xs().text_color(theme.danger).child(text)),
-            )
+            .children(self.add_error.clone().map(|text| {
+                div()
+                    .text_xs()
+                    .text_color(tone_color(StatusTone::Bad, cx))
+                    .child(text)
+            }))
             .into_any_element()
     }
 
     fn render_footer(&self, window: &Window, cx: &Context<Self>) -> AnyElement {
         let theme = cx.theme();
         let (status, tone) = match &self.footer_error {
-            Some(text) => (text.to_string(), theme.danger),
+            Some(text) => (text.to_string(), tone_color(StatusTone::Bad, cx)),
             None => {
                 let count = self.change_count();
                 let text = match count {

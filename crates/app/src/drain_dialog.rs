@@ -1004,7 +1004,7 @@ impl DrainDialog {
 
     fn render_options(&self, cx: &mut Context<Self>) -> AnyElement {
         let counts = option_counts(&self.plans);
-        let (muted, danger) = (cx.theme().muted_foreground, cx.theme().danger);
+        let (muted, danger) = (cx.theme().muted_foreground, tone_color(StatusTone::Bad, cx));
         let skip_block = self.skip_block(cx);
         v_flex()
             .gap_2()
@@ -1210,7 +1210,7 @@ impl DrainDialog {
         };
         let theme = cx.theme();
         let (border, color) = if is_danger {
-            (theme.danger, theme.danger)
+            (theme.danger, tone_color(StatusTone::Bad, cx))
         } else {
             (theme.border, theme.foreground)
         };

@@ -23,6 +23,7 @@ use crate::resource_edits::{
     RangeInput, StorageInput, claim_floor, claim_state_text, expand_warnings, hpa_range_warnings,
     hpa_state_text, range_input, storage_input,
 };
+use crate::status_tone::{StatusTone, tone_color};
 use crate::table_selection::ClusterObject;
 use crate::workload_actions::{
     ReplicasInput, ScaleTarget, parse_replicas, replicas_input, scale_warnings,
@@ -527,7 +528,11 @@ impl ValuePopover {
 impl Render for ValuePopover {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
-        let (muted, warning, danger) = (theme.muted_foreground, theme.warning, theme.danger);
+        let (muted, warning, danger) = (
+            theme.muted_foreground,
+            tone_color(StatusTone::Warn, cx),
+            tone_color(StatusTone::Bad, cx),
+        );
         let title = self.title();
         let state = self.state_text(cx);
         let can_submit = self.is_submittable(cx);

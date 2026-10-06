@@ -28,6 +28,7 @@ use super::{
 use crate::drawer::truncated_text_with_tooltip;
 use crate::edit_quota::QuotaLine;
 use crate::keymap::{ApplyEdit, YAML_EDIT};
+use crate::status_tone::{StatusTone, tone_color};
 use crate::yaml_diff::{DiffRow, DiffRowKind};
 
 const SIDE_PANEL_WIDTH: f32 = 280.;
@@ -301,7 +302,7 @@ impl YamlEditView {
                     PreviewFailure::Invalid { message, .. } => message.to_string(),
                     PreviewFailure::Server(text) => text.to_string(),
                 };
-                muted_center(text, theme.danger)
+                muted_center(text, tone_color(StatusTone::Bad, cx))
             }
         }
     }
@@ -376,7 +377,7 @@ impl YamlEditView {
             side = side.child(
                 div()
                     .text_xs()
-                    .text_color(theme.warning)
+                    .text_color(tone_color(StatusTone::Warn, cx))
                     .child(line.clone()),
             );
         }
@@ -385,7 +386,7 @@ impl YamlEditView {
                 side = side.child(
                     div()
                         .text_xs()
-                        .text_color(theme.warning)
+                        .text_color(tone_color(StatusTone::Warn, cx))
                         .child(check.clone()),
                 );
             }
@@ -403,7 +404,7 @@ impl YamlEditView {
                     side = side.child(
                         div()
                             .text_xs()
-                            .text_color(theme.success)
+                            .text_color(tone_color(StatusTone::Ok, cx))
                             .child(text.clone()),
                     );
                 }
@@ -412,7 +413,7 @@ impl YamlEditView {
                         side = side.child(
                             div()
                                 .text_xs()
-                                .text_color(theme.warning)
+                                .text_color(tone_color(StatusTone::Warn, cx))
                                 .child(line.clone()),
                         );
                     }
@@ -440,13 +441,13 @@ impl YamlEditView {
                 div()
                     .text_xs()
                     .font_semibold()
-                    .text_color(theme.danger)
+                    .text_color(tone_color(StatusTone::Bad, cx))
                     .child("The change is invalid"),
             );
             side = side.child(
                 div()
                     .text_xs()
-                    .text_color(theme.danger)
+                    .text_color(tone_color(StatusTone::Bad, cx))
                     .child(message.clone()),
             );
             for field in fields {
@@ -454,7 +455,7 @@ impl YamlEditView {
                     div()
                         .text_xs()
                         .font_family(mono.clone())
-                        .text_color(theme.danger)
+                        .text_color(tone_color(StatusTone::Bad, cx))
                         .child(field.clone()),
                 );
             }
@@ -567,7 +568,11 @@ pub(crate) fn muted_center(text: impl Into<SharedString>, color: gpui_kit::Hsla)
 /// tokens. Shared by the Edit YAML Diff tab and the revision diff dialog.
 pub(crate) fn diff_row_element(row: &DiffRow, cx: &App) -> Div {
     let theme = cx.theme();
-    let (danger, success, muted) = (theme.danger, theme.success, theme.muted_foreground);
+    let (danger, success, muted) = (
+        tone_color(StatusTone::Bad, cx),
+        tone_color(StatusTone::Ok, cx),
+        theme.muted_foreground,
+    );
     let base = h_flex()
         .w_full()
         .h(px(DIFF_ROW_HEIGHT))
@@ -639,19 +644,22 @@ fn changes_heading(passed: &PassedPreview) -> String {
 fn dry_run_line(preview: &PreviewState, current: &str, cx: &App) -> (String, gpui_kit::Hsla) {
     let theme = cx.theme();
     match preview {
-        PreviewState::Passed(passed) if passed.for_text == current => {
-            ("Server dry-run passed".to_owned(), theme.success)
-        }
+        PreviewState::Passed(passed) if passed.for_text == current => (
+            "Server dry-run passed".to_owned(),
+            tone_color(StatusTone::Ok, cx),
+        ),
         PreviewState::Passed(_) => (
             "Changed since the last check".to_owned(),
             theme.muted_foreground,
         ),
-        PreviewState::Failed(PreviewFailure::Local(_) | PreviewFailure::Server(_)) => {
-            (footer_text(preview, current), theme.danger)
-        }
-        PreviewState::Failed(PreviewFailure::Invalid { .. }) => {
-            ("Server dry-run refused the change".to_owned(), theme.danger)
-        }
+        PreviewState::Failed(PreviewFailure::Local(_) | PreviewFailure::Server(_)) => (
+            footer_text(preview, current),
+            tone_color(StatusTone::Bad, cx),
+        ),
+        PreviewState::Failed(PreviewFailure::Invalid { .. }) => (
+            "Server dry-run refused the change".to_owned(),
+            tone_color(StatusTone::Bad, cx),
+        ),
         PreviewState::Running { .. } | PreviewState::NotChecked => {
             (footer_text(preview, current), theme.muted_foreground)
         }
