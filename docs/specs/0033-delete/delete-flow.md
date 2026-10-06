@@ -51,7 +51,7 @@ fn delete_warnings(kind: ObjectKind, targets: &[DeleteTarget], live: &LiveCluste
 | Propagation (`kind.owns_dependents()`) | kit `RadioGroup` `Dependents`: `Delete in the background (default)` "{dependents} are deleted after the {kind}"; `Delete them first (foreground)` "the {kind} stays until {dependents} are gone"; `Keep them (orphan)` "{dependents} keep running without an owner". Dependents: Deployment `its ReplicaSets and pods`; StatefulSet, DaemonSet, ReplicaSet, Job `its pods`; CronJob `its Jobs and their pods` |
 | Warnings (warning tone) | the table below, then the finalizer lines |
 | Typed name | single: `Type the object name to confirm` (`api-x`); bulk: the cluster name |
-| Buttons | `Back`, danger primary `Delete` / `Delete {n} of {m}` |
+| Buttons | `Back`, danger primary `Delete` (one object), `Delete {n} {noun}` (several, as the title), `Delete {n} of {m}` once some went away |
 
 | Kind | Warning |
 |---|---|
@@ -83,4 +83,4 @@ One line per committed object: `{"action":"Delete","object":{…},"fields":[{"pa
 | Screen | Fixture |
 |---|---|
 | `delete-confirm` | first Deployment, PROD TypeName tier (object name), propagation radio, one row `passed · 98 ms`, `Has finalizers: foregroundDeletion` |
-| `delete-bulk-confirm` | Pods, 12 checked, STG Click tier, the list with `passed` rows, `2 pods are not managed by a controller`, danger `Delete 12 of 12` |
+| `delete-bulk-confirm` | Pods, 12 checked, STG Click tier, the list with `passed` rows, `2 pods are not managed by a controller`, the list with `+N more · scroll the list` when it has more than 8 rows, danger `Delete 12 pods` |

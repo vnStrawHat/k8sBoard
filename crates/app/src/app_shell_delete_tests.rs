@@ -946,7 +946,7 @@ fn del_on_a_ticked_row_deletes_the_ticked_set_in_order(cx: &mut TestAppContext) 
     t.t.wait_for_dry_run(cx);
     assert_eq!(t.dialog_label(cx), "Delete 2 pods");
     t.t.dialog(cx).read_with(cx, |dialog, _| {
-        assert_eq!(dialog.confirm_text().as_deref(), Some("Delete 2 of 2"));
+        assert_eq!(dialog.confirm_text().as_deref(), Some("Delete 2 pods"));
         assert_eq!(
             dialog.item_states(),
             vec![ItemProgress::Passed, ItemProgress::Passed]

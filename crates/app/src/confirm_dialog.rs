@@ -57,6 +57,8 @@ fn eviction_line(grace: &str) -> String {
 }
 /// The object list of a batch scrolls past this height.
 const ITEMS_MAX_HEIGHT: f32 = 240.;
+/// The rows of the list that always fit inside `ITEMS_MAX_HEIGHT`; more than that scroll.
+const ITEMS_VISIBLE: usize = 8;
 
 /// Destructive and privileged actions confirm with the danger button.
 fn has_danger_button(risk: ActionRisk) -> bool {
@@ -737,14 +739,26 @@ impl ConfirmDialog {
             }
             BatchExtras::Delete(_) | BatchExtras::None | BatchExtras::DefaultClass(_) => None,
         };
-        v_flex()
+        let list = v_flex()
             .id("batch-items")
             .gap_1()
             .max_h(px(ITEMS_MAX_HEIGHT))
             .overflow_y_scroll()
             .children(rows)
             .children(skipped)
-            .children(gone)
+            .children(gone);
+        // The list scrolls inside the dialog; without a hint the rows below the fold look absent.
+        let hidden = batch.plan.items.len().saturating_sub(ITEMS_VISIBLE);
+        let more = (hidden > 0).then(|| {
+            div()
+                .text_xs()
+                .text_color(theme.muted_foreground)
+                .child(format!("+{hidden} more · scroll the list"))
+        });
+        v_flex()
+            .gap_1()
+            .child(list)
+            .children(more)
             .into_any_element()
     }
 

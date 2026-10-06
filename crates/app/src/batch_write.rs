@@ -206,6 +206,8 @@ impl BatchIntent {
         let total = self.plan.items.len();
         match (&self.plan.extras, total) {
             (BatchExtras::Delete(_), 1) => self.verb.to_string(),
+            // Nothing went away: the title's count and noun, `Delete 12 pods`.
+            (BatchExtras::Delete(_), _) if gone == 0 => self.label.to_string(),
             (BatchExtras::Delete(_), _) => {
                 format!("{} {} of {total}", self.verb, total.saturating_sub(gone))
             }

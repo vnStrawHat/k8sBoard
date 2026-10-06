@@ -202,7 +202,7 @@ fn confirm_label_counts_what_is_still_to_delete() {
     assert_eq!(single.confirm_label(0), "Delete");
     let twelve: Vec<DeleteTarget> = (0..12).map(|n| pod(&format!("p-{n}"), true)).collect();
     let bulk = batch_of(ObjectKind::Pod, twelve);
-    assert_eq!(bulk.confirm_label(0), "Delete 12 of 12");
+    assert_eq!(bulk.confirm_label(0), "Delete 12 pods");
     assert_eq!(bulk.confirm_label(2), "Delete 10 of 12");
 }
 
