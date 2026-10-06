@@ -777,6 +777,10 @@ pub(crate) fn key_availability_of(
             },
         };
     }
+    // Drain always opens its dialog; a gated session gets the read-only preview (spec 0034).
+    if action == ResourceAction::Drain {
+        return KeyAvailability::Run(action);
+    }
     match action_availability(action, guard) {
         ActionAvailability::Enabled => match subject {
             ResourceKey::Kind { kind, .. } => match kind_block(action, *kind) {
@@ -1611,7 +1615,7 @@ pub(crate) fn node_menu(
     let access = guard.access;
     menu.item(open_node_shell_item(node, guard))
         .item(guarded(row, cordon_item(node, guard, row, shell)))
-        .item(action_item(ResourceAction::Drain, guard))
+        .item(drain_item(guard))
         .separator()
         .item(action_item(ResourceAction::EditTaints, guard))
         .item(action_item(ResourceAction::EditLabels, guard))
@@ -3021,6 +3025,19 @@ fn action_item(action: ResourceAction, guard: &ClusterGuard<'_>) -> PopupMenuIte
         ActionAvailability::Disabled { reason } => disabled_menu_item(label, reason),
     };
     keyed(item, action)
+}
+
+/// Drain… of a node: always clickable. A gated session (read-only, locked, a missing permission)
+/// gets the read-only preview of the plan, and the item keeps the gate's reason as its hint and
+/// tooltip.
+fn drain_item(guard: &ClusterGuard<'_>) -> PopupMenuItem {
+    match action_availability(ResourceAction::Drain, guard) {
+        ActionAvailability::Enabled => action_item(ResourceAction::Drain, guard),
+        ActionAvailability::Disabled { reason } => keyed(
+            PopupMenuItem::element(move |_, _| disabled_label("Drain…".into(), reason.clone())),
+            ResourceAction::Drain,
+        ),
+    }
 }
 
 /// The gate first, then the state of this row: the lock and the permissions win over a paused

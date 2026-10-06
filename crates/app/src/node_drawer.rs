@@ -186,6 +186,18 @@ fn overview(
         .child(section_title("Allocatable used", cx))
         .child(allocatable_used(node, live, cx));
 
+    // What runs here comes right after what it uses, before the node's addresses.
+    if let Some(live) = live {
+        column = column.child(pods_section(
+            &PodOwner::Node {
+                name: node.name.clone(),
+            },
+            &KindObject::Plain,
+            live,
+            cx,
+        ));
+    }
+
     column = column.child(section_title("Addresses", cx));
     if node.addresses.is_empty() {
         column = column.child(absent_text(cx));
@@ -252,16 +264,6 @@ fn overview(
         ));
     }
 
-    if let Some(live) = live {
-        column = column.child(pods_section(
-            &PodOwner::Node {
-                name: node.name.clone(),
-            },
-            &KindObject::Plain,
-            live,
-            cx,
-        ));
-    }
     column
         .child(section_title("Labels", cx))
         .child(chips(

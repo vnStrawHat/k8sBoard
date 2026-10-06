@@ -456,13 +456,41 @@ fn the_d_key_opens_a_dialog_and_nothing_runs_from_it(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-fn the_dialog_on_a_locked_cluster_does_not_open(cx: &mut TestAppContext) {
+fn the_dialog_on_a_locked_cluster_opens_as_a_preview_with_no_confirm(cx: &mut TestAppContext) {
     let t = drain_test("drain-locked", three_pods, cx);
     let prod_api = t.activate_prod(cx);
-    t.open(&t.t.prod, &["node-a"], cx);
-    assert!(t.dialog(cx).is_none());
-    assert!(pod_lists(&prod_api).is_empty());
-    assert!(writes(&prod_api).is_empty());
+    let dialog = t.open_and_settle(&t.t.prod, &["node-a"], cx);
+    let reason = Some("prod-a is read-only".into());
+    dialog.read_with(cx, |dialog, cx| {
+        assert!(dialog.is_preview());
+        // The gate's reason stands where the confirm buttons would be, for both of them.
+        assert_eq!(dialog.drain_blocked_by(cx), reason);
+        assert_eq!(dialog.cordon_blocked_by(cx), reason);
+        // The plan is read as usual.
+        assert_eq!(dialog.plans().len(), 1);
+    });
+    assert_eq!(pod_lists(&prod_api).len(), 1);
+    // Nothing the user presses commits: only dry-runs ever leave.
+    t.t.fixture.with_window(cx, |window, cx| {
+        dialog.update(cx, |dialog, cx| {
+            dialog.press_drain(window, cx);
+            dialog.press_cordon_only(window, cx);
+        });
+    });
+    cx.run_until_parked();
+    assert!(t.tab(cx).is_none());
+    assert!(
+        writes(&prod_api)
+            .iter()
+            .all(|request| request.has_query("dryRun", "All"))
+    );
+}
+
+#[gpui_kit::test]
+fn the_dialog_of_an_unlocked_cluster_is_not_a_preview(cx: &mut TestAppContext) {
+    let t = drain_test("drain-not-preview", three_pods, cx);
+    let dialog = t.open_and_settle(&t.t.stg, &["node-b"], cx);
+    assert!(!dialog.read_with(cx, |dialog, _| dialog.is_preview()));
 }
 
 #[gpui_kit::test]
@@ -890,13 +918,16 @@ fn the_selection_bar_drains_the_ticked_nodes_of_one_cluster(cx: &mut TestAppCont
 }
 
 #[gpui_kit::test]
-fn the_bar_drain_is_off_on_a_locked_cluster(cx: &mut TestAppContext) {
+fn the_bar_drain_is_a_preview_on_a_locked_cluster(cx: &mut TestAppContext) {
     let t = drain_test("drain-bar-locked", three_pods, cx);
     t.activate_prod(cx);
     t.tick(&[0], cx);
     assert_eq!(
         t.drain_button(cx),
-        crate::row_selection::BulkState::Off("prod-a is read-only".into())
+        crate::row_selection::BulkState::Preview(
+            crate::resource_actions::ResourceAction::Drain,
+            "prod-a is read-only".into()
+        )
     );
 }
 

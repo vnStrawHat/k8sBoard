@@ -1355,9 +1355,10 @@ fn key_availability_of_the_node_keys_follows_the_gate() {
         );
     }
     let denied = known_denying(&[AccessCheck::CreatePodEviction]);
+    // A denied permission still opens the dialog: it is the read-only preview then.
     assert_eq!(
-        disabled_reason(availability(RowAction::Drain, &node_key(), &denied)),
-        "Not permitted: create pods/eviction"
+        availability(RowAction::Drain, &node_key(), &denied),
+        KeyAvailability::Run(ResourceAction::Drain)
     );
     // Where a subject has no such action, the key is silent.
     assert_eq!(

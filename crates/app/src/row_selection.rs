@@ -82,6 +82,9 @@ pub(crate) fn bulk_actions(screen: Screen) -> &'static [KindAction] {
 pub(crate) enum BulkState {
     /// Runs this action on the ticked rows.
     Ready(ResourceAction),
+    /// Runs this action in its read-only preview: the gate said no, and the tooltip gives the
+    /// reason (Drain opens the plan without its confirm buttons).
+    Preview(ResourceAction, SharedString),
     /// Off, with the reason its tooltip gives.
     Off(SharedString),
 }
@@ -130,6 +133,14 @@ pub(crate) fn selection_bar(
                     base.on_click(move |_, window, cx| {
                         let _ = shell.update(cx, |shell, cx| shell.run_bulk(action, window, cx));
                     })
+                }
+                BulkState::Preview(action, reason) => {
+                    let shell = shell.clone();
+                    base.tooltip(with_next_step(&reason))
+                        .on_click(move |_, window, cx| {
+                            let _ =
+                                shell.update(cx, |shell, cx| shell.run_bulk(action, window, cx));
+                        })
                 }
                 BulkState::Off(reason) => base.disabled(true).tooltip(with_next_step(&reason)),
             }

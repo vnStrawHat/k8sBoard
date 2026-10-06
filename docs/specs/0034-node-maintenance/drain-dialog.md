@@ -85,3 +85,11 @@ Row: `Grace period` select `Pod default` · `10 s` · `30 s` · `60 s` · `120 s
 - `Cordon only` (gated `PatchNodes`): needs the same `Confirmed`; commits `SetNodeSchedulable { false }` per uncordoned node through `checked_write(WriteStep { intent: <cordon GuardedIntent>, mode: Commit { confirmed }, .. })`, then closes. No eviction is sent.
 - `Drain …`: closes the dialog and starts the run (drain-run.md) with the plan, options, generation, the `Confirmed`, and the note. In step 3a the button is shown disabled with `Comes in a later version`; step 3b enables it.
 - The drain dialog is a W6 front end, not a `GuardedKind`: it reuses `confirm_step`, `TypedMatch`, `confirmed()`, the 0030 Enter rules, and sends every request through `checked_write`, so lock, generation, and audit stay in one place.
+
+## Preview mode (a session that cannot drain)
+
+`Drain…` (node menu, selection bar, `D`, palette) always opens the dialog. When `action_availability(Drain)` is `Disabled` (read-only, locked, a missing right), the dialog is a **preview**: it loads the plan and runs the dry-runs as usual, titled `Drain preview: node {name}`, but shows no typed-name field, note, or confirm buttons. The gate's reason takes their place, with only a `Close` button; `drain_block` and `cordon_block` return it, so Enter and the buttons never commit. The menu item and the bar button stay enabled and keep the reason as their tooltip (`BulkState::Preview`).
+
+## Pod tags in the node drawer
+
+The Pods section of the node drawer (above Addresses) tags each pod from facts the pods list already has: `DS` (DaemonSet controller), `emptyDir` (an emptyDir mount), `PDB 0` (a budget that selects it allows no disruption now, from the PDB condition feed), `no controller`. A finished pod has none. The tags derive from `PodSummary` and the feed, not from `drain_plan`, which reads `DrainPod`.

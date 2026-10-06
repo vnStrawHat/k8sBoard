@@ -140,6 +140,9 @@ pub(crate) struct DrainDialog {
     generation: u64,
     /// The tier the dialog opened with; the live one can only be stricter (`live_tier`).
     confirm: DialogConfirm,
+    /// Why this session cannot drain (read-only, locked, a missing permission): the dialog is a
+    /// preview, the plan only, and the reason takes the place of its confirm buttons.
+    preview_reason: Option<SharedString>,
     nodes: Vec<NodeData>,
     budgets: BudgetsLoad,
     options: DrainOptions,
@@ -176,6 +179,8 @@ struct DrainTarget {
     environment: Environment,
     generation: u64,
     confirm: DialogConfirm,
+    /// The gate's reason when the session cannot drain: the dialog opens as a preview.
+    preview_reason: Option<SharedString>,
     /// The nodes in the order they were ticked, each with whether it is cordoned already.
     nodes: Vec<(String, bool)>,
 }
@@ -287,6 +292,7 @@ impl DrainDialog {
             environment: target.environment,
             generation: target.generation,
             confirm: target.confirm,
+            preview_reason: target.preview_reason,
             nodes,
             budgets: BudgetsLoad::Loading,
             options,
@@ -774,6 +780,9 @@ impl DrainDialog {
     /// Why Drain is off, `None` when it is on: the pods are read, no pod needs an option that is not
     /// ticked, and the dry-run, the lock, and the typed name allow it.
     fn drain_block(&self, cx: &App) -> Option<SharedString> {
+        if self.preview_reason.is_some() {
+            return self.preview_reason.clone();
+        }
         if self.is_loading() {
             return Some("Loading pods…".into());
         }
@@ -788,6 +797,9 @@ impl DrainDialog {
 
     /// Why Cordon only is off, `None` when it is on.
     fn cordon_block(&self, cx: &App) -> Option<SharedString> {
+        if self.preview_reason.is_some() {
+            return self.preview_reason.clone();
+        }
         if self.checks.cordons.is_empty() {
             return Some(
                 if self.nodes.len() == 1 {
@@ -916,9 +928,11 @@ impl DrainDialog {
     }
 
     fn title(&self, cx: &App) -> AnyElement {
-        let text = match self.nodes.as_slice() {
-            [only] => format!("Drain node {}?", only.name),
-            nodes => format!("Drain {} nodes?", nodes.len()),
+        let text = match (self.nodes.as_slice(), self.preview_reason.is_some()) {
+            ([only], false) => format!("Drain node {}?", only.name),
+            (nodes, false) => format!("Drain {} nodes?", nodes.len()),
+            ([only], true) => format!("Drain preview: node {}", only.name),
+            (nodes, true) => format!("Drain preview: {} nodes", nodes.len()),
         };
         h_flex()
             .gap_2()
@@ -1261,6 +1275,9 @@ impl DrainDialog {
     }
 
     fn render_typed(&self, cx: &App) -> Option<AnyElement> {
+        if self.preview_reason.is_some() {
+            return None;
+        }
         // The field is Drain's: when a cordon alone asks for it, so does the drain.
         if matches!(self.live_tier(DrainButton::Drain, cx), DialogConfirm::Click) {
             return None;
@@ -1287,6 +1304,9 @@ impl DrainDialog {
     }
 
     fn render_note_input(&self, cx: &App) -> Option<AnyElement> {
+        if self.preview_reason.is_some() {
+            return None;
+        }
         let muted = cx.theme().muted_foreground;
         let no_folder = crate::settings::AppSettings::config_dir(cx).is_none();
         if !self.is_note_shown && !no_folder {
@@ -1312,6 +1332,19 @@ impl DrainDialog {
         drain_block: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        if self.preview_reason.is_some() {
+            return h_flex()
+                .w_full()
+                .justify_end()
+                .child(
+                    Button::new("drain-cancel")
+                        .label("Close")
+                        .small()
+                        .outline()
+                        .on_click(cx.listener(|dialog, _, window, cx| dialog.close(window, cx))),
+                )
+                .into_any_element();
+        }
         let drain_label = match self.nodes.as_slice() {
             [only] => format!("Drain {}", only.name),
             nodes => format!("Drain {} nodes", nodes.len()),
@@ -1381,10 +1414,11 @@ impl Render for DrainDialog {
         let (drain_block, cordon_block) = (self.drain_block(cx), self.cordon_block(cx));
         // The reason a button is off, when the lines above do not already say it.
         let typed_reason = typed_prompt_text(self.expected());
+        // A preview always says why it has no buttons, even while the pods load.
         let block_text = drain_block
             .clone()
             .filter(|reason| reason.as_ref() != typed_reason)
-            .filter(|_| !self.is_loading());
+            .filter(|_| self.preview_reason.is_some() || !self.is_loading());
         let body = v_flex()
             .id("drain-body")
             .gap_2()
@@ -1448,13 +1482,12 @@ impl AppShell {
                 );
                 return;
             };
-            // A stale menu or a key pressed in a gap cannot bypass the gate.
-            if let ActionAvailability::Disabled { reason } =
-                action_availability(ResourceAction::Drain, &guard)
-            {
-                notify(window, cx, unavailable_text(label, &reason));
-                return;
-            }
+            // A session that cannot drain still gets the plan: the dialog opens as a preview, and
+            // the gate's reason takes the place of its buttons.
+            let preview_reason = match action_availability(ResourceAction::Drain, &guard) {
+                ActionAvailability::Enabled => None,
+                ActionAvailability::Disabled { reason } => Some(reason),
+            };
             if self.has_running_drain(cluster, cx) {
                 let reason = format!("a drain is already running on {}", guard.display_name());
                 notify(window, cx, unavailable_text(label, &reason));
@@ -1494,6 +1527,7 @@ impl AppShell {
                 environment: guard.profile.environment.clone(),
                 generation: guard.generation,
                 confirm: confirm_step(guard.profile.confirm, ActionRisk::Destructive, expected),
+                preview_reason,
                 nodes: listed,
             };
             (target, live.connection().clone())
@@ -1622,6 +1656,7 @@ impl AppShell {
             environment,
             generation: 0,
             confirm: confirm_step(ConfirmMode::for_tier(tier), ActionRisk::Destructive, NODE),
+            preview_reason: None,
             nodes: vec![(NODE.to_owned(), false)],
         };
         let shell = cx.weak_entity();
@@ -1784,6 +1819,11 @@ impl DrainDialog {
 
     pub(crate) fn tick_skip(&mut self, is_on: bool, window: &mut Window, cx: &mut Context<Self>) {
         self.set_skip_budgets(is_on, window, cx);
+    }
+
+    /// Whether the dialog is the read-only preview of a session that cannot drain.
+    pub(crate) fn is_preview(&self) -> bool {
+        self.preview_reason.is_some()
     }
 
     /// Whether a dry-run loop is running now.

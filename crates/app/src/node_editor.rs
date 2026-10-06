@@ -799,8 +799,13 @@ impl AppShell {
         let Some(guard) = self.guard_for(&cluster, cx) else {
             return BulkState::Off("Not connected".into());
         };
+        // Drain still opens, as a read-only preview, when the gate says no.
+        let mut preview = None;
         if let ActionAvailability::Disabled { reason } = action_availability(action, &guard) {
-            return BulkState::Off(reason);
+            if action != ResourceAction::Drain {
+                return BulkState::Off(reason);
+            }
+            preview = Some(reason);
         }
         if let Some(reason) = self.drain_conflict(&cluster, action, cx) {
             return BulkState::Off(reason.into());
@@ -819,7 +824,9 @@ impl AppShell {
                         format!("A drain is already running on {}", guard.display_name()).into(),
                     );
                 }
-                return BulkState::Ready(action);
+                return preview.map_or(BulkState::Ready(action), |reason| {
+                    BulkState::Preview(action, reason)
+                });
             }
         };
         if self.running_batches.contains(&cluster) {

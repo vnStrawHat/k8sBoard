@@ -38,3 +38,7 @@ pub(crate) fn condition_status_text(status: ConditionStatus) -> &'static str; //
 ## Not in this step
 
 CPU/Memory usage and allocated (requested) totals (0010, 0021), node shell, cordon, drain (0034, 0037), kubelet logs (0019), Edit taints/labels (mutating).
+
+## Later changes
+
+The Pods section sits above Addresses and tags each pod `DS`, `emptyDir`, `PDB 0`, or `no controller` (see 0034 `drain-dialog.md`).

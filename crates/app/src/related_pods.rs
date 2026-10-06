@@ -1,6 +1,10 @@
 //! The pods section of a drawer: the pods a workload or a node runs.
 
-use cluster::{ClaimTemplate, NamespaceScope, PodSummary, VolumeSource};
+use cluster::{
+    ClaimTemplate, DisruptionState, NamespaceScope, PodDisruptionBudgetSummary, PodSummary,
+    VolumeSource,
+};
+use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{ActiveTheme as _, h_flex, v_flex};
 use gpui_kit::{
     AnyElement, Context, InteractiveElement as _, IntoElement, ParentElement as _,
@@ -14,7 +18,8 @@ use crate::kind_diagnosis::first_main_termination;
 use crate::kind_row::{
     DAEMON_SET_KIND, JOB_KIND, KindObject, PodOwner, STATEFUL_SET_KIND, owns_pod,
 };
-use crate::status_tone::{pod_status_label, toned_text};
+use crate::resource_kind::ResourceKind;
+use crate::status_tone::{StatusTone, pod_status_label, tone_color, toned_text};
 use crate::table_selection::ResourceKey;
 use crate::workload_rows::sort_by_ordinal;
 
@@ -49,6 +54,21 @@ pub(crate) fn pods_section(
         )
     };
     let hidden = pods.len().saturating_sub(MAX_RELATED_PODS);
+    // Only a node's pods are read for a drain; the budgets come from the always-on PDB feed.
+    let budgets: Vec<&PodDisruptionBudgetSummary> = match owner {
+        PodOwner::Node { .. } => live
+            .issue_feeds
+            .condition(ResourceKind::PodDisruptionBudgets)
+            .and_then(|feed| feed.list.ready_items())
+            .into_iter()
+            .flatten()
+            .filter_map(|object| match object {
+                KindObject::PodDisruptionBudget(budget) => Some(budget),
+                _ => None,
+            })
+            .collect(),
+        _ => Vec::new(),
+    };
     let theme = cx.theme();
     v_flex()
         .child(section_title(title, cx))
@@ -69,7 +89,7 @@ pub(crate) fn pods_section(
             pods.iter()
                 .take(MAX_RELATED_PODS)
                 .enumerate()
-                .map(|(index, pod)| related_pod_row(index, pod, detail, cx)),
+                .map(|(index, pod)| related_pod_row(index, pod, detail, &budgets, cx)),
         )
         .children((hidden > 0).then(|| {
             div()
@@ -177,13 +197,104 @@ fn exit_text(pod: &PodSummary) -> Option<String> {
     first_main_termination(pod).map(|termination| format!("exit {}", termination.exit_code))
 }
 
+/// What a drain would meet on a pod of a node, shown as a small tag after its status.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DrainTag {
+    DaemonSet,
+    EmptyDir,
+    /// A budget that selects the pod allows no disruption now.
+    ZeroDisruptions,
+    NoController,
+}
+
+impl DrainTag {
+    fn label(self) -> &'static str {
+        match self {
+            Self::DaemonSet => "DS",
+            Self::EmptyDir => "emptyDir",
+            Self::ZeroDisruptions => "PDB 0",
+            Self::NoController => "no controller",
+        }
+    }
+
+    fn hint(self) -> &'static str {
+        match self {
+            Self::DaemonSet => "DaemonSet pod: a drain skips it only with Ignore DaemonSet pods",
+            Self::EmptyDir => "Uses an emptyDir: a drain needs Delete emptyDir data",
+            Self::ZeroDisruptions => "A PodDisruptionBudget allows 0 disruptions: the drain waits",
+            Self::NoController => "No controller recreates it: a drain needs Force unmanaged pods",
+        }
+    }
+}
+
+/// The tags of `pod` for a drain of its node, from the same facts `drain_plan` reads. A finished
+/// pod is evicted whatever it is, so it has none.
+fn drain_tags(pod: &PodSummary, budgets: &[&PodDisruptionBudgetSummary]) -> Vec<DrainTag> {
+    if pod.is_finished {
+        return Vec::new();
+    }
+    let mut tags = Vec::new();
+    match &pod.controller {
+        Some(controller) if controller.kind == DAEMON_SET_KIND => tags.push(DrainTag::DaemonSet),
+        Some(_) => {}
+        None => tags.push(DrainTag::NoController),
+    }
+    let has_empty_dir = pod
+        .containers
+        .iter()
+        .flat_map(|container| &container.mounts)
+        .any(|mount| mount.source == VolumeSource::EmptyDir);
+    if has_empty_dir {
+        tags.push(DrainTag::EmptyDir);
+    }
+    let is_blocked = budgets.iter().any(|budget| {
+        budget.namespace == pod.namespace
+            && budget
+                .selector
+                .as_ref()
+                .is_some_and(|selector| selector.matches(&pod.labels))
+            && matches!(budget.disruption_state(), DisruptionState::Blocked(_))
+    });
+    if is_blocked {
+        tags.push(DrainTag::ZeroDisruptions);
+    }
+    tags
+}
+
+/// One small tag of a pod row; `PDB 0` is the warning one, the rest are plain facts.
+fn drain_tag(tag: DrainTag, cx: &Context<AppShell>) -> AnyElement {
+    let theme = cx.theme();
+    let color = match tag {
+        DrainTag::ZeroDisruptions => tone_color(StatusTone::Warn, cx),
+        _ => theme.muted_foreground,
+    };
+    div()
+        .id(tag.label())
+        .flex_shrink_0()
+        .px_1p5()
+        .rounded(theme.radius)
+        .border_1()
+        .border_color(theme.border)
+        .text_xs()
+        .text_color(color)
+        .tooltip(move |window, cx| Tooltip::new(tag.hint()).build(window, cx))
+        .child(tag.label())
+        .into_any_element()
+}
+
 fn related_pod_row(
     index: usize,
     pod: &PodSummary,
     detail: PodRowDetail,
+    budgets: &[&PodDisruptionBudgetSummary],
     cx: &Context<AppShell>,
 ) -> AnyElement {
     let theme = cx.theme();
+    // Only a node's pods are tagged: they are what a drain acts on.
+    let tags = match detail {
+        PodRowDetail::NamespaceAndStatus => drain_tags(pod, budgets),
+        _ => Vec::new(),
+    };
     let key = ResourceKey::of_pod(pod);
     // The text after the status: the claims of an ordinal, or the exit code of an attempt.
     let extra = match detail {
@@ -228,6 +339,7 @@ fn related_pod_row(
                 .child(link_name(index, &pod.name, cx)),
         )
         .child(toned_text(pod_status_label(pod), cx))
+        .children(tags.into_iter().map(|tag| drain_tag(tag, cx)))
         .children(matches!(detail, PodRowDetail::StatusAndNode).then(|| {
             div()
                 .flex_shrink_0()
@@ -490,5 +602,90 @@ mod tests {
         restarted.containers = vec![main];
         assert_eq!(exit_text(&restarted).as_deref(), Some("exit 1"));
         assert_eq!(exit_text(&pod("a-running", None)), None);
+    }
+
+    fn owned_by(kind: &str, mut pod: PodSummary) -> PodSummary {
+        pod.controller = Some(cluster::ControllerRef {
+            kind: kind.to_owned(),
+            name: "owner".to_owned(),
+        });
+        pod
+    }
+
+    fn budget(allowed: u32, healthy: u32) -> PodDisruptionBudgetSummary {
+        PodDisruptionBudgetSummary {
+            namespace: "ns".to_owned(),
+            name: "api-pdb".to_owned(),
+            created_at: None,
+            labels: Vec::new(),
+            min_available: None,
+            max_unavailable: None,
+            selector: cluster::Selector::of_labels(&["app=api".to_owned()]),
+            current_healthy: healthy,
+            desired_healthy: 2,
+            expected_pods: 2,
+            disruptions_allowed: allowed,
+            unhealthy_pod_eviction_policy: None,
+            conditions: Vec::new(),
+            is_status_stale: false,
+        }
+    }
+
+    #[test]
+    fn a_replica_set_pod_with_nothing_special_has_no_tag() {
+        let pod = owned_by("ReplicaSet", pod("web-1", None));
+        assert_eq!(drain_tags(&pod, &[]), Vec::new());
+    }
+
+    #[test]
+    fn a_daemon_set_pod_is_tagged_ds() {
+        let pod = owned_by(DAEMON_SET_KIND, pod("agent", None));
+        assert_eq!(drain_tags(&pod, &[]), [DrainTag::DaemonSet]);
+        assert_eq!(DrainTag::DaemonSet.label(), "DS");
+    }
+
+    #[test]
+    fn a_pod_mounting_an_empty_dir_is_tagged() {
+        let mut pod = owned_by("ReplicaSet", pod("web-1", None));
+        let mut scratch = mount_of("unused");
+        scratch.source = VolumeSource::EmptyDir;
+        pod.containers = vec![container(ContainerKind::Main, running(), vec![scratch])];
+        assert_eq!(drain_tags(&pod, &[]), [DrainTag::EmptyDir]);
+        assert_eq!(DrainTag::EmptyDir.label(), "emptyDir");
+    }
+
+    #[test]
+    fn a_pod_without_a_controller_is_tagged() {
+        assert_eq!(
+            drain_tags(&pod("naked", None), &[]),
+            [DrainTag::NoController]
+        );
+        assert_eq!(DrainTag::NoController.label(), "no controller");
+    }
+
+    #[test]
+    fn a_pod_under_a_budget_that_allows_none_is_tagged_pdb_0() {
+        let mut pod = owned_by("ReplicaSet", pod("api-1", None));
+        pod.labels = vec!["app=api".to_owned()];
+        let full = budget(0, 2);
+        assert_eq!(drain_tags(&pod, &[&full]), [DrainTag::ZeroDisruptions]);
+        assert_eq!(DrainTag::ZeroDisruptions.label(), "PDB 0");
+        // A budget with room, one of another namespace, and one of other labels do not count.
+        let roomy = budget(1, 2);
+        let mut elsewhere = budget(0, 2);
+        elsewhere.namespace = "other".to_owned();
+        let mut unrelated = budget(0, 2);
+        unrelated.selector = cluster::Selector::of_labels(&["app=db".to_owned()]);
+        assert_eq!(
+            drain_tags(&pod, &[&roomy, &elsewhere, &unrelated]),
+            Vec::new()
+        );
+    }
+
+    #[test]
+    fn a_finished_pod_has_no_tag() {
+        let mut pod = pod("job-1", None);
+        pod.is_finished = true;
+        assert_eq!(drain_tags(&pod, &[]), Vec::new());
     }
 }
