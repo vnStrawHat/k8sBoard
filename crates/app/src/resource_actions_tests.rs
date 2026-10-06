@@ -3982,7 +3982,7 @@ fn short_reason_reduces_known_sentences_to_a_few_words() {
         ("Not permitted: delete pods", "No permission · delete pods"),
         (
             "Not permitted: get and create pods/exec",
-            "No permission · get/create pods/exec",
+            "No permission · pods/exec",
         ),
         (NOT_SHIPPED_REASON, "Later version"),
         (NOT_RUNNING_REASON, "Not running"),

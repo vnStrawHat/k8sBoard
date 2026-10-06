@@ -864,9 +864,6 @@ pub(crate) fn chips(id: impl Into<ElementId>, terms: &[SharedString], cx: &App) 
         .into_any_element()
 }
 
-/// The widest the reason beside a disabled Forward button grows before it is cut.
-const DISABLED_REASON_WIDTH: Pixels = px(200.);
-
 /// A port with its Forward button: Forward to start, `● localhost:19090 · Stop` while a forward of
 /// the port runs, or a disabled button whose tooltip says why (spec 0035).
 pub(crate) fn port_row(
@@ -877,6 +874,8 @@ pub(crate) fn port_row(
     cx: &App,
 ) -> AnyElement {
     let theme = cx.theme();
+    // Under the port, so a disabled Forward says why without cutting the port's own text.
+    let mut reason_line: Option<AnyElement> = None;
     let action: AnyElement = match (button, on_click) {
         (PortButton::Live { local_port, .. }, Some(on_click)) => div()
             .id(("forward-live", id))
@@ -894,32 +893,27 @@ pub(crate) fn port_row(
             .ghost()
             .on_click(move |event, window, cx| on_click(event, window, cx))
             .into_any_element(),
-        // The short reason sits beside the button: a tooltip alone hides why Forward is off.
+        // A tooltip alone hides why Forward is off, so the short reason is drawn too.
         (PortButton::Disabled(reason), _) => {
             let full = with_next_step(reason);
             let tooltip = full.clone();
-            h_flex()
-                .gap_1()
-                .items_center()
-                .child(
-                    div()
-                        .id(("forward-reason", id))
-                        .max_w(DISABLED_REASON_WIDTH)
-                        .truncate()
-                        .text_xs()
-                        .text_color(theme.muted_foreground)
-                        .tooltip(move |window, cx| Tooltip::new(tooltip.clone()).build(window, cx))
-                        .child(short_reason(reason)),
-                )
-                .child(
-                    Button::new(("forward", id))
-                        .label("Forward")
-                        .icon(Icon::new(IconName::ArrowLeftRight))
-                        .xsmall()
-                        .ghost()
-                        .disabled(true)
-                        .tooltip(full),
-                )
+            reason_line = Some(
+                div()
+                    .id(("forward-reason", id))
+                    .truncate()
+                    .text_xs()
+                    .text_color(theme.muted_foreground)
+                    .tooltip(move |window, cx| Tooltip::new(tooltip.clone()).build(window, cx))
+                    .child(short_reason(reason))
+                    .into_any_element(),
+            );
+            Button::new(("forward", id))
+                .label("Forward")
+                .icon(Icon::new(IconName::ArrowLeftRight))
+                .xsmall()
+                .ghost()
+                .disabled(true)
+                .tooltip(full)
                 .into_any_element()
         }
         // A button state without its click is not drawn as clickable.
@@ -936,10 +930,14 @@ pub(crate) fn port_row(
         .items_center()
         .text_sm()
         .child(
-            truncated_text(("port", id), text.clone())
+            v_flex()
                 .flex_1()
                 .min_w_0()
-                .font_family(theme.mono_font_family.clone()),
+                .child(
+                    truncated_text(("port", id), text.clone())
+                        .font_family(theme.mono_font_family.clone()),
+                )
+                .children(reason_line),
         )
         .child(action)
         .into_any_element()

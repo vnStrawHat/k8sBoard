@@ -3166,13 +3166,10 @@ fn disabled_label(label: SharedString, reason: SharedString) -> AnyElement {
 /// read; a reason with no entry shows as it is and is cut at `REASON_WIDTH`.
 pub(crate) fn short_reason(reason: &str) -> SharedString {
     let short = if let Some(denied) = reason.strip_prefix("Not permitted: ") {
-        // The verb and resource tell what to ask the cluster admin for; the pair of verbs of a shell
-        // or a forward reads as one right.
-        return format!(
-            "No permission · {}",
-            denied.replace("get and create", "get/create")
-        )
-        .into();
+        // The verb and resource tell what to ask the cluster admin for. The pair of verbs of a shell
+        // or a forward is one right, so it names the resource only; the tooltip has both verbs.
+        let wanted = denied.strip_prefix("get and create ").unwrap_or(denied);
+        return format!("No permission · {wanted}").into();
     } else if reason.ends_with(READ_ONLY_SUFFIX) {
         return format!("Read-only · {UNLOCK_KEYS}").into();
     } else if reason == NOT_SHIPPED_REASON {
