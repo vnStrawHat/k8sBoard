@@ -27,6 +27,7 @@ use crate::monitor_data::MonitorData;
 use crate::monitor_source::SourceFetch;
 use crate::object_events::events_title;
 use crate::port_forward_menu::{PortButton, PortButtons};
+use crate::resource_actions::{short_reason, with_next_step};
 use crate::resource_kind::ResourceKind;
 use crate::secret_values::{SecretAction, SecretValuesView};
 use crate::table_selection::{ClusterObject, ResourceKey};
@@ -863,6 +864,9 @@ pub(crate) fn chips(id: impl Into<ElementId>, terms: &[SharedString], cx: &App) 
         .into_any_element()
 }
 
+/// The widest the reason beside a disabled Forward button grows before it is cut.
+const DISABLED_REASON_WIDTH: Pixels = px(200.);
+
 /// A port with its Forward button: Forward to start, `● localhost:19090 · Stop` while a forward of
 /// the port runs, or a disabled button whose tooltip says why (spec 0035).
 pub(crate) fn port_row(
@@ -890,14 +894,34 @@ pub(crate) fn port_row(
             .ghost()
             .on_click(move |event, window, cx| on_click(event, window, cx))
             .into_any_element(),
-        (PortButton::Disabled(reason), _) => Button::new(("forward", id))
-            .label("Forward")
-            .icon(Icon::new(IconName::ArrowLeftRight))
-            .xsmall()
-            .ghost()
-            .disabled(true)
-            .tooltip(reason.clone())
-            .into_any_element(),
+        // The short reason sits beside the button: a tooltip alone hides why Forward is off.
+        (PortButton::Disabled(reason), _) => {
+            let full = with_next_step(reason);
+            let tooltip = full.clone();
+            h_flex()
+                .gap_1()
+                .items_center()
+                .child(
+                    div()
+                        .id(("forward-reason", id))
+                        .max_w(DISABLED_REASON_WIDTH)
+                        .truncate()
+                        .text_xs()
+                        .text_color(theme.muted_foreground)
+                        .tooltip(move |window, cx| Tooltip::new(tooltip.clone()).build(window, cx))
+                        .child(short_reason(reason)),
+                )
+                .child(
+                    Button::new(("forward", id))
+                        .label("Forward")
+                        .icon(Icon::new(IconName::ArrowLeftRight))
+                        .xsmall()
+                        .ghost()
+                        .disabled(true)
+                        .tooltip(full),
+                )
+                .into_any_element()
+        }
         // A button state without its click is not drawn as clickable.
         (PortButton::Live { .. } | PortButton::Offer, None) => Button::new(("forward", id))
             .label("Forward")

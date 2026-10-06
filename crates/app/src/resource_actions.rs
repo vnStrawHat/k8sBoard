@@ -1034,13 +1034,16 @@ const VERB_PAIRS: [(AccessCheck, AccessCheck, &str); 3] = [
     ),
 ];
 
+/// The start of the reason of an action the permissions do not allow.
+pub(crate) const NOT_PERMITTED: &str = "Not permitted";
+
 fn denied_text(denied: AccessCheck, checks: &[AccessCheck]) -> String {
     let pair = VERB_PAIRS.iter().find(|(get, create, _)| {
         (denied == *get || denied == *create) && checks.contains(get) && checks.contains(create)
     });
     match pair {
-        Some((_, _, resource)) => format!("Not permitted: get and create {resource}"),
-        None => format!("Not permitted: {denied}"),
+        Some((_, _, resource)) => format!("{NOT_PERMITTED}: get and create {resource}"),
+        None => format!("{NOT_PERMITTED}: {denied}"),
     }
 }
 
@@ -3098,7 +3101,7 @@ impl MenuItemIcon for PopupMenuItem {
 
 /// The widest the reason of a disabled item grows; a longer one is cut with an ellipsis, so that a
 /// reason never stretches the menu.
-const REASON_WIDTH: Pixels = px(190.);
+const REASON_WIDTH: Pixels = px(240.);
 
 /// The chord of the read-only toggle (`ToggleReadOnly`, bound with the platform modifier).
 const UNLOCK_KEYS: &str = if cfg!(target_os = "macos") {
@@ -3107,15 +3110,19 @@ const UNLOCK_KEYS: &str = if cfg!(target_os = "macos") {
     "Ctrl+Shift+R"
 };
 
-/// `reason`, followed by how to unlock the cluster when the reason says it is read-only or was
-/// locked while a dialog was open. Any other reason comes back as it is.
-pub(crate) fn with_unlock_hint(reason: &SharedString) -> SharedString {
+/// `reason`, followed by the next step: how to unlock the cluster when the reason says it is
+/// read-only or was locked while a dialog was open, or where to read the user's rules when a
+/// permission is missing. Any other reason comes back as it is.
+pub(crate) fn with_next_step(reason: &SharedString) -> SharedString {
     let name = reason
         .strip_suffix(READ_ONLY_SUFFIX)
         .or_else(|| reason.strip_suffix(LOCKED_SUFFIX));
     match name {
         Some(name) => {
             format!("{reason}. Unlock {name} with {UNLOCK_KEYS} or the title-bar badge").into()
+        }
+        None if reason.starts_with(NOT_PERMITTED) => {
+            format!("{reason}. Open Check permissions to see your rules").into()
         }
         None => reason.clone(),
     }
@@ -3150,7 +3157,7 @@ fn disabled_label(label: SharedString, reason: SharedString) -> AnyElement {
                 .text_sm()
                 .child(short),
         )
-        .tooltip(move |window, cx| Tooltip::new(with_unlock_hint(&reason)).build(window, cx))
+        .tooltip(move |window, cx| Tooltip::new(with_next_step(&reason)).build(window, cx))
         .into_any_element()
 }
 
@@ -3158,8 +3165,14 @@ fn disabled_label(label: SharedString, reason: SharedString) -> AnyElement {
 /// also fill notices and tooltips), so the short form is derived here, in the one place the menus
 /// read; a reason with no entry shows as it is and is cut at `REASON_WIDTH`.
 pub(crate) fn short_reason(reason: &str) -> SharedString {
-    let short = if reason.starts_with("Not permitted") {
-        "No permission"
+    let short = if let Some(denied) = reason.strip_prefix("Not permitted: ") {
+        // The verb and resource tell what to ask the cluster admin for; the pair of verbs of a shell
+        // or a forward reads as one right.
+        return format!(
+            "No permission · {}",
+            denied.replace("get and create", "get/create")
+        )
+        .into();
     } else if reason.ends_with(READ_ONLY_SUFFIX) {
         return format!("Read-only · {UNLOCK_KEYS}").into();
     } else if reason == NOT_SHIPPED_REASON {

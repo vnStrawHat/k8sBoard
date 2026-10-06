@@ -18,7 +18,7 @@ use gpui_kit::{AnyWindowHandle, App, AppContext as _, Context, SharedString, Wea
 use super::object_delete::{DeleteExtras, Removal, delete_commit_progress, delete_notice};
 use super::write_flow::{
     CheckedWriteError, CommitMode, Confirmed, DryRunState, WriteIntent, WriteStep, checked_write,
-    notify, notify_with, write_error_text,
+    notify, notify_unavailable, notify_with, write_error_text,
 };
 use super::{AppShell, Screen};
 use crate::cluster_registry::ClusterRef;
@@ -457,7 +457,8 @@ impl AppShell {
             if let ActionAvailability::Disabled { reason } =
                 action_availability(intent.action, &guard)
             {
-                notify(window, cx, unavailable_text(&intent.verb, &reason));
+                let (shell, cluster) = (cx.weak_entity(), intent.cluster.clone());
+                notify_unavailable(window, cx, &intent.verb, &reason, shell, cluster);
                 return;
             }
             if let Some(reason) = self.drain_conflict(&intent.cluster, intent.action, cx) {

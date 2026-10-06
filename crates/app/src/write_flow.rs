@@ -36,8 +36,8 @@ use crate::cluster_session::AccessState;
 use crate::confirm_dialog::{ConfirmDialog, DialogInputs, DialogKind};
 use crate::kind_row::KindObject;
 use crate::resource_actions::{
-    ActionAvailability, ResourceAction, action_availability, action_label, action_risk,
-    unavailable_text,
+    ActionAvailability, NOT_PERMITTED, ResourceAction, action_availability, action_label,
+    action_risk, unavailable_text,
 };
 use crate::settings::AppSettings;
 use crate::table_selection::{ClusterObject, ResourceKey};
@@ -1042,8 +1042,8 @@ impl AppShell {
             if let ActionAvailability::Disabled { reason } =
                 action_availability(intent.action, &guard)
             {
-                let text = unavailable_text(&intent.button, &reason);
-                notify(window, cx, text);
+                let (shell, cluster) = (cx.weak_entity(), intent.cluster.clone());
+                notify_unavailable(window, cx, &intent.button, &reason, shell, cluster);
                 return;
             }
             if let Some(reason) = self.drain_conflict(&intent.cluster, intent.action, cx) {
@@ -1209,6 +1209,39 @@ fn notify_with_view(
     window.push_notification(notification, cx);
 }
 
+/// The notice of an action the gate refused. A permission denial offers Check permissions, which
+/// opens the dialog for the cluster the action was on.
+pub(super) fn notify_unavailable(
+    window: &mut Window,
+    cx: &mut App,
+    label: &str,
+    reason: &str,
+    shell: WeakEntity<AppShell>,
+    cluster: ClusterRef,
+) {
+    let text = unavailable_text(label, reason);
+    if !reason.starts_with(NOT_PERMITTED) {
+        notify(window, cx, text);
+        return;
+    }
+    let notification = Notification::warning(text).action(move |_, _, cx| {
+        let (shell, cluster) = (shell.clone(), cluster.clone());
+        Button::new("check-permissions")
+            .label("Check permissions")
+            .small()
+            .outline()
+            .on_click(cx.listener(move |notification, _, window, cx| {
+                notification.dismiss(window, cx);
+                let cluster = cluster.clone();
+                let _ = shell.update(cx, |shell, cx| {
+                    let namespace = shell.tool_namespace(cx);
+                    shell.open_permissions(&cluster, None, namespace, true, window, cx);
+                });
+            }))
+    });
+    window.push_notification(notification, cx);
+}
+
 pub(super) fn notify_with(window: &mut Window, cx: &mut App, text: String, is_success: bool) {
     let notification = if is_success {
         Notification::success(text)
@@ -1261,7 +1294,8 @@ impl AppShell {
             if let ActionAvailability::Disabled { reason } =
                 action_availability(intent.action, &guard)
             {
-                notify(window, cx, unavailable_text(&intent.button, &reason));
+                let (shell, cluster) = (cx.weak_entity(), intent.cluster.clone());
+                notify_unavailable(window, cx, &intent.button, &reason, shell, cluster);
                 return;
             }
             (

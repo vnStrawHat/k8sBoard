@@ -3979,8 +3979,11 @@ fn short_reason_reduces_known_sentences_to_a_few_words() {
         format!("Read-only · {UNLOCK_KEYS}")
     );
     for (reason, short) in [
-        ("Not permitted: delete pods", "No permission"),
-        ("Not permitted: get and create pods/exec", "No permission"),
+        ("Not permitted: delete pods", "No permission · delete pods"),
+        (
+            "Not permitted: get and create pods/exec",
+            "No permission · get/create pods/exec",
+        ),
         (NOT_SHIPPED_REASON, "Later version"),
         (NOT_RUNNING_REASON, "Not running"),
         (STATIC_POD_TEXT, "Static pod"),
@@ -4034,8 +4037,8 @@ fn only_the_icon_of_a_disabled_item_fades() {
 }
 
 #[test]
-fn a_read_only_reason_says_how_to_unlock_and_others_are_left_alone() {
-    let hint = |reason: &str| with_unlock_hint(&SharedString::from(reason.to_owned()));
+fn a_blocked_reason_says_what_to_do_next_and_others_are_left_alone() {
+    let hint = |reason: &str| with_next_step(&SharedString::from(reason.to_owned()));
     assert_eq!(
         hint("stg-b is read-only"),
         format!("stg-b is read-only. Unlock stg-b with {UNLOCK_KEYS} or the title-bar badge")
@@ -4043,6 +4046,7 @@ fn a_read_only_reason_says_how_to_unlock_and_others_are_left_alone() {
     assert!(hint("stg-b was locked; nothing was changed").contains("Unlock stg-b with"));
     assert_eq!(
         hint("Not permitted: delete pods"),
-        "Not permitted: delete pods"
+        "Not permitted: delete pods. Open Check permissions to see your rules"
     );
+    assert_eq!(hint("Already terminating"), "Already terminating");
 }

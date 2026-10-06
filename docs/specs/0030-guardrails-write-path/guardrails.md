@@ -32,6 +32,7 @@ pub(crate) fn action_availability(action: ResourceAction, guard: &ClusterGuard) 
 | 5 | `WriteLock::Locked` | `{cluster} is read-only` (`{cluster}` = display name) |
 | 6 | otherwise | Enabled |
 
+- A denied action says what to do (UX walkthrough M14): a disabled menu row reads `No permission · {verb resource}` (`get/create` for a verb pair), its tooltip adds `Open Check permissions to see your rules`, a notice after a denied attempt carries a `Check permissions` button, and a disabled Forward button shows the same short reason beside it.
 - A locked cluster has an unlock path in place (UX walkthrough M17): a disabled menu row reads `Read-only · Ctrl+Shift+R` (`Cmd` on macOS) and its tooltip, a disabled bulk button, and the block line of a write dialog add `Unlock {cluster} with Ctrl+Shift+R or the title-bar badge`; the item stays disabled.
 - RBAC before the lock: unlocking cannot fix a denial, so it is the more useful reason.
 - `READ_ONLY_MODE_REASON` and `READ_ONLY_FEATURE_REASON` are replaced by the row-2 text; the 0028 test strings change with it.
