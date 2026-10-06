@@ -845,6 +845,23 @@ fn a_condition_keeps_its_reason_message_and_transition_time() {
 }
 
 #[test]
+fn a_true_failure_condition_is_bad_and_a_true_completion_is_ok() {
+    let tone = |name: &str| match condition_row(&condition(name, true, None)) {
+        DetailRow::Condition { status, .. } => status.tone,
+        other => panic!("not a condition row: {other:?}"),
+    };
+    for name in [
+        "Failed",
+        "ReplicaFailure",
+        "ScalingLimited",
+        "Unschedulable",
+    ] {
+        assert_eq!(tone(name), StatusTone::Bad, "{name}");
+    }
+    assert_eq!(tone("Complete"), StatusTone::Ok);
+}
+
+#[test]
 fn deployment_and_stateful_set_lead_with_rollout_bars_like_a_daemon_set() {
     let leads = |row: &KindRow, title: &str| -> Vec<DetailRow> {
         row.section(title).expect("section").rows.clone()

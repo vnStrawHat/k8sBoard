@@ -189,10 +189,24 @@ fn port_rows(containers: &[TemplateContainer]) -> Vec<DetailRow> {
         .collect()
 }
 
-/// `True` is ok; `False` is a warning. The reason follows the status either way, then the message
-/// and the age of the last transition that say what happened and when.
+/// Condition types whose `True` status means something is wrong, not healthy.
+const BAD_WHEN_TRUE: [&str; 4] = [
+    "Failed",
+    "ReplicaFailure",
+    "ScalingLimited",
+    "Unschedulable",
+];
+
+/// `True` is ok (bad for the types in `BAD_WHEN_TRUE`); `False` is a warning. The reason follows
+/// the status either way, then the message and the age of the last transition that say what
+/// happened and when.
 pub(crate) fn condition_row(condition: &WorkloadCondition) -> DetailRow {
-    condition_row_toned(condition, StatusTone::Ok)
+    let true_tone = if BAD_WHEN_TRUE.contains(&condition.name.as_str()) {
+        StatusTone::Bad
+    } else {
+        StatusTone::Ok
+    };
+    condition_row_toned(condition, true_tone)
 }
 
 /// `condition_row` with `true_tone` for a `True` status.
