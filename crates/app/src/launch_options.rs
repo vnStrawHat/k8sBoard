@@ -38,6 +38,7 @@ Options:
   --window-width <px>    window width, 800 to 3840 (default: 1320)
   --zoom <factor>        Topology zoom of the first view, 0.2 to 1.95 (default: the first view's own)
   --screenshot <path>    write a PNG and exit (needs a build with --features screenshot)
+  --script <path>        with --screenshot, play a step file first (keys, clicks, shot <name>)
   --help                 print this help
 ";
 
@@ -789,6 +790,10 @@ pub(crate) struct LaunchOptions {
     pub(crate) zoom_percent: Option<u16>,
     /// `--palette`: the command palette opens with this text typed, once the session is live.
     pub(crate) palette: Option<String>,
+    /// `--script`: a file of steps (keys, typing, clicks, `shot <name>`, `expect <text>`) that a
+    /// screenshot run plays after the screen settles and before its final capture. It needs
+    /// `--screenshot`, whose folder receives the `shot` PNGs. See `screenshot_script.rs`.
+    pub(crate) script: Option<PathBuf>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -817,6 +822,7 @@ pub(crate) fn parse_launch_options(
         window_width: None,
         zoom_percent: None,
         palette: None,
+        script: None,
     };
     while let Some(flag) = args.next() {
         if flag == "--help" {
@@ -848,6 +854,7 @@ pub(crate) fn parse_launch_options(
             "--window-width" => options.window_width = Some(parse_window_width(&value()?)?),
             "--zoom" => options.zoom_percent = Some(parse_zoom_percent(&value()?)?),
             "--palette" => options.palette = Some(value()?),
+            "--script" => options.script = Some(PathBuf::from(value()?)),
             _ => return Err(format!("unknown flag '{flag}'")),
         }
     }

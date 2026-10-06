@@ -12,6 +12,8 @@ use crate::launch_options::LaunchScreen;
 #[cfg(feature = "screenshot")]
 use {
     crate::app_shell::AppShell,
+    crate::launch_options::LaunchOptions,
+    crate::screenshot_script::{ScriptEnd, ScriptStep, parse_script},
     gpui_kit::component::WindowExt as _,
     gpui_kit::test::TestWindowExt as _,
     gpui_kit::{InputEvent as _, MouseMoveEvent},
@@ -581,6 +583,8 @@ pub(crate) enum ScreenshotOutcome {
     Saved,
     /// Saved, but the screen had not settled when the timeout ran out.
     TimedOut,
+    /// A script `expect` step did not hold; the final capture is skipped.
+    ExpectFailed,
     Failed,
 }
 
@@ -590,7 +594,7 @@ impl ScreenshotOutcome {
         match self {
             Self::Saved => 0,
             Self::Failed => 1,
-            Self::TimedOut => 3,
+            Self::TimedOut | Self::ExpectFailed => 3,
         }
     }
 }
@@ -599,6 +603,36 @@ impl ScreenshotOutcome {
 pub(crate) struct ScreenshotRequest {
     pub(crate) path: PathBuf,
     pub(crate) screen: LaunchScreen,
+    /// The steps `--script` played before the final capture, already parsed.
+    pub(crate) script: Option<Vec<ScriptStep>>,
+}
+
+#[cfg(feature = "screenshot")]
+impl ScreenshotRequest {
+    /// The request the flags make: none without `--screenshot`. The `--script` file is read and
+    /// parsed here, so a bad line stops the run before anything opens.
+    pub(crate) fn from_options(options: &LaunchOptions) -> Result<Option<Self>, String> {
+        let Some(path) = options.screenshot.clone() else {
+            if options.script.is_some() {
+                return Err("--script needs --screenshot".to_owned());
+            }
+            return Ok(None);
+        };
+        let script = options
+            .script
+            .as_ref()
+            .map(|file| {
+                let text = std::fs::read_to_string(file)
+                    .map_err(|error| format!("cannot read {}: {error}", file.display()))?;
+                parse_script(&text).map_err(|error| format!("{}: {error}", file.display()))
+            })
+            .transpose()?;
+        Ok(Some(Self {
+            path,
+            screen: options.screen,
+            script,
+        }))
+    }
 }
 
 /// Waits for the screen to settle, then renders the window to a PNG and quits the app.
@@ -631,28 +665,15 @@ async fn capture_when_settled(
     request: &ScreenshotRequest,
     cx: &mut gpui_kit::AsyncApp,
 ) -> anyhow::Result<ScreenshotOutcome> {
-    let mut waited = Duration::ZERO;
-    let mut is_settled = false;
-    while waited < SETTLE_TIMEOUT {
-        let (failure, settled) = shell.update(cx, |shell, cx| {
-            let failure = shell.launch_failure().map(str::to_owned);
-            (
-                failure,
-                is_screen_settled(request.screen, &shell.settle_input(cx)),
-            )
-        });
-        // A request for a CRD that does not exist captures nothing: the fallback is not the target.
-        if let Some(message) = failure {
-            anyhow::bail!(message);
-        }
-        is_settled = settled;
-        if is_settled {
-            break;
-        }
-        cx.background_executor().timer(POLL_INTERVAL).await;
-        waited += POLL_INTERVAL;
-    }
+    let is_settled = wait_until_settled(shell, request.screen, cx).await?;
     cx.background_executor().timer(SETTLE_DELAY).await;
+    if let Some(steps) = &request.script
+        && crate::screenshot_script::play(steps, window, shell, request, cx).await?
+            == ScriptEnd::ExpectFailed
+    {
+        release_open_ui(window, shell, cx).await?;
+        return Ok(ScreenshotOutcome::ExpectFailed);
+    }
     // The pop-out screen moves the active tab out first and captures the window it lands in.
     let shot = if request.screen == LaunchScreen::LogsPopout {
         pop_out_window(window, shell, cx).await?
@@ -685,23 +706,78 @@ async fn capture_when_settled(
         cx.background_executor().timer(TOOLTIP_DELAY).await;
         shot.update(cx, |_, window, cx| window.render_frame(cx))?;
     }
-    shot.update(cx, |_, window, _| window.refresh())?;
-    cx.background_executor().timer(POLL_INTERVAL).await;
-
-    let image = shot.update(cx, |_, window, _| window.render_to_image())??;
-    if let Some(parent) = request.path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    image.save(&request.path)?;
+    let (width, height) = save_png(&shot, &request.path, cx).await?;
     // The focused filter input of the pop-out is a handle the leak check of this build reports at
     // exit, so the window goes before the app quits (as the palette shot closes its dialogs).
     if request.screen == LaunchScreen::LogsPopout {
         shot.update(cx, |_, window, _| window.remove_window())?;
     }
-    // An open popover leaves its input focused, and the blink timer of a focused input is a handle the
-    // leak check of this build reports at exit. Closing the switcher and the value popover moves the
-    // focus back first, and so does closing the dialogs: the command palette leaves its query input
-    // focused.
+    release_open_ui(window, shell, cx).await?;
+    if is_settled {
+        eprintln!(
+            "screenshot saved: {} ({width}x{height})",
+            request.path.display()
+        );
+        Ok(ScreenshotOutcome::Saved)
+    } else {
+        eprintln!("screenshot saved after timeout (screen not settled)");
+        Ok(ScreenshotOutcome::TimedOut)
+    }
+}
+
+/// Polls until the screen holds its target, or `SETTLE_TIMEOUT` runs out (`false`).
+#[cfg(feature = "screenshot")]
+pub(crate) async fn wait_until_settled(
+    shell: &Entity<AppShell>,
+    screen: LaunchScreen,
+    cx: &mut gpui_kit::AsyncApp,
+) -> anyhow::Result<bool> {
+    let mut waited = Duration::ZERO;
+    while waited < SETTLE_TIMEOUT {
+        let (failure, settled) = shell.update(cx, |shell, cx| {
+            let failure = shell.launch_failure().map(str::to_owned);
+            (failure, is_screen_settled(screen, &shell.settle_input(cx)))
+        });
+        // A request for a CRD that does not exist captures nothing: the fallback is not the target.
+        if let Some(message) = failure {
+            anyhow::bail!(message);
+        }
+        if settled {
+            return Ok(true);
+        }
+        cx.background_executor().timer(POLL_INTERVAL).await;
+        waited += POLL_INTERVAL;
+    }
+    Ok(false)
+}
+
+/// Renders the window to a PNG at `path`, creating its folder; returns the image size.
+#[cfg(feature = "screenshot")]
+pub(crate) async fn save_png(
+    window: &AnyWindowHandle,
+    path: &std::path::Path,
+    cx: &mut gpui_kit::AsyncApp,
+) -> anyhow::Result<(u32, u32)> {
+    window.update(cx, |_, window, _| window.refresh())?;
+    cx.background_executor().timer(POLL_INTERVAL).await;
+    let image = window.update(cx, |_, window, _| window.render_to_image())??;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    image.save(path)?;
+    Ok((image.width(), image.height()))
+}
+
+/// An open popover leaves its input focused, and the blink timer of a focused input is a handle the
+/// leak check of this build reports at exit. Closing the switcher and the value popover moves the
+/// focus back first, and so does closing the dialogs: the command palette leaves its query input
+/// focused.
+#[cfg(feature = "screenshot")]
+async fn release_open_ui(
+    window: &AnyWindowHandle,
+    shell: &Entity<AppShell>,
+    cx: &mut gpui_kit::AsyncApp,
+) -> anyhow::Result<()> {
     shell.update(cx, |shell, cx| {
         shell.close_cluster_switcher(cx);
         shell.close_value_popover(cx);
@@ -709,18 +785,7 @@ async fn capture_when_settled(
     window.update(cx, |_, window, cx| window.close_all_dialogs(cx))?;
     window.update(cx, |_, window, _| window.refresh())?;
     cx.background_executor().timer(SETTLE_DELAY).await;
-    if is_settled {
-        eprintln!(
-            "screenshot saved: {} ({}x{})",
-            request.path.display(),
-            image.width(),
-            image.height()
-        );
-        Ok(ScreenshotOutcome::Saved)
-    } else {
-        eprintln!("screenshot saved after timeout (screen not settled)");
-        Ok(ScreenshotOutcome::TimedOut)
-    }
+    Ok(())
 }
 
 /// `K8SBOARD_SCREENSHOT_HOVER=x,y`: where the pointer rests before the capture, in window pixels,
@@ -1285,6 +1350,7 @@ mod tests {
     fn outcome_exit_codes() {
         assert_eq!(ScreenshotOutcome::Saved.exit_code(), 0);
         assert_eq!(ScreenshotOutcome::TimedOut.exit_code(), 3);
+        assert_eq!(ScreenshotOutcome::ExpectFailed.exit_code(), 3);
         assert_eq!(ScreenshotOutcome::Failed.exit_code(), 1);
     }
 

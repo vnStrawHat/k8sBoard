@@ -54,6 +54,7 @@ fn parses_all_flags() {
             window_width: None,
             zoom_percent: None,
             palette: None,
+            script: None,
         }
     );
 }
@@ -802,6 +803,15 @@ fn palette_flag_needs_a_value() {
 #[test]
 fn the_usage_lists_the_palette_flag() {
     assert!(USAGE.contains("--palette"));
+}
+
+#[test]
+fn script_flag_takes_a_path_and_is_listed_in_the_usage() {
+    let options = run_options(&["--script", "walk.txt"]);
+    assert_eq!(options.script, Some(PathBuf::from("walk.txt")));
+    assert_eq!(run_options(&[]).script, None);
+    assert!(parse(&["--script"]).is_err());
+    assert!(USAGE.contains("--script"));
 }
 
 #[test]

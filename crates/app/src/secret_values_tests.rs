@@ -163,6 +163,7 @@ fn options(screenshot: Option<&str>) -> LaunchOptions {
         window_width: None,
         zoom_percent: None,
         palette: None,
+        script: None,
     }
 }
 

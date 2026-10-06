@@ -39,6 +39,7 @@ Replace the hello window with the k8sBoard shell:
 | [actions.md](actions.md) | context and ⋯ menus, RBAC gating, Copy name |
 | [cluster-additions.md](cluster-additions.md) | new `PodSummary`/`ContainerSummary` fields |
 | [screenshot-hook.md](screenshot-hook.md) | `--screenshot` mechanism on Windows, and how to verify it |
+| [screenshot-script.md](screenshot-script.md) | `--script`: scripted keys, clicks, and several shots in one run |
 | [test-plan.md](test-plan.md) | unit tests and the ui-verifier checklist |
 
 ## Acceptance criteria

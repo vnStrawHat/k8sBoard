@@ -204,6 +204,10 @@ mod app_shell_history_tests;
 mod app_shell_switch_tests;
 
 #[cfg(test)]
+#[path = "app_shell_script_tests.rs"]
+mod app_shell_script_tests;
+
+#[cfg(test)]
 #[path = "app_shell_metrics_tests.rs"]
 mod app_shell_metrics_tests;
 
@@ -4095,6 +4099,21 @@ impl AppShell {
     #[cfg(feature = "screenshot")]
     pub(crate) fn launch_failure(&self) -> Option<&str> {
         self.launch_failure.as_deref()
+    }
+
+    /// The texts a script `expect` step checks: the screen, the cursor row, the drawer subject, and
+    /// the notices (see `screenshot_script.rs`).
+    #[cfg(any(feature = "screenshot", test))]
+    pub(crate) fn reported_texts(&self, cx: &App) -> Vec<String> {
+        let mut texts = vec![format!("screen {:?}", self.screen)];
+        if let Some(object) = &self.selected {
+            texts.push(format!("cursor {:?}", object.key));
+        }
+        if let Some(subject) = self.drawer_subject() {
+            texts.push(format!("drawer {:?}", subject.key));
+        }
+        texts.extend(self.notices(cx));
+        texts
     }
 
     /// How far the data of one viewed cluster is, for the screen shown.

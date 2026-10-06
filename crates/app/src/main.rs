@@ -134,6 +134,8 @@ mod revision_history;
 mod row_context;
 mod row_selection;
 mod screenshot;
+#[cfg(any(test, feature = "screenshot"))]
+mod screenshot_script;
 mod scroll_list;
 mod secret_clipboard;
 mod secret_rows;
@@ -232,11 +234,25 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    if options.screenshot.is_some() && !cfg!(feature = "screenshot") {
-        eprintln!("error: --screenshot is a dev-only flag: rebuild with --features screenshot");
+    if (options.screenshot.is_some() || options.script.is_some()) && !cfg!(feature = "screenshot") {
+        eprintln!(
+            "error: --screenshot and --script are dev-only flags: rebuild with --features screenshot"
+        );
         return ExitCode::from(2);
     }
-    match run(options) {
+    #[cfg(feature = "screenshot")]
+    let screenshot_request = match screenshot::ScreenshotRequest::from_options(&options) {
+        Ok(request) => request,
+        Err(message) => {
+            eprintln!("error: {message}");
+            return ExitCode::from(2);
+        }
+    };
+    match run(
+        options,
+        #[cfg(feature = "screenshot")]
+        screenshot_request,
+    ) {
         Ok(code) => code,
         Err(error) => {
             eprintln!("error: {error:#}");
@@ -252,7 +268,10 @@ fn main() -> ExitCode {
     feature = "hotpath-profiling",
     hotpath::main(allocator = live_heap::LiveHeapAllocator, percentiles = [50, 95, 99], limit = 60)
 )]
-fn run(options: LaunchOptions) -> anyhow::Result<ExitCode> {
+fn run(
+    options: LaunchOptions,
+    #[cfg(feature = "screenshot")] screenshot_request: Option<screenshot::ScreenshotRequest>,
+) -> anyhow::Result<ExitCode> {
     #[cfg(feature = "hotpath-profiling-alloc")]
     live_heap::report_every(Duration::from_secs(5));
     // The runtime lives on this stack frame until the UI loop ends; GPUI only gets a handle.
@@ -298,15 +317,6 @@ fn run(options: LaunchOptions) -> anyhow::Result<ExitCode> {
                 cx.set_global(metrics_page::MetricsFixture);
             }
 
-            #[cfg(feature = "screenshot")]
-            let screenshot_request =
-                options
-                    .screenshot
-                    .clone()
-                    .map(|path| screenshot::ScreenshotRequest {
-                        path,
-                        screen: options.screen,
-                    });
             let window_width = options.window_width.map_or(WINDOW_WIDTH, f32::from);
             let window_options = WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
