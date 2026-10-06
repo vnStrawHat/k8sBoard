@@ -282,6 +282,7 @@ fn add_filter_button(state: &ToolkitState, cx: &Context<AppShell>) -> Option<Any
     let shell = cx.weak_entity();
     let screen = state.screen;
     let has_unhealthy = state.chips.contains(&FilterChip::Unhealthy);
+    let hides_inactive = state.preset == Some(FilterPreset::HideInactive);
     Some(
         Button::new("add-filter")
             .ghost()
@@ -301,6 +302,20 @@ fn add_filter_button(state: &ToolkitState, cx: &Context<AppShell>) -> Option<Any
                                 let _ = shell.update(cx, |shell, cx| shell.toggle_unhealthy(cx));
                             }),
                     )
+                };
+                // The chip removes the filter; this is the way back once it is gone.
+                let menu = if screen == Screen::Kind(ResourceKind::ReplicaSets) {
+                    let shell = shell.clone();
+                    menu.item(
+                        PopupMenuItem::new("Hide inactive")
+                            .checked(hides_inactive)
+                            .on_click(move |_, _, cx| {
+                                let next = (!hides_inactive).then_some(FilterPreset::HideInactive);
+                                let _ = shell.update(cx, |shell, cx| shell.set_preset(next, cx));
+                            }),
+                    )
+                } else {
+                    menu
                 };
                 let shell = shell.clone();
                 menu.item(PopupMenuItem::new("Label…").on_click(move |_, window, cx| {

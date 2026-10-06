@@ -342,6 +342,7 @@ static REPLICA_SETS: KindSpec = KindSpec {
         column("Current", 80., Align::Right),
         column("Ready", 80., Align::Right),
         column("Owner", 220., Align::Left).grows(1),
+        column("Revision", 90., Align::Right),
         AGE_COLUMN,
     ],
     // Scale belongs to the owning Deployment.

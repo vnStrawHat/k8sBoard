@@ -378,6 +378,7 @@ pub(crate) fn replica_set_row(set: &ReplicaSetSummary) -> KindRow {
             KindCell::count(set.current),
             toned_number(set.ready, replica_tone(set.ready, set.desired)),
             KindCell::text_or_absent(owner.as_deref()),
+            revision_cell(set.revision.as_deref()),
             KindCell::age(set.created_at),
         ],
         sections: vec![
@@ -401,6 +402,19 @@ pub(crate) fn replica_set_row(set: &ReplicaSetSummary) -> KindRow {
         related_pods: controller_owner(&set.namespace, REPLICA_SET_KIND, &set.name),
         labels: chips(&set.labels),
         object: KindObject::ReplicaSet(set.clone()),
+    }
+}
+
+/// The `deployment.kubernetes.io/revision` number, sorted as a number; a ReplicaSet without a
+/// numeric one shows a dash.
+fn revision_cell(revision: Option<&str>) -> KindCell {
+    match revision.and_then(|text| Some((text, text.parse::<u64>().ok()?))) {
+        Some((text, value)) => KindCell::Quantity {
+            text: text.to_owned().into(),
+            value,
+            tone: None,
+        },
+        None => KindCell::Absent,
     }
 }
 

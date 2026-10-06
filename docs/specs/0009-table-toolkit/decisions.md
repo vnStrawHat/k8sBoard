@@ -19,7 +19,7 @@
 | 11 | Filters, sort, and hidden columns stay per table (per kind) for the app run; a context switch resets filters to the kind's default | wireframe principle: filters stay while switching pages; a filter in a new cluster surprises |
 | 12 | A filter that hides the drawer's row closes the drawer | same rule as 0006 Warnings only; no drawer for an invisible row |
 | 13 | `/` binds with context `AppShell && !Input`; the root element has `.key_context("AppShell")` | works without table focus, never steals `/` from an input; the full keymap is 0028 |
-| 26 | ReplicaSets start with **Hide inactive on** (the kind's default filter) | W7 shows the toggle for a list cluttered with old revisions; supersedes 0005 decision 23 |
+| 26 | ReplicaSets start with **Hide inactive on** (the kind's default filter) | W7 shows the toggle for a list cluttered with old revisions; supersedes 0005 decision 23. UX walk H13: the header toggle is gone (it duplicated the `Hide inactive ×` chip); the Filter menu keeps a checkable Hide inactive item to turn it back on; ReplicaSets add a numeric Revision column |
 
 ## Scope, screens, selection
 

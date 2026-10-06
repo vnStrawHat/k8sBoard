@@ -451,6 +451,27 @@ fn replica_set_without_owner_shows_absent() {
 }
 
 #[test]
+fn replica_set_revision_cell_sorts_as_a_number() {
+    let revision_of = |revision: Option<&str>| {
+        let mut set = replica_set();
+        set.revision = revision.map(str::to_owned);
+        replica_set_row(&set).cells.get(4).cloned()
+    };
+    let columns = ResourceKind::ReplicaSets.columns();
+    assert_eq!(columns[4].name, "Revision");
+    assert_eq!(
+        revision_of(Some("10")),
+        Some(KindCell::Quantity {
+            text: "10".into(),
+            value: 10,
+            tone: None,
+        })
+    );
+    assert_eq!(revision_of(Some("n/a")), Some(KindCell::Absent));
+    assert_eq!(revision_of(None), Some(KindCell::Absent));
+}
+
+#[test]
 fn stateful_set_pods_sort_by_ordinal() {
     let pods = [
         pod_named("web-10"),

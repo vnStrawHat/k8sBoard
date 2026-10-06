@@ -450,8 +450,8 @@ impl AppShell {
         Some(filter_bar(state?, self, &self.quick_filter, cx))
     }
 
-    /// The per-screen toggles, right-aligned in the header: Hide inactive on ReplicaSets, and
-    /// Warnings only with Pause stream on Events.
+    /// The per-screen toggles, right-aligned in the header: Warnings only with Pause stream on
+    /// Events, and Hide system on the RBAC kinds.
     fn render_header_actions(
         &self,
         toolkit: Option<&ToolkitState>,
@@ -463,9 +463,6 @@ impl AppShell {
             Screen::PortForwarding => self.port_forward_header_buttons(cx),
             Screen::Issues => return self.render_issues_status(cx),
             Screen::Nodes => self.node_header_buttons(cx),
-            Screen::Kind(ResourceKind::ReplicaSets) => {
-                self.render_hide_inactive(toolkit, cx).into_iter().collect()
-            }
             Screen::Kind(ResourceKind::NetworkPolicies) => {
                 self.render_test_traffic(cx).into_iter().collect()
             }
@@ -656,26 +653,6 @@ impl AppShell {
             button.disabled(true).tooltip("Not connected")
         };
         Some(button.into_any_element())
-    }
-
-    /// ReplicaSets scaled to zero are hidden while it is on, which is the default.
-    fn render_hide_inactive(
-        &self,
-        toolkit: Option<&ToolkitState>,
-        cx: &Context<Self>,
-    ) -> Option<AnyElement> {
-        let is_on = toolkit?.preset == Some(FilterPreset::HideInactive);
-        let next = if is_on {
-            None
-        } else {
-            Some(FilterPreset::HideInactive)
-        };
-        Some(
-            toggle_button("hide-inactive", "Hide inactive", is_on)
-                .tooltip("Hide ReplicaSets scaled to zero")
-                .on_click(cx.listener(move |shell, _, _, cx| shell.set_preset(next.clone(), cx)))
-                .into_any_element(),
-        )
     }
 
     /// Objects named `system:*` are hidden while it is on, which is the default.
