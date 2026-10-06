@@ -9,8 +9,8 @@ use std::rc::Rc;
 use std::time::Instant;
 
 use cluster::{
-    AttachPermit, AttachRequest, AttachWait, ClusterConnection, ExecPermit, GridSize, PodSummary,
-    ShellCommand, ShellExit, ShellInput, ShellRequest, ShellUpdate,
+    AttachPermit, AttachRequest, AttachWait, ClusterConnection, ExecPermit, GridSize, ShellCommand,
+    ShellExit, ShellInput, ShellRequest, ShellUpdate,
 };
 use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender, unbounded};
 use gpui_kit::component::WindowExt as _;
@@ -35,8 +35,6 @@ use crate::cluster_runtime::{ClusterRuntime, WatchSubscription};
 use crate::cluster_session::error_text;
 use crate::fresh_enter::FreshEnter;
 use crate::keymap::{CloseTerminalFind, TerminalCopy, TerminalFind, TerminalPaste};
-use crate::log_workload::pod_short_name;
-use crate::screenshot::controller_owner_of;
 use crate::secret_clipboard::ClipboardWriteError;
 use crate::settings::AppSettings;
 use crate::status_tone::StatusTone;
@@ -55,19 +53,9 @@ pub(crate) struct ShellTarget {
     pub(crate) cluster: ClusterRef,
     pub(crate) namespace: String,
     pub(crate) pod: String,
-    /// What the tab label calls the pod: `short_pod_name`.
+    /// What the tab label calls the pod: `pod_tab_name`, the same name the Logs tab shows.
     pub(crate) short_pod: String,
     pub(crate) container: String,
-}
-
-/// The pod name a tab label shows: the Logs tab's rule, the last `-` segment (`m8n2p`), except for
-/// a StatefulSet pod, whose ordinal alone would not tell the replicas apart. A pod no controller
-/// owns keeps its name.
-pub(crate) fn short_pod_name(pod: &PodSummary) -> String {
-    match controller_owner_of(pod) {
-        Some(owner) => pod_short_name(&owner, &pod.name).to_owned(),
-        None => pod.name.clone(),
-    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -643,10 +631,11 @@ impl ShellTab {
         let context = &self.target.cluster.context;
         match &self.kind {
             ShellKind::Exec => format!(
-                "›_ {} · {} · {}",
+                "›_ {} · {} · {} · {} · {context}",
                 self.target.pod,
                 self.target.container,
-                self.shell_label()
+                self.shell_label(),
+                self.target.namespace
             ),
             ShellKind::Debug {
                 target_container,
@@ -800,8 +789,8 @@ impl ShellTab {
         &self.cluster_label
     }
 
-    /// `shell · m8n2p/api`, the tab label: the pod by the suffix rule of the Logs tab. A debug
-    /// container reads `debug · m8n2p/api` (the container it shares), a node shell
+    /// `shell · api-m8n2p/api`, the tab label: the pod by `pod_tab_name`, as the Logs tab names it. A debug
+    /// container reads `debug · api-m8n2p/api` (the container it shares), a node shell
     /// `node shell · wk-03 (debug pod)`.
     pub(crate) fn label(&self) -> String {
         match &self.kind {

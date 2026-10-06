@@ -22,7 +22,7 @@ fn target() -> ShellTarget {
         },
         namespace: "payments".to_owned(),
         pod: "api-7d9f8c-m8n2p".to_owned(),
-        short_pod: "m8n2p".to_owned(),
+        short_pod: "api-m8n2p".to_owned(),
         container: "api".to_owned(),
     }
 }
@@ -385,31 +385,7 @@ fn end_notes_read_as_the_wireframe_says() {
 fn the_tab_label_names_pod_and_container(cx: &mut TestAppContext) {
     let fixture = open_tab(800., 500., cx);
     let label = fixture.tab.read_with(cx, |tab, _| tab.label());
-    assert_eq!(label, "shell · m8n2p/api");
-}
-
-#[test]
-fn a_pod_is_named_by_the_suffix_rule_of_the_logs_tab() {
-    let owned_by = |kind: &str, name: &str| {
-        let mut pod = pod_named(name);
-        pod.controller = Some(cluster::ControllerRef {
-            kind: kind.to_owned(),
-            name: "owner".to_owned(),
-        });
-        pod
-    };
-    use crate::kind_row::{REPLICA_SET_KIND, STATEFUL_SET_KIND};
-    assert_eq!(
-        short_pod_name(&owned_by(REPLICA_SET_KIND, "api-7d9f8c-m8n2p")),
-        "m8n2p"
-    );
-    // A StatefulSet pod keeps its ordinal with its name; a bare pod keeps its name.
-    assert_eq!(
-        short_pod_name(&owned_by(STATEFUL_SET_KIND, "postgres-0")),
-        "postgres-0"
-    );
-    let bare = pod_named("tool-x1");
-    assert_eq!(short_pod_name(&bare), "tool-x1");
+    assert_eq!(label, "shell · api-m8n2p/api");
 }
 
 // ---- input (step 3b) ----
@@ -666,29 +642,6 @@ fn find_opens_counts_and_closes_with_escape(cx: &mut TestAppContext) {
     assert_eq!(matches, 0);
 }
 
-fn pod_named(name: &str) -> PodSummary {
-    PodSummary {
-        is_finished: false,
-        namespace: "payments".to_owned(),
-        name: name.to_owned(),
-        status: cluster::PodStatus::Reason(cluster::StatusReason::Running),
-        ready: cluster::ReadyCount { ready: 1, total: 1 },
-        restarts: 0,
-        node_name: None,
-        created_at: None,
-        pod_ip: None,
-        qos_class: None,
-        service_account: None,
-        controller: None,
-        conditions: Vec::new(),
-        containers: Vec::new(),
-        status_message: None,
-        labels: Vec::new(),
-        host_network: false,
-        image_pull_secrets: Vec::new(),
-    }
-}
-
 fn enter_event(is_held: bool) -> gpui_kit::KeyDownEvent {
     gpui_kit::KeyDownEvent {
         keystroke: Keystroke::parse("enter").expect("a valid keystroke"),
@@ -770,7 +723,7 @@ fn debug_tab_label_and_hidden_picker(cx: &mut TestAppContext) {
     render(&exec, cx);
     assert_eq!(
         exec.tab.read_with(cx, |tab, _| tab.label()),
-        "shell · m8n2p/api"
+        "shell · api-m8n2p/api"
     );
     assert!(
         is_drawn(&exec, "shell-picker", cx),
@@ -781,7 +734,7 @@ fn debug_tab_label_and_hidden_picker(cx: &mut TestAppContext) {
     render(&debug, cx);
     assert_eq!(
         debug.tab.read_with(cx, |tab, _| tab.label()),
-        "debug · m8n2p/api"
+        "debug · api-m8n2p/api"
     );
     assert!(
         !is_drawn(&debug, "shell-picker", cx),
@@ -941,7 +894,7 @@ fn attach_tab_label_and_header(cx: &mut TestAppContext) {
     render(&attach, cx);
     assert_eq!(
         attach.tab.read_with(cx, |tab, _| tab.label()),
-        "attach · m8n2p/api"
+        "attach · api-m8n2p/api"
     );
     assert_eq!(
         attach.tab.read_with(cx, |tab, _| tab.header_text()),
@@ -1066,4 +1019,13 @@ fn the_close_tooltip_says_a_live_shell_ends(cx: &mut TestAppContext) {
         cx,
     );
     assert_eq!(tooltip(cx), "Close");
+}
+
+#[gpui_kit::test]
+fn the_exec_header_names_pod_container_shell_namespace_and_cluster(cx: &mut TestAppContext) {
+    let fixture = open_tab(800., 500., cx);
+    assert_eq!(
+        fixture.tab.read_with(cx, |tab, _| tab.header_text()),
+        "›_ api-7d9f8c-m8n2p · api · Auto · payments · stg-b"
+    );
 }

@@ -22,13 +22,12 @@ use crate::audit_log::{
 };
 use crate::cluster_registry::ClusterRef;
 use crate::dock::shell_cap_text;
+use crate::log_workload::pod_tab_name;
 use crate::resource_actions::{
     ResourceAction, action_label, action_risk, default_attach_container, default_shell_container,
 };
 use crate::settings::AppSettings;
-use crate::shell_tab::{
-    AttachGrant, ShellEvent, ShellGrant, ShellKind, ShellTab, ShellTarget, short_pod_name,
-};
+use crate::shell_tab::{AttachGrant, ShellEvent, ShellGrant, ShellKind, ShellTab, ShellTarget};
 use crate::table_selection::{ClusterObject, ResourceKey};
 
 /// The container to open a shell in, and the cluster of its pod.
@@ -219,7 +218,7 @@ impl AppShell {
             Some((
                 pod.namespace.clone(),
                 pod.name.clone(),
-                short_pod_name(pod),
+                pod_tab_name(pod),
                 container.name.clone(),
             ))
         });
@@ -320,7 +319,7 @@ impl AppShell {
                     cluster: subject.cluster.clone(),
                     namespace: pod.namespace.clone(),
                     pod: pod.name.clone(),
-                    short_pod: short_pod_name(pod),
+                    short_pod: pod_tab_name(pod),
                     container: container.name.clone(),
                 },
                 container.terminal,

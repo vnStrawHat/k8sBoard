@@ -440,12 +440,12 @@ impl LogTab {
         self.shows_json = !self.shows_json;
     }
 
-    /// The tab label: `{pod}/{container}`, or the workload label.
+    /// The tab label: `{workload}-{suffix}/{container}` (`pod_tab_name`), or the workload label.
     pub(crate) fn label(&self) -> String {
         match &self.subject {
             LogSubject::Pod {
                 target, container, ..
-            } => format!("{}/{container}", target.pod),
+            } => format!("{}/{container}", target.tab_name),
             LogSubject::Workload(workload) => workload.target.label.clone(),
         }
     }

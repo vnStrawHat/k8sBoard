@@ -24,12 +24,13 @@ use crate::cluster_form::edit_entry;
 use crate::cluster_registry::ClusterRef;
 use crate::debug_dialogs::{DEBUG_WARNING, DebugChoice, DebugChosen, DebugForm};
 use crate::dock::shell_cap_text;
+use crate::log_workload::pod_tab_name;
 use crate::resource_actions::{
     ActionAvailability, DebugPod, ResourceAction, action_availability, action_label, action_risk,
     debug_container_block, debug_targets, unavailable_text,
 };
 use crate::settings::AppSettings;
-use crate::shell_tab::{AttachGrant, ShellKind, ShellTab, ShellTarget, short_pod_name};
+use crate::shell_tab::{AttachGrant, ShellKind, ShellTab, ShellTarget};
 use crate::write_guard::ActionRisk;
 
 /// The text of the confirm button and the audit line of the patch.
@@ -148,7 +149,7 @@ impl AppShell {
                     .items()
                     .iter()
                     .find(|summary| summary.namespace == pod.namespace && summary.name == pod.pod)
-                    .map(short_pod_name)
+                    .map(pod_tab_name)
             })
             .unwrap_or_else(|| pod.pod.clone());
         let name = debug_container_name();

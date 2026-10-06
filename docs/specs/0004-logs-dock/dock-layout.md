@@ -71,7 +71,7 @@ fn active_after_close(active: usize, closed: usize, remaining: usize) -> Option<
 
 | Item | Look | Behavior |
 |---|---|---|
-| One tab per `LogTab` | `FileText` icon, a status dot, `{pod}/{container}` in mono `text_xs` (max 260 px, end ellipsis), ✕ (`X`, ghost xsmall). The active tab has `theme.background` and a border on three sides | click: activate, and Minimized becomes Normal. ✕: `close_tab` |
+| One tab per `LogTab` | `FileText` icon, a status dot, `{workload}-{suffix}/{container}` (`pod_tab_name`; a StatefulSet pod keeps its ordinal) in mono `text_xs` (max 260 px, end ellipsis), ✕ (`X`, ghost xsmall). The active tab has `theme.background` and a border on three sides | click: activate, and Minimized becomes Normal. ✕: `close_tab` |
 | Spacer | `flex_1` | |
 | Zoom | `Maximize2`, or `Minimize2` when zoomed; tooltip "Zoom in" / "Zoom out" | Normal or Minimized → Zoomed; Zoomed → Normal |
 | Minimize | `ChevronDown`, or `ChevronUp` when minimized; tooltip "Minimize" / "Restore" | Normal or Zoomed → Minimized; Minimized → Normal |

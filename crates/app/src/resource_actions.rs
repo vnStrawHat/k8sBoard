@@ -37,6 +37,7 @@ use crate::kind_join::last_job_owner;
 use crate::kind_row::{EventDetail, JOB_KIND, KindObject, KindRow, PodOwner};
 use crate::live_sections::claim_pods;
 use crate::log_target::{LogTarget, workload_label};
+use crate::log_workload::pod_tab_name;
 use crate::namespace_rows::REMAINING_RESOURCES_TITLE;
 use crate::network_rows::ingress_urls;
 use crate::pod_drawer::kind_tag_text;
@@ -44,7 +45,7 @@ use crate::policy_rows::SELECTED_PODS_TITLE;
 use crate::resource_kind::ResourceKind;
 use crate::row_context::RowContext;
 use crate::secret_values::{SecretAction, ValueAccess};
-use crate::shell_tab::short_pod_name;
+
 use crate::table_selection::{ClusterObject, ResourceKey};
 use crate::workload_actions::{row_block, state_label};
 use crate::write_guard::{ActionRisk, ClusterGuard, WriteLock};
@@ -1236,7 +1237,7 @@ fn container_shell_item(
                 cluster: row.cluster.clone(),
                 namespace: pod.namespace.clone(),
                 pod: pod.name.clone(),
-                short_pod: short_pod_name(pod),
+                short_pod: pod_tab_name(pod),
                 container: container.name.clone(),
             };
             let shell = shell.clone();
@@ -1267,7 +1268,7 @@ pub(crate) fn container_attach_item(
                 cluster: row.cluster.clone(),
                 namespace: pod.namespace.clone(),
                 pod: pod.name.clone(),
-                short_pod: short_pod_name(pod),
+                short_pod: pod_tab_name(pod),
                 container: container.name.clone(),
             };
             let (terminal, shell) = (container.terminal, shell.clone());
@@ -2810,7 +2811,7 @@ impl ShellMenu {
             debug: debug_menu_state(pod, guard),
             namespace: pod.namespace.clone(),
             pod: pod.name.clone(),
-            short_pod: short_pod_name(pod),
+            short_pod: pod_tab_name(pod),
         }
     }
 

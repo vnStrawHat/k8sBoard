@@ -6,6 +6,7 @@ use cluster::{ContainerSummary, PodSummary};
 use gpui_kit::SharedString;
 
 use crate::kind_row::{DAEMON_SET_KIND, JOB_KIND, PodOwner, REPLICA_SET_KIND, STATEFUL_SET_KIND};
+use crate::log_workload::pod_tab_name;
 use crate::pod_drawer::default_container;
 
 #[derive(Clone)]
@@ -26,6 +27,8 @@ pub(crate) enum ContainerChoice {
 pub(crate) struct PodTarget {
     pub(crate) namespace: String,
     pub(crate) pod: String,
+    /// `pod_tab_name`, what the tab title calls the pod.
+    pub(crate) tab_name: String,
     pub(crate) containers: Vec<ContainerSummary>,
     pub(crate) initial_container: String,
     pub(crate) choice: ContainerChoice,
@@ -46,6 +49,7 @@ impl LogTarget {
         Some(Self::Pod(PodTarget {
             namespace: pod.namespace.clone(),
             pod: pod.name.clone(),
+            tab_name: pod_tab_name(pod),
             containers: pod.containers.clone(),
             initial_container,
             choice: ContainerChoice::Default,

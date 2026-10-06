@@ -456,3 +456,28 @@ fn the_selection_actions_copy_and_clear_through_the_focused_tab(cx: &mut TestApp
     });
     assert_eq!(tab.read_with(cx, |tab, _| tab.selection), None);
 }
+
+#[gpui_kit::test]
+fn a_pod_tab_is_titled_by_workload_suffix_and_container(cx: &mut TestAppContext) {
+    let mut pod = fixture_pod("api-7d9f8c-m8n2p", vec![fixture_container("api", 0, None)]);
+    pod.controller = Some(cluster::ControllerRef {
+        kind: crate::kind_row::REPLICA_SET_KIND.to_owned(),
+        name: "api-7d9f8c".to_owned(),
+    });
+    pod.labels = vec!["pod-template-hash=7d9f8c".to_owned()];
+    let fixture = open_log_fixture(vec![pod.clone()], LOG_BODY, cx);
+    let tab = fixture.open_tab(&pod, "api", cx);
+    assert_eq!(tab.read_with(cx, |tab, _| tab.label()), "api-m8n2p/api");
+}
+
+#[gpui_kit::test]
+fn a_stateful_set_pod_tab_keeps_its_ordinal(cx: &mut TestAppContext) {
+    let mut pod = fixture_pod("postgres-1", vec![fixture_container("db", 0, None)]);
+    pod.controller = Some(cluster::ControllerRef {
+        kind: crate::kind_row::STATEFUL_SET_KIND.to_owned(),
+        name: "postgres".to_owned(),
+    });
+    let fixture = open_log_fixture(vec![pod.clone()], LOG_BODY, cx);
+    let tab = fixture.open_tab(&pod, "db", cx);
+    assert_eq!(tab.read_with(cx, |tab, _| tab.label()), "postgres-1/db");
+}

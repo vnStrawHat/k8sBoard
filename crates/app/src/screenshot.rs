@@ -174,7 +174,7 @@ pub(crate) fn shell_fixture_target() -> crate::shell_tab::ShellTarget {
         },
         namespace: "payments".to_owned(),
         pod: "api-7d9f8c-m8n2p".to_owned(),
-        short_pod: "m8n2p".to_owned(),
+        short_pod: "api-m8n2p".to_owned(),
         container: "api".to_owned(),
     }
 }
@@ -219,7 +219,7 @@ pub(crate) fn shell_tab_fixture(launch: LaunchScreen) -> ShellTabFixture {
                 cluster: owner,
                 namespace: "payments".to_owned(),
                 pod: "api-7d9f8c-m8n2p".to_owned(),
-                short_pod: "m8n2p".to_owned(),
+                short_pod: "api-m8n2p".to_owned(),
                 container: "debugger-4xk2j".to_owned(),
             },
             kind: ShellKind::Debug {

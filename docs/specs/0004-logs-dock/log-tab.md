@@ -88,7 +88,7 @@ A click on a row selects it (the `selection` theme token as its background), a S
 | Condition (first match) | Shows |
 |---|---|
 | Failed | an error `Alert` (`message`) above the list. Lines already received stay visible below it |
-| Connecting with an empty buffer | spinner + `Opening logs of {pod}/{container}…` |
+| Connecting with an empty buffer | spinner + `Opening logs of {tab label}…` |
 | No lines | muted `No log lines yet`, or `The container wrote no log lines` when Ended |
 | Filter with 0 matches | muted `No lines match "{needle}"` |
 | Otherwise | `MessageScroller` (below) |

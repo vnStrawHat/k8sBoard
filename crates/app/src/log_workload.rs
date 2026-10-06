@@ -4,7 +4,8 @@ use std::collections::HashMap;
 
 use cluster::{ContainerKind, ContainerSummary, LogLine, NamespaceScope, PodSummary};
 
-use crate::kind_row::{PodOwner, STATEFUL_SET_KIND, owns_pod};
+use crate::kind_row::{PodOwner, STATEFUL_SET_KIND, deployment_of_pod, owns_pod};
+use crate::screenshot::controller_owner_of;
 
 const MAX_WORKLOAD_PODS: usize = 10;
 pub(crate) const MAX_WORKLOAD_STREAMS: usize = 20;
@@ -77,6 +78,28 @@ pub(crate) fn pod_short_name<'a>(owner: &PodOwner, pod: &'a str) -> &'a str {
         return pod;
     }
     pod.rsplit('-').next().unwrap_or(pod)
+}
+
+/// `{workload}-{suffix}`, how a shell or log tab names a pod: the workload and the part of the pod
+/// name that tells its replicas apart (`api-m8n2p` for pod `api-7d9f8c-m8n2p` of Deployment `api`).
+/// A StatefulSet pod and a pod no controller owns keep their whole name.
+pub(crate) fn pod_tab_name(pod: &PodSummary) -> String {
+    let Some(owner) = controller_owner_of(pod) else {
+        return pod.name.clone();
+    };
+    let suffix = pod_short_name(&owner, &pod.name);
+    if suffix == pod.name {
+        return pod.name.clone();
+    }
+    let workload = deployment_of_pod(pod).or_else(|| {
+        pod.controller
+            .as_ref()
+            .map(|controller| controller.name.as_str())
+    });
+    match workload {
+        Some(workload) => format!("{workload}-{suffix}"),
+        None => pod.name.clone(),
+    }
 }
 
 /// Characters that fit the 9 rem prefix column of a log row (mono `text_xs`, 0.45 rem each).
@@ -238,6 +261,54 @@ mod tests {
 
     fn names(pods: &[&PodSummary]) -> Vec<String> {
         pods.iter().map(|pod| pod.name.clone()).collect()
+    }
+
+    fn owned_pod(name: &str, kind: &str, owner: &str, labels: &[&str]) -> PodSummary {
+        let mut pod = pod(name, (1, 1), None);
+        pod.controller = Some(ControllerRef {
+            kind: kind.to_owned(),
+            name: owner.to_owned(),
+        });
+        pod.labels = labels.iter().map(|label| (*label).to_owned()).collect();
+        pod
+    }
+
+    #[test]
+    fn tab_name_of_a_deployment_pod_is_the_deployment_and_the_suffix() {
+        let pod = owned_pod(
+            "api-7d9f8c-m8n2p",
+            REPLICA_SET_KIND,
+            "api-7d9f8c",
+            &["pod-template-hash=7d9f8c"],
+        );
+        assert_eq!(pod_tab_name(&pod), "api-m8n2p");
+    }
+
+    #[test]
+    fn tab_name_of_a_standalone_replica_set_pod_keeps_the_replica_set() {
+        let pod = owned_pod("web-x2k4q", REPLICA_SET_KIND, "web", &[]);
+        assert_eq!(pod_tab_name(&pod), "web-x2k4q");
+    }
+
+    #[test]
+    fn tab_name_of_a_stateful_set_pod_keeps_its_ordinal() {
+        let pod = owned_pod("postgres-0", STATEFUL_SET_KIND, "postgres", &[]);
+        assert_eq!(pod_tab_name(&pod), "postgres-0");
+    }
+
+    #[test]
+    fn tab_name_of_a_daemon_set_or_job_pod_is_the_workload_and_the_suffix() {
+        let daemon = owned_pod("node-exporter-k7x2p", DAEMON_SET_KIND, "node-exporter", &[]);
+        assert_eq!(pod_tab_name(&daemon), "node-exporter-k7x2p");
+        let batch = owned_pod("batch-x1y2z", JOB_KIND, "batch", &[]);
+        assert_eq!(pod_tab_name(&batch), "batch-x1y2z");
+    }
+
+    #[test]
+    fn tab_name_of_a_pod_without_a_controller_is_its_name() {
+        let mut bare = pod("tool-x1", (1, 1), None);
+        bare.controller = None;
+        assert_eq!(pod_tab_name(&bare), "tool-x1");
     }
 
     fn strings(names: &[&str]) -> Vec<String> {
