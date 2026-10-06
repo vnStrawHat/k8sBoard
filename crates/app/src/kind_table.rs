@@ -902,6 +902,24 @@ mod tests {
     }
 
     #[test]
+    fn hpa_target_and_metrics_fit_their_text_at_1320_px() {
+        let mut hpas = delegate(Some(ResourceKind::HorizontalPodAutoscalers));
+        // A 1320 px window less the 220 px sidebar, drawer closed.
+        hpas.fit_width(px(1100.));
+        let width = |name: &str| {
+            hpas.layout
+                .columns
+                .columns
+                .iter()
+                .find(|column| column.name.as_ref() == name)
+                .map(|column| column.width)
+        };
+        // `deployment/opentelemetry-collector` and `s0-prometheus <unknown> / 27k` of the UAT rows.
+        assert!(width("Target") >= Some(px(280.)), "{:?}", width("Target"));
+        assert!(width("Metrics") >= Some(px(260.)), "{:?}", width("Metrics"));
+    }
+
+    #[test]
     fn fit_width_does_nothing_without_a_kind() {
         assert!(!delegate(None).fit_width(px(1400.)));
     }

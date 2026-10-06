@@ -543,10 +543,10 @@ static HORIZONTAL_POD_AUTOSCALERS: KindSpec = KindSpec {
         access_check: AccessCheck::ListHorizontalPodAutoscalers,
     },
     columns: &[
-        column("Target", 220., Align::Left).grows(2),
+        column("Target", 250., Align::Left).grows(4),
         column("Min / Max", 90., Align::Left),
         column("Replicas", 80., Align::Right),
-        column("Metrics", 200., Align::Left).grows(2),
+        column("Metrics", 240., Align::Left).grows(4),
         AGE_COLUMN,
     ],
     read_only_actions: &[KindAction::keyed(
