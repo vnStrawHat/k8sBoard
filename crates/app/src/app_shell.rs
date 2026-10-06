@@ -3517,6 +3517,35 @@ impl AppShell {
         self.open_log_tab(&cluster, target, window, cx);
     }
 
+    /// The logs tab of `pod`, a pod a WHY box names (a failed Job's). Nothing happens while the
+    /// logs are not permitted or the pod is gone.
+    pub(crate) fn open_pod_logs(
+        &mut self,
+        pod: &ResourceKey,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(live) = self.subject_live(cx) else {
+            return;
+        };
+        if view_logs_reason(Some(live)).is_some() {
+            return;
+        }
+        let Some(cluster) = self.drawer_subject().map(|object| object.cluster.clone()) else {
+            return;
+        };
+        let Some(target) = live
+            .pods
+            .items()
+            .iter()
+            .find(|candidate| pod.is_pod(candidate))
+            .and_then(LogTarget::of_pod)
+        else {
+            return;
+        };
+        self.open_log_tab(&cluster, target, window, cx);
+    }
+
     /// Why "Shell into selected" is disabled, `None` when S would open a shell: the same answer
     /// the key reads, for the cursor row in its own cluster.
     pub(crate) fn selected_shell_reason(&self, cx: &App) -> Option<SharedString> {

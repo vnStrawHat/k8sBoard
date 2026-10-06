@@ -25,6 +25,9 @@ use crate::table_selection::ResourceKey;
 pub(crate) const ISSUE_TICK: Duration = Duration::from_secs(1);
 /// Rules that read the clock (ages, grace) run at least this often while anything is shown.
 const TIME_REFRESH: SignedDuration = SignedDuration::from_secs(30);
+/// The reason of the Deployment rollout finding (the sentence-case form of its `ROLLOUT STALLED`
+/// box title).
+const ROLLOUT_STALLED: &str = "Rollout stalled";
 
 /// What the rules read. `None` means the feed has not loaded, so its rules are skipped and the
 /// coverage says so.
@@ -146,20 +149,37 @@ fn dedupe(mut groups: Vec<Grouped>) -> Vec<Grouped> {
     // Stable, so groups of one rule keep their order.
     groups.sort_by_key(|group| group.key.rule);
     let mut taken: HashSet<IssueObject> = HashSet::new();
-    groups
-        .into_iter()
-        .filter(|group| {
-            let is_taken = taken.contains(&group.key.object)
-                || taken.contains(&group.shown)
-                || group.members.iter().any(|member| taken.contains(member));
-            if !is_taken {
-                taken.insert(group.key.object.clone());
-                taken.insert(group.shown.clone());
-                taken.extend(group.members.iter().cloned());
-            }
-            !is_taken
-        })
-        .collect()
+    let mut kept: Vec<Grouped> = Vec::new();
+    for group in groups {
+        let is_taken = taken.contains(&group.key.object)
+            || taken.contains(&group.shown)
+            || group.members.iter().any(|member| taken.contains(member));
+        if is_taken {
+            name_stalled_rollout(&mut kept, &group);
+            continue;
+        }
+        taken.insert(group.key.object.clone());
+        taken.insert(group.shown.clone());
+        taken.extend(group.members.iter().cloned());
+        kept.push(group);
+    }
+    kept
+}
+
+/// A stalled rollout that the pods of its Deployment already explain only as `Not ready` gives
+/// that row its name; a specific pod cause (a crash loop, a failed pull) keeps its own.
+fn name_stalled_rollout(kept: &mut [Grouped], dropped: &Grouped) {
+    if dropped.key.rule != IssueRule::KindRollout
+        || dropped.finding.reason.as_ref() != ROLLOUT_STALLED
+    {
+        return;
+    }
+    let winner = kept.iter_mut().find(|group| {
+        group.key.rule == IssueRule::PodNotReady && group.key.object == dropped.key.object
+    });
+    if let Some(winner) = winner {
+        winner.finding.reason = dropped.finding.reason.clone();
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -845,6 +845,27 @@ fn pod_group_hides_rollout_stalled_of_same_deployment() {
 }
 
 #[test]
+fn a_stalled_rollout_names_the_not_ready_row_of_its_pods() {
+    let pods = [unready_pod("api-7d9f8c-a", 600)];
+    let objects = [stalled_api()];
+    let feeds = [(ResourceKind::Deployments, &objects[..])];
+    let issues = issues_of(&IssueInputs {
+        objects: &feeds,
+        ..inputs(&pods)
+    });
+    let [issue] = issues.as_slice() else {
+        panic!("one issue, got {issues:?}");
+    };
+    assert_eq!(issue.key.rule, IssueRule::PodNotReady);
+    assert_eq!(issue.reason, "Rollout stalled");
+    assert!(
+        issue.cause.starts_with("Running but not ready"),
+        "{}",
+        issue.cause
+    );
+}
+
+#[test]
 fn rollout_stalled_without_pod_problems_shows() {
     let pods = [pod_of(
         "shop",

@@ -232,7 +232,11 @@ fn object_finding(
         container: None,
         onset: failed_at(object),
         grace: has_grace.then_some(ROLLOUT_GRACE),
-        action: IssueAction::Open,
+        // A Job's WHY is about its pods' exits, which the logs of its newest pod show.
+        action: match object {
+            KindObject::Job(_) => IssueAction::ViewLogs { container: None },
+            _ => IssueAction::Open,
+        },
         workload: None,
     })
 }

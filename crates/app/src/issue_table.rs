@@ -23,6 +23,7 @@ use crate::event_rows::message_line;
 use crate::filter_bar::filtered_empty_state;
 use crate::issue::{Issue, IssueAction};
 use crate::issue_feeds::Coverage;
+use crate::kind_row::JOB_KIND;
 use crate::resource_actions::{MenuItemIcon as _, disabled_menu_item, view_logs_item};
 use crate::resource_kind::{Align, KindColumn, column};
 use crate::row_context::TableSession;
@@ -457,18 +458,28 @@ fn open_item(issue: &Issue, shell: &WeakEntity<AppShell>) -> PopupMenuItem {
         .menu_icon(IconName::CornerDownRight)
 }
 
-/// The pod View logs reads: the issue's subject, when the action asks for logs and the pod is
-/// still in the list.
+/// The pod View logs reads: the issue's subject, or the newest pod of a failed Job subject, when
+/// the action asks for logs and the pod is still in the list.
 pub(crate) fn logs_pod<'a>(
     issue: &Issue,
     pods: &'a [cluster::PodSummary],
 ) -> Option<&'a cluster::PodSummary> {
-    if !matches!(issue.action, IssueAction::ViewLogs { .. }) || issue.subject.kind != "Pod" {
+    if !matches!(issue.action, IssueAction::ViewLogs { .. }) {
         return None;
     }
     let namespace = issue.subject.namespace.as_deref()?;
-    pods.iter()
-        .find(|pod| pod.namespace == namespace && pod.name == issue.subject.name)
+    let mut in_namespace = pods.iter().filter(|pod| pod.namespace == namespace);
+    match issue.subject.kind.as_str() {
+        "Pod" => in_namespace.find(|pod| pod.name == issue.subject.name),
+        JOB_KIND => in_namespace
+            .filter(|pod| {
+                pod.controller.as_ref().is_some_and(|controller| {
+                    controller.kind == JOB_KIND && controller.name == issue.subject.name
+                })
+            })
+            .max_by_key(|pod| pod.created_at),
+        _ => None,
+    }
 }
 
 fn copy_name_item(issue: &Issue) -> PopupMenuItem {

@@ -544,7 +544,7 @@ fn quota_status_names_highest_item() {
             item("pods", "10", Some("3")),
             item("requests.cpu", "4", Some("3700m"))
         ]),
-        ("93% CPU used".to_owned(), StatusTone::Warn)
+        ("93% requests.cpu used".to_owned(), StatusTone::Warn)
     );
     assert_eq!(
         status(vec![
@@ -556,6 +556,14 @@ fn quota_status_names_highest_item() {
     assert_eq!(
         status(vec![item("pods", "10", Some("10"))]),
         ("pods at quota".to_owned(), StatusTone::Bad)
+    );
+    // The near-limit text names the item, so `limits.memory` is not read as the requests.
+    assert_eq!(
+        status(vec![
+            item("requests.memory", "8Gi", Some("1Gi")),
+            item("limits.memory", "8Gi", Some("7700Mi"))
+        ]),
+        ("94% limits.memory used".to_owned(), StatusTone::Warn)
     );
 }
 

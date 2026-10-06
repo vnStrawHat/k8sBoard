@@ -24,6 +24,7 @@ pub(crate) fn kind_diagnosis(object: &KindObject, inputs: &DiagnosisInputs) -> O
 - **Unhealthy pod** = the first owned pod (snapshot order) with `pod_diagnosis(pod, None, now)` `Some`; its text is reused as `{diagnosis}`. D1 accepts any such pod.
 - **Failing pod** = the first owned pod whose `pod_diagnosis` has tone **Bad**. D3 and S2 use it, so a pod that is only warming up (a running container that is not ready yet, a Warn cause) never raises a box during a normal rollout; a long stall is caught by D1 after the progress deadline.
 - Renderer: `Alert::error` for Bad, `Alert::warning` for Warn, `.title(title)`, then a sibling link "Open pod {name} →" that calls `reveal` (the 0008 WHY layout). Placed above the first section, Overview tab only.
+- A Job's box also offers "View logs →" (the logs dock of the pod the box links); the Job's issue and Overview row use View logs as their action (the newest pod of the Job). A stalled-rollout Deployment whose pods are only `Not ready` in Issues gives that row the reason `Rollout stalled`; a crash loop or failed pull keeps its own reason.
 - No rule fires while `live.pods` is not Ready (except the condition-only rules marked *).
 
 ## Deployments (desired > 0 and not paused; first match wins)

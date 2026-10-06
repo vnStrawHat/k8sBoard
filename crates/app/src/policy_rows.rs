@@ -557,7 +557,7 @@ fn quota_status(quota: &ResourceQuotaSummary) -> StatusLabel {
             label(format!("{} at quota", short_name(item)), StatusTone::Bad)
         }
         Some((item, ratio)) if ratio >= 0.9 => label(
-            format!("{} {} used", format_percent(ratio), short_name(item)),
+            format!("{} {} used", format_percent(ratio), item.resource),
             StatusTone::Warn,
         ),
         _ => label("Within quota".to_owned(), StatusTone::Ok),

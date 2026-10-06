@@ -316,7 +316,7 @@ fn overview(paint: &DrawerPaint, cx: &Context<AppShell>) -> Overview {
     let mut sections: Vec<AnyElement> = Vec::new();
     let mut section_starts = Vec::with_capacity(row.sections.len());
     if let Some(diagnosis) = row_diagnosis(kind, row, live, now) {
-        sections.push(why_box(&diagnosis, cx));
+        sections.push(why_box(&diagnosis, kind, cx));
     }
     let missing_class = missing_claim_class(kind, row, live);
     for section in &row.sections {
@@ -452,9 +452,10 @@ fn row_diagnosis(
     )
 }
 
-/// The box: tone, title, text, and under it a link to the pod the text is about. `Alert` has no
-/// children, so the link is a sibling, like the pod drawer's WHY box.
-fn why_box(diagnosis: &KindDiagnosis, cx: &Context<AppShell>) -> AnyElement {
+/// The box: tone, title, text, and under it a link to the pod the text is about (a failed Job's
+/// also offers its logs). `Alert` has no children, so the links are siblings, like the pod
+/// drawer's WHY box.
+fn why_box(diagnosis: &KindDiagnosis, kind: ResourceKind, cx: &Context<AppShell>) -> AnyElement {
     let title = format!("WHY · {}", diagnosis.title);
     let text = diagnosis.text.clone();
     let alert = match diagnosis.tone {
@@ -472,21 +473,36 @@ fn why_box(diagnosis: &KindDiagnosis, cx: &Context<AppShell>) -> AnyElement {
         } => Some((format!("Open secret {name} →"), key.clone())),
         ResourceKey::Node { .. } | ResourceKey::Kind { .. } => None,
     });
+    let logs_key = diagnosis
+        .link
+        .clone()
+        .filter(|key| kind == ResourceKind::Jobs && matches!(key, ResourceKey::Pod { .. }));
+    let why_link = |id: &'static str, label: String| {
+        div()
+            .id(id)
+            .cursor_pointer()
+            .text_sm()
+            .text_color(cx.theme().link)
+            .underline()
+            .child(label)
+    };
+    let has_links = link.is_some();
+    let links = h_flex()
+        .gap_3()
+        .children(link.map(|(label, key)| {
+            why_link("why-open-object", label).on_click(
+                cx.listener(move |shell, _, window, cx| open_link(shell, key.clone(), window, cx)),
+            )
+        }))
+        .children(logs_key.map(|key| {
+            why_link("why-view-logs", "View logs →".to_owned()).on_click(
+                cx.listener(move |shell, _, window, cx| shell.open_pod_logs(&key, window, cx)),
+            )
+        }));
     v_flex()
         .gap_1()
         .child(alert.title(title))
-        .children(link.map(|(label, key)| {
-            div()
-                .id("why-open-object")
-                .cursor_pointer()
-                .text_sm()
-                .text_color(cx.theme().link)
-                .underline()
-                .on_click(cx.listener(move |shell, _, window, cx| {
-                    open_link(shell, key.clone(), window, cx);
-                }))
-                .child(label)
-        }))
+        .children(has_links.then_some(links))
         .into_any_element()
 }
 

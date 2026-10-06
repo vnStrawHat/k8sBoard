@@ -673,6 +673,8 @@ fn failed_job_ages_from_the_moment_it_gave_up() {
     };
     let found = finding(ResourceKind::Jobs, KindObject::Job(failed)).expect("a finding");
     assert_eq!(found.onset, Some(ago(7_200)));
+    // The primary action reads the logs of the Job's newest pod.
+    assert_eq!(found.action, IssueAction::ViewLogs { container: None });
     // A job that still retries has no such time.
     let retrying = finding(
         ResourceKind::Jobs,

@@ -153,6 +153,48 @@ fn view_logs_needs_the_subject_pod_in_the_list() {
 }
 
 #[test]
+fn view_logs_of_a_job_reads_its_newest_pod() {
+    let pod = |name: &str, job: &str, created: i64| cluster::PodSummary {
+        is_finished: false,
+        namespace: "shop".to_owned(),
+        name: name.to_owned(),
+        status: cluster::PodStatus::Reason(cluster::StatusReason::Error),
+        ready: cluster::ReadyCount { ready: 0, total: 1 },
+        restarts: 0,
+        node_name: None,
+        created_at: Some(at(created)),
+        pod_ip: None,
+        qos_class: None,
+        service_account: None,
+        controller: Some(cluster::ControllerRef {
+            kind: "Job".to_owned(),
+            name: job.to_owned(),
+        }),
+        conditions: Vec::new(),
+        containers: Vec::new(),
+        status_message: None,
+        labels: Vec::new(),
+        host_network: false,
+        image_pull_secrets: Vec::new(),
+    };
+    let pods = [
+        pod("report-a", "report", 100),
+        pod("report-b", "report", 200),
+        pod("other-a", "other", 300),
+    ];
+    let job = IssueObject::new("Job", Some("shop"), "report");
+    let issue = Issue {
+        shown: job.clone(),
+        subject: job,
+        container: None,
+        action: IssueAction::ViewLogs { container: None },
+        ..issue()
+    };
+    assert_eq!(logs_pod(&issue, &pods).expect("a pod").name, "report-b");
+    assert!(logs_pod(&issue, &pods[2..]).is_none(), "no pod of the job");
+}
+
+#[test]
 fn long_kinds_show_short_and_still_match_in_full() {
     assert_eq!(short_kind("HorizontalPodAutoscaler"), "HPA");
     assert_eq!(short_kind("PodDisruptionBudget"), "PDB");

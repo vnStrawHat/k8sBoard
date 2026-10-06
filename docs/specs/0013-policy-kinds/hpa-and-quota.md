@@ -89,7 +89,7 @@ fn quota_tone(ratio: f64) -> Option<StatusTone>;  // decision 16
 | Fullest | 160 | `fullest_item` | `{resource} {pct}` (`limits.memory 95%`), `Toned(quota_tone)` when ≥ 90 %, else `Text`; no ratio → `Absent` |
 | Age | 70 r | | |
 
-Status: the item with the highest ratio: ≥ 1 → Bad "{short} at quota"; ≥ 0.9 → Warn "{pct} {short} used" (`format_percent`); else Ok "Within quota"; no items → Done "No limits". `{short}`: CPU for cpu items, memory for memory items, else the resource name.
+Status: the item with the highest ratio: ≥ 1 → Bad "{short} at quota"; ≥ 0.9 → Warn "{pct} {resource} used" (the full item name, `94% limits.memory used`) (`format_percent`); else Ok "Within quota"; no items → Done "No limits". `{short}`: CPU for cpu items, memory for memory items, else the resource name.
 
 WHY **AT QUOTA** (Bad), the fullest item (highest ratio), when its ratio is ≥ 1, so the status and the box name the same item: `{resource} is at its limit ({quota_text}). New objects that need it are rejected; see Blocked creations.`
 
