@@ -28,12 +28,13 @@ use crate::config_map_rows::format_bytes;
 use crate::drawer::DrawerTab;
 use crate::launch_options::LaunchOptions;
 use crate::resource_kind::ResourceKind;
-use crate::secret_clipboard::{ClipboardMark, write_private_text};
+use crate::secret_clipboard::{CLIPBOARD_CLEAR_DELAY, ClipboardMark, write_private_text};
 use crate::table_selection::{ClusterObject, ResourceKey};
 
 /// How long a revealed value stays visible.
 pub(crate) const REVEAL_DURATION: Duration = Duration::from_secs(30);
-const COPIED_FEEDBACK: Duration = Duration::from_secs(2);
+/// How long "Cleared" stays after the 30 s clipboard clear fired.
+const CLEARED_FEEDBACK: Duration = Duration::from_secs(2);
 const TICK: Duration = Duration::from_secs(1);
 /// Revealed text is cut here (back to a char boundary): a huge value would stall the layout.
 pub(crate) const REVEAL_DISPLAY_LIMIT: usize = 4096;
@@ -245,6 +246,16 @@ fn seconds_left(hides_at: Instant, now: Instant) -> u64 {
     left.as_secs() + u64::from(left.subsec_nanos() > 0)
 }
 
+/// The note beside a copied key: a countdown to the clipboard clear, then `Cleared` for a moment.
+fn copy_note(elapsed: Duration) -> Option<String> {
+    if elapsed < CLIPBOARD_CLEAR_DELAY {
+        let left = CLIPBOARD_CLEAR_DELAY - elapsed;
+        let seconds = left.as_secs() + u64::from(left.subsec_nanos() > 0);
+        return Some(format!("Copied · clears in {seconds}s"));
+    }
+    (elapsed < CLIPBOARD_CLEAR_DELAY + CLEARED_FEEDBACK).then(|| "Cleared".to_owned())
+}
+
 /// 403 reads as the missing right; anything else as the cluster crate words it.
 fn failure_text(error: &ClusterError) -> String {
     match error {
@@ -381,11 +392,9 @@ impl SecretValuesView {
     /// Hides what is due and clears the Copied mark; false when nothing is left to count down.
     fn tick(&mut self, now: Instant, cx: &mut Context<Self>) -> bool {
         expire(&mut self.revealed, now);
-        if self
-            .copied
-            .as_ref()
-            .is_some_and(|(_, at)| now.saturating_duration_since(*at) >= COPIED_FEEDBACK)
-        {
+        if self.copied.as_ref().is_some_and(|(_, at)| {
+            now.saturating_duration_since(*at) >= CLIPBOARD_CLEAR_DELAY + CLEARED_FEEDBACK
+        }) {
             self.copied = None;
         }
         cx.notify();
@@ -452,11 +461,31 @@ impl SecretValuesView {
         Some(div().py_1().child(alert).into_any_element())
     }
 
+    /// The countdown (then `Cleared`) beside the key that was last copied.
+    fn copy_note_element(
+        &self,
+        key: &str,
+        now: Instant,
+        cx: &Context<Self>,
+    ) -> Option<impl IntoElement> {
+        let (copied, at) = self.copied.as_ref()?;
+        if copied != key {
+            return None;
+        }
+        let note = copy_note(now.saturating_duration_since(*at))?;
+        Some(
+            div()
+                .flex_shrink_0()
+                .text_xs()
+                .text_color(cx.theme().muted_foreground)
+                .child(note),
+        )
+    }
+
     fn copy_button(&self, ix: usize, key: &SecretKey, cx: &Context<Self>) -> AnyElement {
-        let is_copied = self
-            .copied
-            .as_ref()
-            .is_some_and(|(copied, _)| *copied == key.name);
+        let is_copied = self.copied.as_ref().is_some_and(|(copied, at)| {
+            *copied == key.name && at.elapsed() < CLIPBOARD_CLEAR_DELAY
+        });
         let tooltip = if key.is_binary {
             "Binary value"
         } else if is_copied {
@@ -511,6 +540,7 @@ impl SecretValuesView {
                 .py_1()
                 .text_sm()
                 .child(name)
+                .children(self.copy_note_element(&key.name, now, cx))
                 .child(
                     div()
                         .flex_shrink_0()
@@ -584,6 +614,7 @@ impl SecretValuesView {
                     .items_center()
                     .text_sm()
                     .child(name)
+                    .children(self.copy_note_element(&key.name, now, cx))
                     .child(
                         div()
                             .flex_shrink_0()

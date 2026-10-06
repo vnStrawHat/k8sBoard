@@ -281,6 +281,25 @@ impl ValuesEditView {
                     .text_color(tone_color(StatusTone::Bad, cx))
                     .child(text.clone())
             });
+        let line_break_warning = (row.ends_with_line_break && !row.is_removed()).then(|| {
+            let name = row.name.clone();
+            h_flex()
+                .gap_2()
+                .items_center()
+                .text_xs()
+                .text_color(tone_color(StatusTone::Warn, cx))
+                .child("ends with a line break")
+                .child(
+                    Button::new(("values-trim", index))
+                        .label("Trim")
+                        .ghost()
+                        .xsmall()
+                        .tooltip("Remove the trailing line break; saving works either way")
+                        .on_click(cx.listener(move |view, _, window, cx| {
+                            view.trim_line_break(&name, window, cx);
+                        })),
+                )
+        });
         h_flex()
             .gap_3()
             .px_4()
@@ -305,6 +324,7 @@ impl ValuesEditView {
                     .min_w_0()
                     .gap_1()
                     .child(self.render_value(index, row, window, cx))
+                    .children(line_break_warning)
                     .children(error),
             )
             .child(self.render_buttons(index, row, cx))

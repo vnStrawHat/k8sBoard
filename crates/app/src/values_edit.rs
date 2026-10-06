@@ -123,6 +123,8 @@ pub(crate) struct ValueRow {
     /// Characters of a Secret field's text, for the mask placeholder. Set with `has_text_change`, so
     /// drawing a frame never walks the rope.
     pub(crate) char_count: usize,
+    /// A Secret field whose text ends with a line break, usually a paste. Set with `char_count`.
+    pub(crate) ends_with_line_break: bool,
     _subscription: Option<Subscription>,
 }
 
@@ -521,6 +523,7 @@ impl ValuesEditView {
                     field,
                     has_text_change: false,
                     char_count: 0,
+                    ends_with_line_break: false,
                     _subscription: subscription,
                 }
             })
@@ -565,7 +568,14 @@ impl ValuesEditView {
             return;
         };
         if let FieldKind::Secret { field, .. } = &row.field {
-            row.char_count = field.read(cx).text().chars().count();
+            let rope = field.read(cx).text();
+            row.char_count = rope.chars().count();
+            // The last non-empty chunk ends the text; nothing is copied out of the rope.
+            row.ends_with_line_break = rope
+                .chunks()
+                .filter(|chunk| !chunk.is_empty())
+                .last()
+                .is_some_and(|chunk| chunk.ends_with('\n'));
         }
         row.has_text_change = match &row.field {
             FieldKind::Secret { .. } => row.char_count > 0,
@@ -746,6 +756,30 @@ impl ValuesEditView {
         let _text = insert_clipboard_text(&field, Zeroizing::new(text), window, cx);
     }
 
+    /// The Trim button of the line-break warning: drops the trailing `\r` and `\n` of a Secret
+    /// field. The text is copied once into a wiped buffer, like Apply does.
+    pub(crate) fn trim_line_break(
+        &mut self,
+        name: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(row) = self.rows.iter().find(|row| row.name == name) else {
+            return;
+        };
+        let FieldKind::Secret { field, .. } = &row.field else {
+            return;
+        };
+        let field = field.clone();
+        let text = copy_text(&field, cx);
+        let trimmed = Zeroizing::new(text.trim_end_matches(['\r', '\n']).to_owned());
+        field.update(cx, |state, cx| {
+            state.set_value(SharedString::from(trimmed.as_str()), window, cx)
+        });
+        // `set_value` emits no change event.
+        self.refresh_row(name, cx);
+    }
+
     /// Adds a row for the name in the Add field. The name is checked locally; the value is typed in
     /// the row (a Secret field starts masked like every other).
     pub(crate) fn add_key(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -782,6 +816,7 @@ impl ValuesEditView {
             field,
             has_text_change: true,
             char_count: 0,
+            ends_with_line_break: false,
             _subscription: Some(subscription),
         });
         self.rows.sort_by(|left, right| left.name.cmp(&right.name));
@@ -1120,7 +1155,7 @@ impl ValuesEditView {
             row.origin = RowOrigin::Server { is_removed: true };
         }
         let (field, subscription) = Self::new_field("DB_PORT", true, None, window, cx);
-        field.update(cx, |state, cx| state.insert("5432", window, cx));
+        field.update(cx, |state, cx| state.insert("5432\r\n", window, cx));
         view.rows.push(ValueRow {
             name: "DB_PORT".to_owned(),
             origin: RowOrigin::Added,
@@ -1129,7 +1164,8 @@ impl ValuesEditView {
                 reveal: Reveal::Masked,
             },
             has_text_change: true,
-            char_count: 4,
+            char_count: 6,
+            ends_with_line_break: true,
             _subscription: Some(subscription),
         });
         view.rows.sort_by(|left, right| left.name.cmp(&right.name));

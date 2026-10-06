@@ -852,3 +852,29 @@ fn a_local_error_in_apply_leaves_no_field_shown(cx: &mut TestAppContext) {
         .read_with(cx, |view, _| assert!(!view.row_errors.is_empty()));
     assert_eq!(t.reveal_of("DB_HOST", cx), Reveal::Masked);
 }
+
+#[gpui_kit::test]
+fn a_pasted_trailing_line_break_is_flagged_and_trim_removes_it(cx: &mut TestAppContext) {
+    let t = secret_view(cx);
+    let flagged = |t: &ViewTest, cx: &mut TestAppContext| {
+        t.view.read_with(cx, |view, _| {
+            view.rows
+                .iter()
+                .find(|row| row.name == "DB_PASSWORD")
+                .expect("the row exists")
+                .ends_with_line_break
+        })
+    };
+    t.insert("DB_PASSWORD", "a\nb", cx);
+    assert!(!flagged(&t, cx), "a line break inside is fine");
+    t.insert("DB_PASSWORD", "\r\n", cx);
+    assert!(flagged(&t, cx));
+    // The warning never blocks saving.
+    assert_eq!(t.changes(cx), [set("DB_PASSWORD", "a\nb\r\n")]);
+    t.with(cx, |view, window, cx| {
+        view.trim_line_break("DB_PASSWORD", window, cx)
+    });
+    assert!(!flagged(&t, cx));
+    assert_eq!(t.text("DB_PASSWORD", cx), "a\nb");
+    assert_eq!(t.changes(cx), [set("DB_PASSWORD", "a\nb")]);
+}

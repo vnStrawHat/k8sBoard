@@ -67,3 +67,7 @@ fn arm_clipboard_clear(&mut self, mark: ClipboardMark, cx: &mut Context<Self>);
 - **macOS / Linux**: clipboard managers and history tools (Maccy, Klipper, GPaste, …) are not controllable from GPUI; they may keep the value. The 30 s clear still runs. The macOS `org.nspasteboard.ConcealedType` convention would need AppKit FFI: not done.
 - Windows: a program already monitoring the clipboard may ignore the exclusion formats; the clear removes the value, it cannot wipe another process's copy.
 - The hash is in-process, keyed per copy, never logged, and dropped after the clear. Someone who can read process memory could brute-force a short value from hash and key, but could equally read the clipboard itself.
+
+## UX follow-up (walk H8)
+
+After Copy the drawer shows `Copied · clears in Ns` beside the key for the 30 s until the clear fires, then `Cleared` for 2 s (`copy_note` in `secret_values.rs`). The note is the view's own count from the copy time; it does not read the clipboard.

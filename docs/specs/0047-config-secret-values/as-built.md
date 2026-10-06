@@ -27,3 +27,7 @@ The app's own debug log (`RUST_LOG=kube_client::client::builder=debug`) of `--sc
 - The rendered text of the confirm dialog: it draws `changed_fields()` and the warnings, which are tested (names and markers only).
 - The 1 s ticker with a clock: `expire_reveals` and `tick` take the time as a parameter and are tested with it.
 - The R2 gap stays: no write-capable cluster, so commits are proven by fake-transport tests only.
+
+## UX follow-up (walk H9)
+
+A Secret row whose text ends with `\n` or `\r\n` (usually a paste) shows `ends with a line break` and a `Trim` button (`ValueRow::ends_with_line_break`, `trim_line_break`). Trim removes the trailing `\r`/`\n`; the warning never blocks Apply. ConfigMap text is not flagged: a trailing newline is normal there.

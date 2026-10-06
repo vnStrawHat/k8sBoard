@@ -313,3 +313,28 @@ fn pending_action_runs_for_its_subject_only() {
     assert_eq!(pending_action(&key, Some(&other)), PendingAction::Drop);
     assert_eq!(pending_action(&key, None), PendingAction::Drop);
 }
+
+#[test]
+fn copy_note_counts_down_to_the_clipboard_clear_then_says_cleared() {
+    assert_eq!(
+        copy_note(Duration::ZERO).as_deref(),
+        Some("Copied · clears in 30s")
+    );
+    assert_eq!(
+        copy_note(Duration::from_millis(1500)).as_deref(),
+        Some("Copied · clears in 29s")
+    );
+    assert_eq!(
+        copy_note(Duration::from_secs(29)).as_deref(),
+        Some("Copied · clears in 1s")
+    );
+    assert_eq!(
+        copy_note(Duration::from_secs(30)).as_deref(),
+        Some("Cleared")
+    );
+    assert_eq!(
+        copy_note(Duration::from_millis(31_900)).as_deref(),
+        Some("Cleared")
+    );
+    assert_eq!(copy_note(Duration::from_secs(32)), None);
+}
