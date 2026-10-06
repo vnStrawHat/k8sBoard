@@ -174,6 +174,16 @@ fn overview(
             value_or_absent(created.as_deref(), cx),
             cx,
         ))
+        .child(section_title("Labels", cx))
+        .child(chips(
+            "node-labels",
+            &node
+                .labels
+                .iter()
+                .map(|label| SharedString::from(label.clone()))
+                .collect::<Vec<_>>(),
+            cx,
+        ))
         .child(section_title("Conditions", cx));
     if node.conditions.is_empty() {
         column = column.child(absent_text(cx));
@@ -264,18 +274,7 @@ fn overview(
         ));
     }
 
-    column
-        .child(section_title("Labels", cx))
-        .child(chips(
-            "node-labels",
-            &node
-                .labels
-                .iter()
-                .map(|label| SharedString::from(label.clone()))
-                .collect::<Vec<_>>(),
-            cx,
-        ))
-        .into_any_element()
+    column.into_any_element()
 }
 
 /// What the pods on a node request and how many there are; only known for the All scope, since

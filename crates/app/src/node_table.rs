@@ -43,20 +43,21 @@ const MEMORY: usize = 7;
 const CPU_REQUESTED: usize = 8;
 const MEMORY_REQUESTED: usize = 9;
 const AGE: usize = 10;
+const LABELS: usize = 11;
 
 /// Marks a value the node does not have.
 const ABSENT: &str = "—";
 
 const USAGE_BAR_WIDTH: f32 = 46.;
 
-/// What the pods request, not what they use: shown only when the user asks for it.
-const HIDDEN_BY_DEFAULT: [usize; 2] = [CPU_REQUESTED, MEMORY_REQUESTED];
+/// What the pods request, not what they use, and the labels: shown only when the user asks.
+const HIDDEN_BY_DEFAULT: [usize; 3] = [CPU_REQUESTED, MEMORY_REQUESTED, LABELS];
 
 /// The base widths of the default columns add up to what a 1100 px window leaves for the table, so
 /// Memory and Age stay inside it. Name takes most of the spare width, up to 300 px (28 mono characters),
 /// so node names stay whole at 1320 px; Taints is the column that gives way first. Internal IP is fixed
 /// at the width of `255.255.255.255`, and Version at that of `v1.29.5`.
-const NODE_COLUMNS: [KindColumn; 11] = [
+const NODE_COLUMNS: [KindColumn; 12] = [
     column("Name", 110., Align::Left).grows(8).up_to(300.),
     column("Status", 76., Align::Left),
     column("Roles", 106., Align::Left),
@@ -68,6 +69,7 @@ const NODE_COLUMNS: [KindColumn; 11] = [
     column("CPU req", 92., Align::Left),
     column("Mem req", 92., Align::Left),
     column("Age", 56., Align::Right),
+    column("Labels", 200., Align::Left).grows(2).up_to(420.),
 ];
 
 pub(crate) struct NodeTableDelegate {
@@ -286,6 +288,14 @@ impl TableRow for NodeRow<'_> {
             CPU_REQUESTED => per_mille(self.requests.cpu),
             MEMORY_REQUESTED => per_mille(self.requests.memory),
             AGE => CellValue::Age(node.created_at),
+            LABELS => {
+                let summary = labels_summary(&node.labels);
+                if summary.first.is_empty() {
+                    CellValue::Absent
+                } else {
+                    CellValue::Text(Cow::Owned(summary.first.join(", ")))
+                }
+            }
             _ => CellValue::Absent,
         }
     }
@@ -419,6 +429,7 @@ impl NodeTableDelegate {
                 // Read per cell: a render has no shared clock, and a second of skew is invisible.
                 .child(format_age(node.created_at, jiff::Timestamp::now()))
                 .into_any_element(),
+            LABELS => labels_cell(&node.labels, mono, cx),
             _ => div().into_any_element(),
         }
     }
@@ -601,6 +612,60 @@ fn taints_cell(
                 summary.first,
             )
             .min_w_0(),
+        )
+        .children(more)
+        .into_any_element()
+}
+
+/// How many labels the Labels column spells out before `+N`.
+const SHOWN_LABELS: usize = 2;
+
+/// Keys every cluster sets on its nodes: they say nothing about this node, so the column leaves
+/// them out and only the tooltip lists them. Roles has its own column.
+const SYSTEM_LABEL_PREFIXES: [&str; 4] = [
+    "kubernetes.io/",
+    "node.kubernetes.io/",
+    "beta.kubernetes.io/",
+    "node-role.kubernetes.io/",
+];
+
+/// The first labels of a node worth reading, and how many more there are.
+struct LabelsSummary<'a> {
+    first: Vec<&'a str>,
+    more: usize,
+}
+
+fn labels_summary(labels: &[String]) -> LabelsSummary<'_> {
+    let mut own = labels.iter().map(String::as_str).filter(|label| {
+        !SYSTEM_LABEL_PREFIXES
+            .iter()
+            .any(|prefix| label.starts_with(prefix))
+    });
+    let first: Vec<&str> = own.by_ref().take(SHOWN_LABELS).collect();
+    LabelsSummary {
+        first,
+        more: own.count(),
+    }
+}
+
+/// The first two own labels and a muted `+N`; the tooltip lists every label.
+fn labels_cell(labels: &[String], mono: gpui_kit::SharedString, cx: &App) -> AnyElement {
+    let summary = labels_summary(labels);
+    if summary.first.is_empty() {
+        return cell_text(ABSENT, cx);
+    }
+    let more = (summary.more > 0).then(|| {
+        div()
+            .flex_shrink_0()
+            .text_color(cx.theme().muted_foreground)
+            .child(format!(" +{}", summary.more))
+    });
+    h_flex()
+        .w_full()
+        .font_family(mono)
+        .child(
+            truncated_text_with_tooltip("labels", summary.first.join(", "), labels.join("\n"))
+                .min_w_0(),
         )
         .children(more)
         .into_any_element()
@@ -843,6 +908,46 @@ mod tests {
         assert_eq!(shown.len(), 2, "{shown:?}");
     }
 
+    fn labels(terms: &[&str]) -> Vec<String> {
+        terms.iter().map(|term| (*term).to_owned()).collect()
+    }
+
+    #[test]
+    fn the_labels_column_skips_system_keys_and_counts_the_rest() {
+        let labels = labels(&[
+            "beta.kubernetes.io/arch=amd64",
+            "k8sboard.io/pool=web",
+            "kubernetes.io/hostname=k8sboard-lab-worker",
+            "maintenance-window=sun-02",
+            "node-role.kubernetes.io/control-plane=",
+            "node.kubernetes.io/instance-type=kind",
+            "topology.kubernetes.io/zone=lab-a",
+        ]);
+        let summary = labels_summary(&labels);
+        assert_eq!(
+            summary.first,
+            ["k8sboard.io/pool=web", "maintenance-window=sun-02"]
+        );
+        // The zone label is not a system key: only kubernetes.io/ and node.kubernetes.io/ are.
+        assert_eq!(summary.more, 1);
+    }
+
+    #[test]
+    fn a_node_with_only_system_labels_has_no_labels_cell() {
+        let mut node = node();
+        node.labels = labels(&["kubernetes.io/os=linux"]);
+        assert!(matches!(row(&node).value(LABELS), CellValue::Absent));
+        assert_eq!(labels_summary(&node.labels).more, 0);
+        node.labels = labels(&["role=db"]);
+        assert!(matches!(row(&node).value(LABELS), CellValue::Text(text) if text == "role=db"));
+    }
+
+    #[test]
+    fn labels_are_hidden_until_asked_for() {
+        assert_eq!(NODE_COLUMNS[LABELS].name, "Labels");
+        assert!(HIDDEN_BY_DEFAULT.contains(&LABELS));
+    }
+
     #[test]
     fn roles_cell_dash_when_empty() {
         assert_eq!(roles_cell(&[]), ABSENT);
@@ -854,7 +959,7 @@ mod tests {
     fn request_columns_are_hidden_until_asked_for() {
         assert_eq!(NODE_COLUMNS[CPU_REQUESTED].name, "CPU req");
         assert_eq!(NODE_COLUMNS[MEMORY_REQUESTED].name, "Mem req");
-        assert_eq!(HIDDEN_BY_DEFAULT, [CPU_REQUESTED, MEMORY_REQUESTED]);
+        assert_eq!(HIDDEN_BY_DEFAULT[..2], [CPU_REQUESTED, MEMORY_REQUESTED]);
     }
 
     #[test]

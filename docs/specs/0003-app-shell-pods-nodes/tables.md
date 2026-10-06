@@ -24,8 +24,8 @@
 | Age | 70, right | `format_age(created_at, now)` |
 
 ## Nodes columns (W5 without CPU/Memory)
+
 Widths are the base widths of `NODE_COLUMNS`; the sum fits a 1100 px window (Memory and Age stay inside it). Name takes most of the spare width (weight 8, up to 300 px = 28 mono characters), so the lab node names stay whole at 1320 px; Taints (weight 2, up to 420 px) gives way first. Name is cut with the sibling-aware rule of `cell_truncation.rs` (0009), as is the Pods Node column. Roles, Status, Internal IP, Version (90), CPU, Memory, and Age do not grow. The table above lists the original W5 widths.
-Widths are the base widths of `NODE_COLUMNS`; the sum fits a 1100 px window (Memory and Age stay inside it). Taints gets the most spare width (weight 4, up to 420 px) and gives way first; Status, Name, and Roles grow a little (Internal IP, Version, CPU, Memory, Age do not). The table above lists the original W5 widths.
 
 | Column | Width | Cell |
 |---|---|---|
@@ -36,6 +36,7 @@ Widths are the base widths of `NODE_COLUMNS`; the sum fits a 1100 px window (Mem
 | Version | 100 | `kubelet_version` |
 | Internal IP | 140, fixed | `internal_ip` or "—"; never truncates (fits `255.255.255.255`) |
 | Age | 70, right | `format_age` |
+| Labels | 200, hidden by default | the first two labels without a system key (`kubernetes.io/`, `node.kubernetes.io/`, `beta.kubernetes.io/`, `node-role.kubernetes.io/`) plus a muted ` +N`; tooltip lists every label; "—" when none |
 
 ## Status tones (`status_tone.rs`, pure)
 

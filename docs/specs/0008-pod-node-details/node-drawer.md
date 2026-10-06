@@ -7,12 +7,12 @@
 | Section | Rows |
 |---|---|
 | Node | Status (toned), Roles ("—"), Taints (one per line, mono, as today), Created (timestamp and age) |
+| Labels | `chips(&labels)`, directly under Taints so a node's pool or zone is not below the fold |
 | Conditions | one row per `NodeCondition` in API order: name, then `{status}` in `node_condition_tone`, then muted `{reason} · since {age}`; tooltip on the row = `message` when Some |
 | Addresses | `wide_detail_row(kind, address)` per address, mono; "—" when empty |
 | System | OS `{operating_system}/{architecture} · {os_image}` (empty parts and their separators left out), Kernel, Container runtime, Kubelet (the existing `kubelet_version`) |
 | Resources | header row `Resource · Capacity · Allocatable` (muted `text_xs`), then one row per `NodeResource`: `resource_label(name)` (shared with the pod drawer), capacity, allocatable, mono, "—" for None |
 | Pods {n} | `pods_section(&PodOwner::Node { name }, live, cx)` (below) |
-| Labels | `chips(&labels)` |
 
 - Labels and values use `wide_detail_row` ("Container runtime" does not fit 104 px).
 - Quantities are shown as written (`16393940Ki`), like `kubectl describe`; human units come with 0010's quantity parser.
