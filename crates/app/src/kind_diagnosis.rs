@@ -32,6 +32,7 @@ use crate::pod_diagnosis::{PodDiagnosis, pod_diagnosis};
 use crate::policy_rows::{
     fullest_item, is_above_target, is_at_max, is_scaling_disabled, metric_text, quota_text,
 };
+use crate::quota_room::{QuotaExceeded, quota_exceeded};
 use crate::status_tone::{StatusTone, pod_status_label, readiness_text};
 use crate::table_selection::ResourceKey;
 use crate::workload_rows::{DEADLINE_EXCEEDED, PROGRESSING};
@@ -223,6 +224,16 @@ pub(crate) fn find_condition<'a>(
     name: &str,
 ) -> Option<&'a WorkloadCondition> {
     conditions.iter().find(|condition| condition.name == name)
+}
+
+/// `FailedCreate: quota team-quota: limits.memory 600Mi of 640Mi used, needs 150Mi`: the numbers
+/// of the admission failure instead of the pod name and the raw message.
+fn quota_failure_text(condition: &WorkloadCondition, quota: &QuotaExceeded) -> String {
+    let lines = quota.lines.join("; ");
+    match &condition.reason {
+        Some(reason) => format!("{reason}: quota {}: {lines}", quota.quota),
+        None => format!("Quota {}: {lines}", quota.quota),
+    }
 }
 
 /// `{reason}: {message}`, either part may be missing; `None` when both are.
@@ -668,12 +679,18 @@ fn deployment_diagnosis(
     if let Some(condition) = find_condition(&deployment.conditions, "ReplicaFailure")
         && condition.is_true
     {
+        let quota = condition.message.as_deref().and_then(quota_exceeded);
         return Some(KindDiagnosis {
             tone: StatusTone::Bad,
             title: "REPLICA FAILURE".to_owned(),
-            text: reason_and_message(condition)
-                .unwrap_or_else(|| "The controller cannot create pods.".to_owned()),
-            link: None,
+            text: match &quota {
+                Some(quota) => quota_failure_text(condition, quota),
+                None => reason_and_message(condition)
+                    .unwrap_or_else(|| "The controller cannot create pods.".to_owned()),
+            },
+            link: quota.and_then(|quota| {
+                ResourceKey::of_object("ResourceQuota", Some(&deployment.namespace), &quota.quota)
+            }),
         });
     }
     if deployment.ready >= deployment.desired {

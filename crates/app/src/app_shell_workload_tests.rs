@@ -1905,6 +1905,7 @@ fn deployments_with_images() -> Vec<KindRow> {
         name: name.to_owned(),
         image: image.to_owned(),
         ports: Vec::new(),
+        resources: Vec::new(),
     };
     let mut summary = deployment("api");
     summary.containers = vec![

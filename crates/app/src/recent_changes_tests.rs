@@ -558,6 +558,7 @@ fn replica_set(
             name: "api".to_owned(),
             image: "repo.example.com/api:2.14.0".to_owned(),
             ports: Vec::new(),
+            resources: Vec::new(),
         }],
     }
 }

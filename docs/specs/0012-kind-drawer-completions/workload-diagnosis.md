@@ -32,7 +32,7 @@ pub(crate) fn kind_diagnosis(object: &KindObject, inputs: &DiagnosisInputs) -> O
 | # | When | Tone · title | Text |
 |---|---|---|---|
 | D1* | `Progressing` False, reason `ProgressDeadlineExceeded` | Bad · ROLLOUT STALLED | `No progress for {progress_deadline_seconds}s.` + ` Pod {name}: {diagnosis}` when an unhealthy pod exists |
-| D2* | `ReplicaFailure` True | Bad · REPLICA FAILURE | `{reason}: {message}` (either part may be missing) |
+| D2* | `ReplicaFailure` True | Bad · REPLICA FAILURE | `{reason}: {message}` (either part may be missing); an `exceeded quota` message reads `{reason}: quota team-quota: limits.memory 600Mi of 640Mi used, needs 150Mi` and the box links `Open quota team-quota →` (N21) |
 | D3 | ready < desired and a failing pod exists | Bad when ready 0, else Warn · `{desired − ready} OF {desired} NOT READY` | a container cause: `Pod {name} is {status label}: {diagnosis}`; a pod-level cause (evicted, unschedulable): `Pod {name}: {diagnosis}` |
 | D4* | none of D1 to D3 fired, and `up_to_date` or `available` is below `desired` (UX round 3, O18) | Warn · ROLLOUT IN PROGRESS | `{up_to_date} of {desired} pods run the new template; {available} of {desired} are available.` + ` New pod {name} is {status}: {diagnosis}` when a new pod (created after the last write of the pod template, `template_change`) has a Bad cause |
 

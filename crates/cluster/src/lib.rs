@@ -198,6 +198,7 @@ pub use proxy::{ProxyChoice, ProxyUrl, ProxyUrlError};
 pub use quantity::{ByteAmount, CpuAmount, quantity_ratio};
 pub use quota_demand::{
     DemandChange, QuotaCheck, QuotaResource, QuotaShortfall, WorkloadDemand, quota_check,
+    scale_demand,
 };
 pub use rbac_evaluation::{
     AccessRequest, EffectiveRule, Grant, GrantNames, Identity, RequestTarget, ResourceRequest,

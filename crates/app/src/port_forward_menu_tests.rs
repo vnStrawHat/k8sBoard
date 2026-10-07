@@ -106,6 +106,7 @@ fn service_port(name: Option<&str>, port: u16, protocol: &str) -> ServicePortSum
 
 fn template(ports: Vec<ContainerPort>) -> Vec<TemplateContainer> {
     vec![TemplateContainer {
+        resources: Vec::new(),
         name: "web".to_owned(),
         image: "img".to_owned(),
         ports,

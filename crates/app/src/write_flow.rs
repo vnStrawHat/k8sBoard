@@ -1029,6 +1029,7 @@ impl AppShell {
         let live = self.live_of(&subject.cluster, cx)?;
         let row = live.row_of(&subject.key)?;
         ScaleTarget::of(&row.object, live.loaded_hpas())
+            .map(|target| target.with_quotas(live.loaded_quotas()))
     }
 
     /// Scale on the cursor row: the one popover that the menu, the key, and the palette share.

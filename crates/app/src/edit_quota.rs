@@ -82,7 +82,7 @@ pub(crate) fn quota_line(demand: Option<&DemandChange>, input: &QuotaInput) -> Q
 /// Which way a shown amount is rounded: a headroom must never read larger than it is, and a need
 /// never smaller.
 #[derive(Clone, Copy)]
-enum Round {
+pub(crate) enum Round {
     /// For what is left.
     Down,
     /// For what is needed.
@@ -99,7 +99,7 @@ fn divide(numerator: u128, denominator: u128, round: Round) -> u128 {
 /// Memory as binary bytes (`22Gi`, `1.2Gi`), CPU as cores or millicores (`1.5`, `250m`), pods as a
 /// count. The text is cut to the shown precision in the direction `round` says, so `left` is never
 /// overstated and `needed` never understated.
-fn amount_text(resource: QuotaResource, value: u64, round: Round) -> String {
+pub(crate) fn amount_text(resource: QuotaResource, value: u64, round: Round) -> String {
     match resource {
         QuotaResource::Pods => value.to_string(),
         QuotaResource::RequestsMemory | QuotaResource::LimitsMemory => memory_text(value, round),

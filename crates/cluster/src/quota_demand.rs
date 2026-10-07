@@ -10,6 +10,7 @@ use serde_json::Value;
 use crate::object_yaml::ObjectKind;
 use crate::quantity::{ByteAmount, CpuAmount};
 use crate::resource_quota::ResourceQuotaSummary;
+use crate::workload::TemplateContainer;
 
 /// Steady-state pod resources of a workload, in base units (nanocores, bytes, pods).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -171,6 +172,47 @@ pub(crate) fn workload_demand(kind: ObjectKind, object: &Value) -> Option<Worklo
         .pointer("/spec/template/spec")
         .map_or_else(WorkloadDemand::default, pod_footprint);
     Some(per_pod.times(pods))
+}
+
+/// The change a Scale makes: `from` replicas of the template, then `to`. The summary keeps the main
+/// containers only, so init containers and sidecars are not counted.
+pub fn scale_demand(containers: &[TemplateContainer], from: u32, to: u32) -> DemandChange {
+    let per_pod = containers
+        .iter()
+        .map(template_footprint)
+        .fold(WorkloadDemand::default(), |sum, own| {
+            sum.combine(own, u64::saturating_add)
+        });
+    DemandChange {
+        before: per_pod.times(u64::from(from)),
+        after: per_pod.times(u64::from(to)),
+    }
+}
+
+fn template_footprint(container: &TemplateContainer) -> WorkloadDemand {
+    // A missing request uses the limit, like `amount` does for a manifest.
+    let quantity = |name: &str, is_limit: bool| {
+        let entry = container
+            .resources
+            .iter()
+            .find(|entry| entry.name == name)?;
+        match is_limit {
+            true => entry.limit.as_deref(),
+            false => entry.request.as_deref().or(entry.limit.as_deref()),
+        }
+    };
+    let amount = |name, is_limit, resource: QuotaResource| {
+        quantity(name, is_limit)
+            .and_then(|text| resource.parse(text))
+            .unwrap_or(0)
+    };
+    WorkloadDemand {
+        pods: 0,
+        requests_cpu: amount("cpu", false, QuotaResource::RequestsCpu),
+        requests_memory: amount("memory", false, QuotaResource::RequestsMemory),
+        limits_cpu: amount("cpu", true, QuotaResource::LimitsCpu),
+        limits_memory: amount("memory", true, QuotaResource::LimitsMemory),
+    }
 }
 
 /// `max(sum(containers) + sum(sidecars), max(each regular init + the sidecars started before it))`

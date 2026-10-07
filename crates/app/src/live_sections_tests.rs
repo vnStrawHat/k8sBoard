@@ -184,6 +184,7 @@ fn replica_set(
         change_cause: None,
         selector: Vec::new(),
         containers: vec![TemplateContainer {
+            resources: Vec::new(),
             name: "web".to_owned(),
             image: "registry.example.com:5000/api:1.4.2".to_owned(),
             ports: Vec::new(),

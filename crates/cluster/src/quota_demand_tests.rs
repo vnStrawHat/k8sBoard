@@ -319,3 +319,37 @@ fn demand_change_grows_when_any_resource_does() {
     };
     assert!(!smaller.grows());
 }
+
+fn template(resources: &[(&str, Option<&str>, Option<&str>)]) -> Vec<TemplateContainer> {
+    vec![TemplateContainer {
+        name: "app".to_owned(),
+        image: "app:1".to_owned(),
+        ports: Vec::new(),
+        resources: resources
+            .iter()
+            .map(|(name, request, limit)| crate::ContainerResource {
+                name: (*name).to_owned(),
+                request: request.map(str::to_owned),
+                limit: limit.map(str::to_owned),
+            })
+            .collect(),
+    }]
+}
+
+#[test]
+fn a_scale_multiplies_the_template_and_a_missing_request_takes_the_limit() {
+    let change = scale_demand(
+        &template(&[("cpu", Some("250m"), None), ("memory", None, Some("150Mi"))]),
+        4,
+        6,
+    );
+    assert_eq!(change.before.pods, 4);
+    assert_eq!(change.after.pods, 6);
+    assert_eq!(change.after.requests_cpu, 1_500_000_000);
+    assert_eq!(change.after.limits_cpu, 0);
+    // The request defaults to the limit; the limit is only what is set.
+    assert_eq!(change.after.requests_memory, 6 * 150 * (1 << 20));
+    assert_eq!(change.before.limits_memory, 4 * 150 * (1 << 20));
+    assert!(change.grows());
+    assert!(!scale_demand(&template(&[]), 4, 4).grows());
+}

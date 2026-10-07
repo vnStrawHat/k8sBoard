@@ -28,6 +28,7 @@ fn deployment() -> DeploymentSummary {
         revision: Some("7".to_owned()),
         selector: vec!["app=api".to_owned()],
         containers: vec![TemplateContainer {
+            resources: Vec::new(),
             name: "web".to_owned(),
             image: "nginx:1.27".to_owned(),
             ports: vec![
@@ -639,6 +640,7 @@ fn daemon_set_rollout_by_node_starts_with_bars() {
 fn daemon_set_port_shows_host_port() {
     let mut set = daemon_set();
     set.containers = vec![TemplateContainer {
+        resources: Vec::new(),
         name: "agent".to_owned(),
         image: "agent:1".to_owned(),
         ports: vec![
@@ -717,6 +719,7 @@ fn stateful_set_claims_show_retention() {
 #[test]
 fn replica_set_template_shows_hash_and_image() {
     let container = |name: &str, image: &str| TemplateContainer {
+        resources: Vec::new(),
         name: name.to_owned(),
         image: image.to_owned(),
         ports: Vec::new(),
@@ -783,6 +786,7 @@ fn deployment_containers_offer_to_copy_their_images() {
 #[test]
 fn a_long_container_name_goes_above_its_image() {
     let container = |name: &str, image: &str| TemplateContainer {
+        resources: Vec::new(),
         name: name.to_owned(),
         image: image.to_owned(),
         ports: Vec::new(),

@@ -264,6 +264,23 @@ fn deployment_replica_failure() {
         (StatusTone::Bad, "REPLICA FAILURE")
     );
     assert_eq!(diagnosis.text, "FailedCreate: exceeded quota: compute");
+    // The API server's full text names the quota, the resource, and the numbers, and links the quota.
+    let message = "pods \"api-1\" is forbidden: exceeded quota: team-quota, requested: limits.memory=150Mi, used: limits.memory=600Mi, limited: limits.memory=640Mi";
+    failing.conditions = vec![condition(
+        "ReplicaFailure",
+        true,
+        Some("FailedCreate"),
+        Some(message),
+    )];
+    let diagnosis = run(KindObject::Deployment(failing.clone()), None, &[]).expect("a box");
+    assert_eq!(
+        diagnosis.text,
+        "FailedCreate: quota team-quota: limits.memory 600Mi of 640Mi used, needs 150Mi"
+    );
+    assert_eq!(
+        diagnosis.link,
+        ResourceKey::of_object("ResourceQuota", Some("team-a"), "team-quota")
+    );
     failing.conditions = vec![condition("ReplicaFailure", true, None, None)];
     let diagnosis = run(KindObject::Deployment(failing.clone()), None, &[]).expect("a box");
     assert_eq!(diagnosis.text, "The controller cannot create pods.");

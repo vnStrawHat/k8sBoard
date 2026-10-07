@@ -6,7 +6,8 @@ use std::cell::Cell;
 
 use cluster::{
     CronJobSummary, DeploymentSummary, HELM_MANAGED_WARNING, ObjectKind, ObjectRef,
-    ReplicaSetSummary, TemplateContainer, WriteOperation, WriteRequest, terms_are_helm_managed,
+    ReplicaSetSummary, ResourceQuotaSummary, TemplateContainer, WriteOperation, WriteRequest,
+    terms_are_helm_managed,
 };
 use gpui_kit::SharedString;
 use jiff::tz::TimeZone;
@@ -20,6 +21,7 @@ use crate::app_shell::write_flow::WriteIntent;
 use crate::cluster_registry::ClusterRef;
 use crate::kind_row::KindObject;
 use crate::live_sections::run_label;
+use crate::quota_room::quota_scale_warnings;
 use crate::resource_actions::{ResourceAction, action_risk, values_edit_block};
 use crate::resource_edits::{claim_block, class_block};
 use crate::write_guard::ActionRisk;
@@ -681,13 +683,17 @@ pub(crate) struct ScaleTarget {
     pub(crate) hpa: Option<ManagingHpa>,
     /// Helm renders the workload, so its next upgrade sets the replicas again.
     pub(crate) is_helm_managed: bool,
+    /// The pod template, for the quota check.
+    pub(crate) template: Vec<TemplateContainer>,
+    /// The quotas of the namespace, set by `with_quotas` only when that list is already loaded.
+    pub(crate) quotas: Vec<ResourceQuotaSummary>,
 }
 
 impl ScaleTarget {
     /// `None` for a row that does not scale (anything but a Deployment or a StatefulSet).
     /// `hpas` is the HPA list when it is loaded, else empty: no list starts for a hint.
     pub(crate) fn of(object: &KindObject, hpas: &[KindObject]) -> Option<Self> {
-        let (kind, namespace, name, desired, ready, labels) = match object {
+        let (kind, namespace, name, desired, ready, labels, template) = match object {
             KindObject::Deployment(d) => (
                 ObjectKind::Deployment,
                 &d.namespace,
@@ -695,6 +701,7 @@ impl ScaleTarget {
                 d.desired,
                 d.ready,
                 &d.labels,
+                &d.containers,
             ),
             KindObject::StatefulSet(s) => (
                 ObjectKind::StatefulSet,
@@ -703,6 +710,7 @@ impl ScaleTarget {
                 s.desired,
                 s.ready,
                 &s.labels,
+                &s.containers,
             ),
             _ => return None,
         };
@@ -714,7 +722,24 @@ impl ScaleTarget {
             ready,
             hpa: managing_hpa(hpas, kind, namespace, name),
             is_helm_managed: terms_are_helm_managed(labels),
+            template: template.clone(),
+            quotas: Vec::new(),
         })
+    }
+
+    /// Adds the namespace quotas of `quotas` (the ResourceQuota list when it is loaded, else empty:
+    /// no list starts for a hint), so a Scale can say which new pods the quota refuses.
+    pub(crate) fn with_quotas(mut self, quotas: &[KindObject]) -> Self {
+        self.quotas = quotas
+            .iter()
+            .filter_map(|object| match object {
+                KindObject::ResourceQuota(quota) if quota.namespace == self.namespace => {
+                    Some(quota.clone())
+                }
+                _ => None,
+            })
+            .collect();
+        self
     }
 
     /// `deployment/api`.
@@ -798,6 +823,11 @@ pub(crate) fn scale_warnings(target: &ScaleTarget, replicas: u32) -> Vec<SharedS
         };
         warnings.push(text.into());
     }
+    warnings.extend(
+        quota_scale_warnings(&target.quotas, &target.template, target.desired, replicas)
+            .into_iter()
+            .map(SharedString::from),
+    );
     if target.is_helm_managed {
         warnings.push(HELM_MANAGED_WARNING.into());
     }

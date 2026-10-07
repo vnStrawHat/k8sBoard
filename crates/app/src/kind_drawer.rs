@@ -484,6 +484,11 @@ fn why_box(diagnosis: &KindDiagnosis, kind: ResourceKind, cx: &Context<AppShell>
             name,
             ..
         } => Some((format!("Open secret {name} →"), key.clone())),
+        ResourceKey::Kind {
+            kind: ResourceKind::ResourceQuotas,
+            name,
+            ..
+        } => Some((format!("Open quota {name} →"), key.clone())),
         ResourceKey::Node { .. } | ResourceKey::Kind { .. } => None,
     });
     let logs_key = diagnosis

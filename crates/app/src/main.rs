@@ -124,6 +124,7 @@ mod port_forward_menu;
 mod port_forwards;
 mod process_memory;
 mod process_usage;
+mod quota_room;
 mod recent_changes;
 mod related_objects;
 mod related_pods;

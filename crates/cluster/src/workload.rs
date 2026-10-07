@@ -6,6 +6,7 @@ use k8s_openapi::api::core::v1::{Container, PodTemplateSpec};
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{LabelSelector, ObjectMeta};
 use k8s_openapi::apimachinery::pkg::util::intstr::IntOrString;
 
+use crate::container_spec::{ContainerResource, container_resources};
 use crate::event::optional_message;
 use crate::pod_status::non_negative;
 use crate::selector::Selector;
@@ -36,7 +37,7 @@ pub struct WorkloadCondition {
     pub last_transition: Option<jiff::Timestamp>,
 }
 
-/// A main container of a pod template. Only the name, image, and ports are kept:
+/// A main container of a pod template. Only the name, image, ports, and resources are kept:
 /// `env`, `envFrom`, `command`, `args`, and `volumeMounts` can hold plaintext secrets.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TemplateContainer {
@@ -44,6 +45,8 @@ pub struct TemplateContainer {
     /// The image as written in the spec.
     pub image: String,
     pub ports: Vec<ContainerPort>,
+    /// `cpu`, `memory`, `ephemeral-storage`, then the rest by name; the quota check of a scale reads it.
+    pub resources: Vec<ContainerResource>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -97,6 +100,7 @@ pub(crate) fn template_containers(template: &PodTemplateSpec) -> Vec<TemplateCon
             name: container.name.clone(),
             image: container.image.clone().unwrap_or_default(),
             ports: container_ports(container),
+            resources: container_resources(container),
         })
         .collect()
 }

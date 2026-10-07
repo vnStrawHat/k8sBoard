@@ -718,6 +718,7 @@ pub(crate) fn replica_set(
         change_cause: None,
         selector: Vec::new(),
         containers: vec![cluster::TemplateContainer {
+            resources: Vec::new(),
             name: "web".to_owned(),
             image: image.to_owned(),
             ports: Vec::new(),
@@ -1118,6 +1119,7 @@ fn web_container(image: &str) -> cluster::TemplateContainer {
         name: "web".to_owned(),
         image: image.to_owned(),
         ports: Vec::new(),
+        resources: Vec::new(),
     }
 }
 
@@ -1185,6 +1187,7 @@ fn container(name: &str, image: &str) -> TemplateContainer {
         name: name.to_owned(),
         image: image.to_owned(),
         ports: Vec::new(),
+        resources: Vec::new(),
     }
 }
 
@@ -1325,4 +1328,70 @@ fn set_image_needs_the_patch_right_of_its_kind() {
         let intent = set_image_to(&target, "web", "nginx:2", "");
         assert_eq!(intent.request.target().kind_name(), kind.name());
     }
+}
+
+fn quota_in(namespace: &str, resource: &str, hard: &str, used: &str) -> KindObject {
+    KindObject::ResourceQuota(cluster::ResourceQuotaSummary {
+        namespace: namespace.to_owned(),
+        name: "team-quota".to_owned(),
+        created_at: None,
+        labels: Vec::new(),
+        items: vec![cluster::QuotaItem {
+            resource: resource.to_owned(),
+            hard: hard.to_owned(),
+            used: Some(used.to_owned()),
+        }],
+        scopes: Vec::new(),
+    })
+}
+
+fn deployment_limiting_memory(limit: &str) -> KindObject {
+    let mut api = deployment("api");
+    api.containers = vec![TemplateContainer {
+        resources: vec![cluster::ContainerResource {
+            name: "memory".to_owned(),
+            request: None,
+            limit: Some(limit.to_owned()),
+        }],
+        ..web_container("web:1")
+    }];
+    KindObject::Deployment(api)
+}
+
+#[test]
+fn a_scale_past_the_namespace_quota_says_which_pods_will_not_start() {
+    let quotas = [quota_in("team-a", "limits.memory", "640Mi", "600Mi")];
+    let target = ScaleTarget::of(&deployment_limiting_memory("150Mi"), &[])
+        .expect("a scale target")
+        .with_quotas(&quotas);
+    assert_eq!(
+        scale_to(&target, 4).warnings,
+        ["needs 150Mi limits.memory per pod, team-quota has 40Mi left: the new pod will not start"]
+    );
+    assert_eq!(
+        scale_to(&target, 5).warnings,
+        [
+            "needs 150Mi limits.memory per pod, team-quota has 40Mi left: none of the 2 new pods will start"
+        ]
+    );
+    // Scaling down adds no pod.
+    assert!(
+        scale_to(&target, 2)
+            .warnings
+            .iter()
+            .all(|w| !w.contains("quota"))
+    );
+}
+
+#[test]
+fn a_quota_of_another_namespace_or_none_loaded_says_nothing() {
+    let other = [quota_in("team-b", "limits.memory", "640Mi", "600Mi")];
+    let object = deployment_limiting_memory("150Mi");
+    let with_other = ScaleTarget::of(&object, &[])
+        .expect("a scale target")
+        .with_quotas(&other);
+    assert!(with_other.quotas.is_empty());
+    assert!(scale_to(&with_other, 5).warnings.is_empty());
+    let unloaded = ScaleTarget::of(&object, &[]).expect("a scale target");
+    assert!(scale_to(&unloaded, 5).warnings.is_empty());
 }

@@ -3126,6 +3126,16 @@ impl LiveCluster {
             .map_or(&[][..], |feed| feed.list.items())
     }
 
+    /// The ResourceQuotas the Issues feed already holds, empty while that list is loading, denied, or
+    /// off: the Scale warning uses them and starts no list for it.
+    pub(crate) fn loaded_quotas(&self) -> &[KindObject] {
+        self.issue_feeds
+            .conditions
+            .iter()
+            .find(|feed| feed.kind == ResourceKind::ResourceQuotas)
+            .map_or(&[][..], |feed| feed.list.items())
+    }
+
     /// The storage classes the explorer holds, empty unless it shows the StorageClasses screen and
     /// its first snapshot arrived: an Expand checks the claim's class against them when they are
     /// there and starts no list for the hint (spec 0032b decision 10).

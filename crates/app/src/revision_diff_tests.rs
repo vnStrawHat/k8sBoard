@@ -36,6 +36,7 @@ fn replica_set(revision: Option<&str>, image: &str) -> ReplicaSetSummary {
         change_cause: None,
         selector: Vec::new(),
         containers: vec![TemplateContainer {
+            resources: Vec::new(),
             name: "api".to_owned(),
             image: image.to_owned(),
             ports: Vec::new(),

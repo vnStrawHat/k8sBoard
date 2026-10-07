@@ -47,7 +47,7 @@ Every builder returns a 0030 `GuardedIntent { cluster, kind: Write(request), war
 
 | Action | Label | `warnings` (each only when it applies) |
 |---|---|---|
-| Scale | `Scale deployment api from 3 to 5` | `Scaling down from 3 to 1`; `HPA {name} manages replicas ({min}–{max}); it will override this` (HPA list loaded and targets the row); `Managed by Helm: the next upgrade replaces this change` (label `app.kubernetes.io/managed-by=Helm`) |
+| Scale | `Scale deployment api from 3 to 5` | `Scaling down from 3 to 1`; `HPA {name} manages replicas ({min}–{max}); it will override this` (HPA list loaded and targets the row); `needs 150Mi limits.memory per pod, team-quota has 40Mi left: the new pod will not start` (round 3, N21: the namespace ResourceQuotas the Issues feed already holds, `quota_check` over `scale_demand` of the pod template; `1 of the 3 new pods will not start`, `none of the 2 new pods will start`; not in a bulk Scale); `Managed by Helm: the next upgrade replaces this change` (label `app.kubernetes.io/managed-by=Helm`) |
 | Restart | `Restart rollout of statefulset kafka` | `Strategy OnDelete: pods restart only when deleted` |
 | Pause / Resume | `Pause rollout of deployment api` | — |
 | Roll back | `Roll back deployment api to rev 37 (2.13.4)` | — |

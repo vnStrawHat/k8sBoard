@@ -98,6 +98,7 @@ fn template_containers_read_main_images_and_ports() {
         containers,
         [
             TemplateContainer {
+                resources: Vec::new(),
                 name: "web".to_owned(),
                 image: "nginx:1.27".to_owned(),
                 ports: vec![
@@ -116,6 +117,7 @@ fn template_containers_read_main_images_and_ports() {
                 ],
             },
             TemplateContainer {
+                resources: Vec::new(),
                 name: "bare".to_owned(),
                 image: String::new(),
                 ports: Vec::new(),
