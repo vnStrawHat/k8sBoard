@@ -2079,7 +2079,7 @@ fn joined_secrets(
 }
 
 fn none_found_cell() -> KindCell {
-    KindCell::Toned(toned("none found", StatusTone::Done))
+    KindCell::Toned(toned("none", StatusTone::Done))
 }
 
 #[test]
@@ -2092,7 +2092,7 @@ fn secret_used_by_absent_until_lists_ready() {
         rows.iter()
             .all(|row| row.cells[SECRET_USED_BY] == KindCell::Absent)
     );
-    // Ingresses not loaded: users show, but `none found` waits.
+    // Ingresses not loaded: users show, but `none` waits.
     let rows = joined_secrets(&secrets, Some(pods.clone()), None);
     assert_eq!(rows[0].cells[SECRET_USED_BY], KindCell::Absent);
     assert_eq!(

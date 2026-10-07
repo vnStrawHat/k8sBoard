@@ -648,11 +648,12 @@ fn join_config_maps(rows: &mut [KindRow], inputs: &JoinInputs) {
     }
 }
 
-/// What a Used by cell says when no user was found. It claims no more than the join checked: pods
-/// and ingresses, not CronJob templates, Gateway API, or Istio references.
-const NO_USER_FOUND: &str = "none found";
+/// What a Used by cell says when no user was found: it sits under the Used by header, so `none`
+/// reads as `Used by: none`. It claims no more than the join checked: pods and ingresses, not
+/// CronJob templates, Gateway API, or Istio references.
+const NO_USER_FOUND: &str = "none";
 
-/// The first owner, plus ` +{n}` for the others; `none found` for none.
+/// The first owner, plus ` +{n}` for the others; `none` for none.
 fn used_by_cell<'a>(mut users: impl Iterator<Item = &'a UsedBy>) -> KindCell {
     let Some(first) = users.next() else {
         return KindCell::Toned(StatusLabel {
@@ -760,7 +761,7 @@ pub(crate) fn secret_user_list(secret: &SecretSummary, users: &SecretUsers) -> V
     list
 }
 
-/// The Used by cells of the Secrets rows. Nothing shows until the pods have loaded. `none found`
+/// The Used by cells of the Secrets rows. Nothing shows until the pods have loaded. `none`
 /// also needs the ingresses: a secret an ingress names is in use.
 fn join_secrets(rows: &mut [KindRow], inputs: &JoinInputs) {
     let ingresses = inputs
@@ -784,7 +785,7 @@ fn join_secrets(rows: &mut [KindRow], inputs: &JoinInputs) {
     }
 }
 
-/// The first owner, plus ` +{n}`; `none found` for a secret nobody uses once every list that could
+/// The first owner, plus ` +{n}`; `none` for a secret nobody uses once every list that could
 /// name a user has loaded.
 fn secret_used_by_cell(
     secret: &SecretSummary,

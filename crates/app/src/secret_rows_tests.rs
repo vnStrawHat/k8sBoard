@@ -68,6 +68,25 @@ fn secret_row_cells_match_column_count() {
 }
 
 #[test]
+fn a_type_with_a_domain_is_cut_like_a_qualified_name() {
+    assert_eq!(
+        type_cell("bootstrap.kubernetes.io/token"),
+        KindCell::Qualified {
+            prefix: Some("bootstrap.kubernetes.io".into()),
+            text: "token".into()
+        }
+    );
+    assert_eq!(
+        type_cell("kubernetes.io/service-account-token"),
+        KindCell::Qualified {
+            prefix: Some("kubernetes.io".into()),
+            text: "service-account-token".into()
+        }
+    );
+    assert_eq!(type_cell("Opaque"), KindCell::Mono("Opaque".into()));
+}
+
+#[test]
 fn expires_cell_is_the_leaf_not_after_for_tls_only() {
     let opaque_row = secret_row(&opaque(&[]));
     assert_eq!(opaque_row.cells[3], KindCell::Absent);

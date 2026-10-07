@@ -17,6 +17,18 @@ pub(crate) const MASK: &str = "••••••••••";
 /// How many alternative names a certificate field lists before `+{n}`.
 const MAX_LISTED_ALT_NAMES: usize = 20;
 
+/// The Type cell: a type with a domain (`bootstrap.kubernetes.io/token`) is cut in the middle like
+/// a qualified name, so the part after the slash, which tells the types apart, stays visible.
+fn type_cell(secret_type: &str) -> KindCell {
+    match secret_type.rsplit_once('/') {
+        Some((domain, kind)) => KindCell::Qualified {
+            prefix: Some(domain.to_owned().into()),
+            text: kind.to_owned().into(),
+        },
+        None => KindCell::Mono(secret_type.to_owned().into()),
+    }
+}
+
 pub(crate) fn secret_row(secret: &SecretSummary) -> KindRow {
     let data = if secret.keys.is_empty() {
         DetailRow::Note("No data".into())
@@ -52,7 +64,7 @@ pub(crate) fn secret_row(secret: &SecretSummary) -> KindRow {
         created_at: secret.created_at,
         status: secret_status(secret),
         cells: vec![
-            KindCell::Mono(secret.secret_type.clone().into()),
+            type_cell(&secret.secret_type),
             KindCell::count(secret.keys.len()),
             // The pods and Ingresses join fills it once both lists have loaded.
             KindCell::Absent,
