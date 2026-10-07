@@ -504,9 +504,8 @@ pub(crate) struct DrawerNavigation {
 /// A left press in the drawer.
 pub(crate) type PressHandler = Rc<dyn Fn(&mut Window, &mut App)>;
 
-/// The Back button: the place it leads to, named.
+/// The Back button: an arrow whose tooltip names the place it leads to.
 pub(crate) struct BackTarget {
-    pub(crate) label: SharedString,
     pub(crate) tooltip: SharedString,
     pub(crate) on_click: ClickHandler,
 }
@@ -682,14 +681,13 @@ fn kind_label(kind_name: &str) -> String {
     kind_name.to_uppercase()
 }
 
-/// `← api`: the label is the name of the place Back leads to.
+/// `←`: the arrow alone; the tooltip names the place Back leads to.
 fn back_button(back: BackTarget) -> impl IntoElement {
     let on_click = back.on_click;
     Button::new("drawer-back")
         .ghost()
         .small()
         .icon(Icon::new(IconName::ArrowLeft))
-        .label(back.label)
         .tooltip(back.tooltip)
         .on_click(move |event, window, cx| on_click(event, window, cx))
 }

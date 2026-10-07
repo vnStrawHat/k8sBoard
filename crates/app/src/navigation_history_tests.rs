@@ -157,25 +157,10 @@ fn row_position_is_none_without_a_visible_cursor_row() {
 }
 
 #[test]
-fn back_label_is_the_object_name() {
-    assert_eq!(place_on(service("api")).back_label(), "api");
-}
-
-#[test]
-fn back_label_cuts_a_long_name_to_twenty_characters() {
-    let label = place_on(service("a-very-long-service-name-indeed")).back_label();
-    assert_eq!(label, "a-very-long-service…");
-    assert_eq!(label.chars().count(), 20);
-    let exact = "a".repeat(20);
-    assert_eq!(place_on(service(&exact)).back_label(), exact);
-}
-
-#[test]
 fn a_place_without_a_selection_is_named_by_its_screen() {
-    assert_eq!(place(Screen::Overview).back_label(), "Overview");
     assert_eq!(
-        place(Screen::Kind(ResourceKind::Services)).back_label(),
-        "Services"
+        place(Screen::Kind(ResourceKind::Services)).back_tooltip(),
+        "Back to Services (Alt+Left)"
     );
     assert_eq!(
         place(Screen::Overview).back_tooltip(),
@@ -205,8 +190,8 @@ fn previous_is_the_place_back_would_restore() {
     let mut history = NavigationHistory::default();
     history.record(place_on(service("api")));
     assert_eq!(
-        history.previous().map(Place::back_label).as_deref(),
-        Some("api")
+        history.previous().map(Place::back_tooltip).as_deref(),
+        Some("Back to Service api (Alt+Left)")
     );
 }
 

@@ -88,3 +88,7 @@ The Back label is the "from X" hint; no breadcrumb trail (a trail of 50 would no
 | `Alt+Right` | `GoForward` | Workspace | Drawer · `Forward` |
 
 Text fields, the YAML / values editors and the terminal keep the keys. Add both to the terminal `NoAction` list. The coder must check which key context the kit `Input` and the editors expose and whether they bind `alt-left` / `alt-right` on Windows; where they do not, add explicit `NoAction` bindings for those contexts (the `FIELDS` list, `YAML_EDIT`, `VALUES_EDIT`), so Alt+Left in a focused field never navigates (AC 7). Both actions appear in the palette through `shortcut_rows` as `Back` and `Forward`.
+
+## As built (2026-10-07): Back is an icon
+
+The Back button shows only the arrow icon (`BackTarget` has no label; the 20-character cut is gone). The tooltip `Back to {Kind} {name} (Alt+Left)` says where it leads.

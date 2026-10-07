@@ -12,8 +12,6 @@ use crate::table_filter::TableFilter;
 use crate::table_selection::{ClusterObject, ResourceKey};
 /// The most places `back` (and `forward`) keep; the oldest is dropped.
 const HISTORY_CAP: usize = 50;
-/// The most characters of the previous name the Back button shows.
-const BACK_LABEL_MAX: usize = 20;
 
 /// What the shell showed when a link was followed. Scroll offset, sort, hidden columns and the
 /// Monitor range are not stored: the first is restored by revealing the row, the next two live in
@@ -82,20 +80,6 @@ impl NavigationHistory {
 }
 
 impl Place {
-    /// The Back button text: the object's name, cut to 20 characters, or the screen title for a
-    /// place without a selection.
-    pub(crate) fn back_label(&self) -> String {
-        let name = match &self.selection {
-            Some(object) => key_name(&object.key),
-            None => screen_title(self.screen),
-        };
-        if name.chars().count() <= BACK_LABEL_MAX {
-            return name.to_owned();
-        }
-        let kept: String = name.chars().take(BACK_LABEL_MAX - 1).collect();
-        format!("{kept}…")
-    }
-
     /// The Back button tooltip, such as `Back to Service api (Alt+Left)`.
     pub(crate) fn back_tooltip(&self) -> String {
         match &self.selection {

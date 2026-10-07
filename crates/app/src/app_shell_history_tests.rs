@@ -246,7 +246,7 @@ fn drawer_navigation(shell: &Entity<AppShell>, cx: &mut TestAppContext) -> Drawe
 }
 
 #[gpui_kit::test]
-fn the_back_button_names_the_place_a_link_left(cx: &mut TestAppContext) {
+fn the_back_button_tooltip_names_the_place_a_link_left(cx: &mut TestAppContext) {
     let shell = open_shell(cx);
     assert!(drawer_navigation(&shell, cx).back.is_none());
     show_pod_drawer(&shell, cx);
@@ -256,7 +256,6 @@ fn the_back_button_names_the_place_a_link_left(cx: &mut TestAppContext) {
         cx,
     );
     let back = drawer_navigation(&shell, cx).back.expect("a back target");
-    assert_eq!(back.label, "api-0");
     assert_eq!(back.tooltip, "Back to Pod api-0 (Alt+Left)");
     go_back(&shell, cx);
     assert!(drawer_navigation(&shell, cx).back.is_none());

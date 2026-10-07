@@ -96,7 +96,6 @@ impl AppShell {
     /// The drawer header's Back button and Previous / Next controls.
     pub(crate) fn drawer_navigation(&self, cx: &Context<Self>) -> DrawerNavigation {
         let back = self.navigation.previous().map(|place| BackTarget {
-            label: place.back_label().into(),
             tooltip: place.back_tooltip().into(),
             on_click: Rc::new(cx.listener(|shell, _, _, cx| shell.go_back(cx))),
         });
