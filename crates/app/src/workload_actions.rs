@@ -163,7 +163,9 @@ pub(crate) fn workload_intent(
             button: "Re-run",
             risk: action_risk(action),
             operation: WriteOperation::RerunJob,
-            warnings: Vec::new(),
+            warnings: vec![
+                format!("Creates a new Job from {name}'s template; the old Job stays").into(),
+            ],
         },
         _ => return None,
     };

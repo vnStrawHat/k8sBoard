@@ -29,9 +29,9 @@ use crate::drawer::DrawerTab;
 use crate::keymap::{
     Attach, CopyName, Cordon, DebugContainer, Delete, Drain, EditHpaRange, EditLabels,
     EditMetadata, EditTaints, EditValues, EditYaml, EvictPod, ExpandClaim, OpenShell, PauseRollout,
-    PortForward, RenewCertificate, ReplaceCertificate, RerunJob, RestartPod, RestartRollout,
-    RollBack, Scale, SetDefaultStorageClass, SetImage, SuspendCronJob, TriggerCronJob, ViewLogs,
-    ViewYaml,
+    PortForward, RenewCertificate, ReplaceCertificate, RerunJob, RerunJobWithChanges, RestartPod,
+    RestartRollout, RollBack, Scale, SetDefaultStorageClass, SetImage, SuspendCronJob,
+    TriggerCronJob, ViewLogs, ViewYaml,
 };
 use crate::kind_access::{KindAccess, KindAccessMap};
 use crate::kind_join::last_job_owner;
@@ -104,6 +104,8 @@ pub(crate) enum ResourceAction {
     SuspendCronJob,
     TriggerCronJob,
     RerunJob,
+    /// Opens a copy of a Job in the New view, to change before it is created.
+    RerunJobWithChanges,
     /// Sets the min and max replicas of an HPA (spec 0032b).
     EditHpaRange,
     /// Grows the storage request of a PVC; it cannot shrink again (spec 0032b).
@@ -151,6 +153,7 @@ pub(crate) enum RowAction {
     SuspendCronJob,
     TriggerCronJob,
     RerunJob,
+    RerunJobWithChanges,
     EditHpaRange,
     ExpandClaim,
     SetDefaultStorageClass,
@@ -327,6 +330,11 @@ impl ResourceAction {
                 checks: vec![AccessCheck::CreateJobs],
                 is_shipped: true,
             },
+            // The created Job goes through `CreateObject`, whose check is the lazy one of the kind.
+            Self::RerunJobWithChanges => ActionGate::Mutating {
+                checks: vec![AccessCheck::Create(ObjectKind::Job)],
+                is_shipped: true,
+            },
             Self::Scale(kind) => match scale_check(kind) {
                 Some(check) => ActionGate::Mutating {
                     checks: vec![check],
@@ -428,6 +436,7 @@ impl ResourceAction {
             Self::SuspendCronJob => RowAction::SuspendCronJob,
             Self::TriggerCronJob => RowAction::TriggerCronJob,
             Self::RerunJob => RowAction::RerunJob,
+            Self::RerunJobWithChanges => RowAction::RerunJobWithChanges,
             Self::EditHpaRange => RowAction::EditHpaRange,
             Self::ExpandClaim => RowAction::ExpandClaim,
             Self::SetDefaultStorageClass => RowAction::SetDefaultStorageClass,
@@ -469,6 +478,7 @@ impl RowAction {
             Self::SuspendCronJob => Box::new(SuspendCronJob),
             Self::TriggerCronJob => Box::new(TriggerCronJob),
             Self::RerunJob => Box::new(RerunJob),
+            Self::RerunJobWithChanges => Box::new(RerunJobWithChanges),
             Self::EditHpaRange => Box::new(EditHpaRange),
             Self::ExpandClaim => Box::new(ExpandClaim),
             Self::SetDefaultStorageClass => Box::new(SetDefaultStorageClass),
@@ -502,6 +512,7 @@ impl RowAction {
             Self::SuspendCronJob => IconName::Timer,
             Self::TriggerCronJob => IconName::Play,
             Self::RerunJob => IconName::Repeat,
+            Self::RerunJobWithChanges => IconName::FilePenLine,
             Self::ExpandClaim => IconName::HardDriveUpload,
             Self::SetDefaultStorageClass => IconName::Star,
         }
@@ -560,6 +571,7 @@ pub(crate) fn action_risk(action: ResourceAction) -> ActionRisk {
         | ResourceAction::SuspendCronJob
         | ResourceAction::TriggerCronJob
         | ResourceAction::RerunJob
+        | ResourceAction::RerunJobWithChanges
         | ResourceAction::EditHpaRange
         | ResourceAction::ExpandClaim
         | ResourceAction::SetDefaultStorageClass
@@ -599,6 +611,7 @@ pub(crate) fn action_label(action: ResourceAction) -> &'static str {
         ResourceAction::SuspendCronJob => "Suspend",
         ResourceAction::TriggerCronJob => "Trigger now",
         ResourceAction::RerunJob => "Re-run job",
+        ResourceAction::RerunJobWithChanges => "Re-run with changes",
         ResourceAction::EditHpaRange => "Edit min / max",
         ResourceAction::ExpandClaim => "Expand",
         ResourceAction::SetDefaultStorageClass => "Set as default",
@@ -614,6 +627,7 @@ fn create_label(kind: ObjectKind) -> &'static str {
         ObjectKind::ResourceQuota => "New ResourceQuota",
         ObjectKind::PodDisruptionBudget => "New PodDisruptionBudget",
         ObjectKind::RoleBinding => "New RoleBinding",
+        ObjectKind::Job => "New Job",
         _ => "New object",
     }
 }
@@ -727,6 +741,7 @@ pub(crate) fn subject_action(row: RowAction, subject: &ResourceKey) -> Option<Re
         | RowAction::SuspendCronJob
         | RowAction::TriggerCronJob
         | RowAction::RerunJob
+        | RowAction::RerunJobWithChanges
         | RowAction::EditHpaRange
         | RowAction::ExpandClaim
         | RowAction::SetDefaultStorageClass

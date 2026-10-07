@@ -274,7 +274,7 @@ pub(crate) struct PaletteInput<'a> {
 }
 
 /// The row actions in the order of the shortcut sheet.
-const ROW_ACTIONS: [RowAction; 29] = [
+const ROW_ACTIONS: [RowAction; 30] = [
     RowAction::ViewLogs,
     RowAction::ViewYaml,
     RowAction::CopyName,
@@ -300,6 +300,7 @@ const ROW_ACTIONS: [RowAction; 29] = [
     RowAction::SuspendCronJob,
     RowAction::TriggerCronJob,
     RowAction::RerunJob,
+    RowAction::RerunJobWithChanges,
     RowAction::EditHpaRange,
     RowAction::ExpandClaim,
     RowAction::SetDefaultStorageClass,
@@ -570,7 +571,7 @@ fn score_sum(scores: &[Option<u32>], eligible: Option<&[bool]>) -> Option<u32> {
 
 /// The actions a pair can carry, for `labelled_tokens`: the labels of `subject_action` that any
 /// subject can offer, and the two that an object state flips (`state_label`).
-const PAIR_LABEL_ACTIONS: [ResourceAction; 27] = [
+const PAIR_LABEL_ACTIONS: [ResourceAction; 28] = [
     ResourceAction::ViewLogs,
     ResourceAction::OpenShell,
     ResourceAction::PortForward,
@@ -594,6 +595,7 @@ const PAIR_LABEL_ACTIONS: [ResourceAction; 27] = [
     ResourceAction::SuspendCronJob,
     ResourceAction::TriggerCronJob,
     ResourceAction::RerunJob,
+    ResourceAction::RerunJobWithChanges,
     ResourceAction::EditHpaRange,
     ResourceAction::ExpandClaim,
     ResourceAction::SetDefaultStorageClass,

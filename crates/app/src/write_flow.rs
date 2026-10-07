@@ -738,15 +738,20 @@ fn rollout_subject(intent: &WriteIntent, is_watched: bool) -> Option<ClusterObje
 /// The Job a Trigger now or Re-run created, for the notice's View button. The row may not have
 /// reached the watch yet; the reveal waits for it.
 fn created_job_subject(intent: &WriteIntent, created: Option<&str>) -> Option<ClusterObject> {
-    if !matches!(
-        intent.action,
-        ResourceAction::TriggerCronJob | ResourceAction::RerunJob
-    ) {
-        return None;
-    }
     let namespace = intent.request.target().namespace();
-    let key = ResourceKey::of_object("Job", namespace, created?)?;
+    let name = created_job_name(intent, created)?;
+    let key = ResourceKey::of_object("Job", namespace, name)?;
     Some(ClusterObject::new(intent.cluster.clone(), key))
+}
+
+/// The Job a Trigger now, a Re-run, or a New Job (Re-run with changes) created: the name the
+/// server made up, or the one the text gave.
+fn created_job_name<'a>(intent: &'a WriteIntent, created: Option<&'a str>) -> Option<&'a str> {
+    match intent.action {
+        ResourceAction::TriggerCronJob | ResourceAction::RerunJob => created,
+        ResourceAction::CreateObject(ObjectKind::Job) => Some(intent.request.target().name()),
+        _ => None,
+    }
 }
 
 /// `Created ConfigMap payments/new-config` (a Namespace has no `payments/`).
@@ -1515,8 +1520,13 @@ fn follow_started_run(
     };
     let cluster = intent.cluster.clone();
     match (intent.action, intent.request.operation()) {
-        (ResourceAction::TriggerCronJob | ResourceAction::RerunJob, _) => {
-            let Some(job) = created.map(str::to_owned) else {
+        (
+            ResourceAction::TriggerCronJob
+            | ResourceAction::RerunJob
+            | ResourceAction::CreateObject(ObjectKind::Job),
+            _,
+        ) => {
+            let Some(job) = created_job_name(intent, created).map(str::to_owned) else {
                 return;
             };
             let _ = shell.update(cx, |shell, cx| {

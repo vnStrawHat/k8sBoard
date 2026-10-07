@@ -31,3 +31,7 @@ The app's own debug log (`RUST_LOG=kube_client::client::builder=debug,k8sboard::
 - The real `Create…` click path and the dialog's Retry button over a live window: the tests call `apply` and `press_confirm`.
 - A commit transport failure end to end (the view's text is tested through `commit_failed`; the cluster crate tests the `OutcomeUnknown` mapping).
 - The ui-verifier was not run.
+
+## Round 3 additions
+
+- **Job is creatable (UX round 3, O15):** `Re-run with changes…` on a Job row reads the Job (`ClusterConnection::job_draft_text`) and opens the New view on a copy of its template: no owner, selector, controller label, or status, not suspended, named `{cronjob}-manual-{unix seconds}` (the Job's own name when no CronJob owns it), env literals kept because the text is created as written. A Job has no `New` button, only this entry; the confirm lists the name, the namespace, and each container image. The created Job gets the notice's View button and is followed to its end like a Trigger now (0032 as-built).

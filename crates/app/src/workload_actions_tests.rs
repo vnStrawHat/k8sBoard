@@ -511,6 +511,10 @@ fn trigger_and_rerun_create_a_job() {
     assert_eq!(rerun.label, "Re-run job etl-nightly-29312400");
     assert_eq!(rerun.button, "Re-run");
     assert_eq!(rerun.request.operation(), &WriteOperation::RerunJob);
+    assert_eq!(
+        warnings(&rerun),
+        ["Creates a new Job from etl-nightly-29312400's template; the old Job stays"]
+    );
 }
 
 #[test]

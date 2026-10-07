@@ -38,6 +38,7 @@ impl ObjectKind {
                 | Self::PodDisruptionBudget
                 | Self::RoleBinding
                 | Self::Secret
+                | Self::Job
         )
     }
 }
@@ -231,6 +232,7 @@ impl ObjectDraft {
             Some(ObjectKind::Secret) => fields.extend(self.secret_fields()),
             Some(ObjectKind::ResourceQuota) => fields.extend(self.quota_fields()),
             Some(ObjectKind::PodDisruptionBudget) => fields.extend(self.budget_fields()),
+            Some(ObjectKind::Job) => fields.extend(self.job_fields()),
             _ => {}
         }
         fields
@@ -325,6 +327,24 @@ impl ObjectDraft {
                 Cow::Owned(format!("spec.hard[{resource}]")),
                 Some(scalar_text(quantity)),
             )
+        });
+        capped(listed.collect())
+    }
+
+    /// The image of each container: what a Job re-run with changes runs.
+    fn job_fields(&self) -> Vec<ChangedField> {
+        let containers = self
+            .body
+            .pointer("/spec/template/spec/containers")
+            .and_then(Value::as_array)
+            .map_or(&[][..], Vec::as_slice);
+        let listed = containers.iter().filter_map(|container| {
+            let name = text_at(container, "/name")?;
+            let image = text_at(container, "/image")?;
+            Some(field(
+                Cow::Owned(format!("containers[{name}].image")),
+                Some(image.to_owned()),
+            ))
         });
         capped(listed.collect())
     }

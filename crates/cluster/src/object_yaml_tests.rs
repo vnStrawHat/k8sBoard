@@ -1223,3 +1223,61 @@ async fn pod_template_yaml_gets_the_replica_set() {
         "/apis/apps/v1/namespaces/shop/replicasets/api-7d9f8c"
     );
 }
+
+#[tokio::test]
+async fn one_get_makes_the_text_of_a_new_job() {
+    use crate::fake_api::FakeApi;
+    use crate::object_write::WritePolicy;
+
+    let body = serde_json::json!({
+        "apiVersion": "batch/v1", "kind": "Job",
+        "metadata": {
+            "name": "report-failed-29",
+            "namespace": "lab-batch",
+            "labels": { "app": "report", "controller-uid": "c" },
+            "ownerReferences": [{ "kind": "CronJob", "name": "report-failed", "uid": "u" }],
+            "uid": "job-uid", "resourceVersion": "9",
+        },
+        "spec": {
+            "selector": { "matchLabels": { "controller-uid": "c" } },
+            "template": {
+                "metadata": { "labels": { "app": "report", "controller-uid": "c" } },
+                "spec": {
+                    "containers": [{ "name": "report", "image": "busybox", "env": [{ "name": "MODE", "value": "visible-literal" }] }],
+                    "restartPolicy": "Never",
+                },
+            },
+        },
+        "status": { "failed": 1 },
+    })
+    .to_string();
+    let (connection, api) = FakeApi::connection(WritePolicy::Blocked, move |_| (200, body.clone()));
+    let now = jiff::Timestamp::from_second(1_790_000_000).expect("a timestamp");
+    let text = connection
+        .job_draft_text("lab-batch", "report-failed-29", now)
+        .await
+        .expect("a draft");
+    assert!(
+        text.contains("name: report-failed-manual-1790000000"),
+        "{text}"
+    );
+    // The text is created as written, so a literal stays readable and server fields are gone.
+    assert!(text.contains("visible-literal"), "{text}");
+    for server_field in [
+        "uid: job-uid",
+        "resourceVersion",
+        "status:",
+        "ownerReferences",
+        "selector",
+    ] {
+        assert!(!text.contains(server_field), "{server_field} in {text}");
+    }
+    assert!(!text.contains("controller-uid"), "{text}");
+    let requests = api.requests();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].method, "GET");
+    assert_eq!(
+        requests[0].path,
+        "/apis/batch/v1/namespaces/lab-batch/jobs/report-failed-29"
+    );
+}

@@ -23,6 +23,7 @@ use gpui_kit::{
 use super::write_flow::{CheckedWriteError, CommitMode, WriteIntent, WriteStep, notify};
 use super::{AppShell, Screen};
 use crate::cluster_registry::ClusterRef;
+use crate::cluster_runtime::ClusterRuntime;
 use crate::cluster_session::AccessState;
 use crate::edit_quota::QuotaInput;
 use crate::fresh_enter::FreshEnter;
@@ -36,7 +37,7 @@ use crate::resource_actions::{
 };
 use crate::resource_kind::ResourceKind;
 use crate::revision_history::HistoryInputs;
-use crate::table_selection::ClusterObject;
+use crate::table_selection::{ClusterObject, ResourceKey};
 use crate::values_edit::ValuesEditView;
 use crate::yaml_edit::{EditFailure, EditSubject, YamlEditView, edit_failure_of};
 use crate::yaml_view::object_ref;
@@ -304,6 +305,19 @@ impl AppShell {
             );
             return;
         };
+        self.show_create_view(cluster, name, kind, template, window, cx);
+    }
+
+    /// Opens the New view of `kind` on `template` (the edit slot must be free).
+    fn show_create_view(
+        &mut self,
+        cluster: ClusterRef,
+        name: SharedString,
+        kind: ObjectKind,
+        template: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.close_value_popover(cx);
         let shell = cx.weak_entity();
         let view =
@@ -311,6 +325,86 @@ impl AppShell {
         view.update(cx, |view, cx| view.focus_editor(window, cx));
         self.edit = Some(OpenEdit::Create(view));
         cx.notify();
+    }
+
+    /// Re-run with changes… on the cursor Job: reads the Job and opens the New view on a copy of
+    /// its template, named for a new run, so the engineer edits what the old run did wrong and the
+    /// old Job stays. The key, the menu item, and the palette end here, after the gate said yes.
+    pub(crate) fn open_rerun_with_changes(
+        &mut self,
+        subject: &ClusterObject,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let label = action_label(ResourceAction::RerunJobWithChanges);
+        if self.edit.is_some() {
+            return;
+        }
+        let ResourceKey::Kind {
+            namespace: Some(namespace),
+            name: job,
+            ..
+        } = &subject.key
+        else {
+            notify(
+                window,
+                cx,
+                unavailable_text(label, "this object cannot be re-run"),
+            );
+            return;
+        };
+        let cluster_name = {
+            let Some(guard) = self.guard_for(&subject.cluster, cx) else {
+                notify(
+                    window,
+                    cx,
+                    unavailable_text(label, "the cluster is not open"),
+                );
+                return;
+            };
+            if let ActionAvailability::Disabled { reason } =
+                action_availability(ResourceAction::RerunJobWithChanges, &guard)
+            {
+                notify(window, cx, unavailable_text(label, &reason));
+                return;
+            }
+            SharedString::from(guard.display_name().to_owned())
+        };
+        let Some(connection) = self.connection_of(&subject.cluster, cx) else {
+            return;
+        };
+        let (cluster, namespace, job) = (subject.cluster.clone(), namespace.clone(), job.clone());
+        let runtime = cx.global::<ClusterRuntime>().clone();
+        let reading = runtime.spawn({
+            let (namespace, job) = (namespace.clone(), job.clone());
+            async move {
+                connection
+                    .job_draft_text(&namespace, &job, jiff::Timestamp::now())
+                    .await
+            }
+        });
+        cx.spawn_in(window, async move |shell, cx| {
+            let read = reading.await;
+            let _ = shell.update_in(cx, |shell, window, cx| match read {
+                Ok(Ok(text)) if shell.edit.is_none() => {
+                    shell.show_create_view(
+                        cluster,
+                        cluster_name,
+                        ObjectKind::Job,
+                        text,
+                        window,
+                        cx,
+                    );
+                }
+                Ok(Ok(_)) => {}
+                Ok(Err(error)) => {
+                    let reason = format!("could not read job {job}: {error}");
+                    notify(window, cx, unavailable_text(label, &reason));
+                }
+                Err(_) => {}
+            });
+        })
+        .detach();
     }
 
     /// The connection a command of the open edit reads or writes over.

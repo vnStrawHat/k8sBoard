@@ -395,7 +395,10 @@ static JOBS: KindSpec = KindSpec {
         IMAGE_COLUMN,
         AGE_COLUMN,
     ],
-    read_only_actions: &[KindAction::keyed("Re-run job", ResourceAction::RerunJob)],
+    read_only_actions: &[
+        KindAction::keyed("Re-run job", ResourceAction::RerunJob),
+        KindAction::keyed("Re-run with changes…", ResourceAction::RerunJobWithChanges),
+    ],
     delete_label: "Delete job…",
     has_port_forward: false,
 };

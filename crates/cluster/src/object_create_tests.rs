@@ -22,7 +22,7 @@ fn error_of(kind: ObjectKind, text: &str) -> DraftError {
 }
 
 #[test]
-fn only_six_kinds_are_creatable() {
+fn only_these_kinds_are_creatable() {
     let creatable: Vec<_> = ObjectKind::ALL
         .into_iter()
         .filter(|kind| kind.is_creatable())
@@ -31,6 +31,7 @@ fn only_six_kinds_are_creatable() {
         creatable,
         [
             ObjectKind::Namespace,
+            ObjectKind::Job,
             ObjectKind::ConfigMap,
             ObjectKind::ResourceQuota,
             ObjectKind::PodDisruptionBudget,
@@ -38,6 +39,57 @@ fn only_six_kinds_are_creatable() {
             ObjectKind::RoleBinding,
         ]
     );
+}
+
+const JOB: &str = "apiVersion: batch/v1
+kind: Job
+metadata:
+  name: report-failed-manual-1
+  namespace: lab-batch
+spec:
+  template:
+    spec:
+      containers:
+        - name: report
+          image: busybox:1.36
+      restartPolicy: Never
+";
+
+#[test]
+fn a_job_draft_lists_the_image_of_each_container() {
+    let draft = draft(ObjectKind::Job, JOB);
+    assert_eq!(draft.target().name(), "report-failed-manual-1");
+    let fields: Vec<(String, Option<String>)> = draft
+        .changed_fields()
+        .into_iter()
+        .map(|field| (field.path.into_owned(), field.value))
+        .collect();
+    assert_eq!(
+        fields,
+        [
+            (
+                "metadata.name".to_owned(),
+                Some("report-failed-manual-1".to_owned())
+            ),
+            (
+                "metadata.namespace".to_owned(),
+                Some("lab-batch".to_owned())
+            ),
+            (
+                "containers[report].image".to_owned(),
+                Some("busybox:1.36".to_owned())
+            ),
+        ]
+    );
+}
+
+#[test]
+fn a_job_draft_needs_a_name_not_a_generate_name() {
+    let text = JOB.replace("name: report-failed-manual-1", "generateName: report-");
+    assert!(matches!(
+        error_of(ObjectKind::Job, &text),
+        DraftError::GenerateName
+    ));
 }
 
 #[test]

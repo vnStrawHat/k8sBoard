@@ -140,6 +140,39 @@ fn rerun_is_a_standalone_unsuspended_copy() {
     assert!(body["spec"].get("manualSelector").is_none());
 }
 
+fn owned_job() -> Value {
+    let mut owned = job();
+    owned["metadata"]["name"] = json!("report-failed-29000000");
+    owned["metadata"]["ownerReferences"] =
+        json!([{"kind": "CronJob", "name": "report-failed", "uid": "x", "controller": true}]);
+    owned
+}
+
+#[test]
+fn a_draft_is_named_after_the_cron_job_and_the_time() {
+    let now = jiff::Timestamp::from_second(1_790_000_000).expect("a timestamp");
+    let body = rerun_job_draft(&owned_job(), "shop", now).expect("a draft");
+    assert_eq!(body["metadata"]["name"], "report-failed-manual-1790000000");
+    assert!(body["metadata"].get("generateName").is_none());
+    assert_eq!(body["metadata"]["namespace"], "shop");
+    assert_eq!(body["spec"]["suspend"], false);
+    assert!(body["spec"].get("selector").is_none());
+}
+
+#[test]
+fn a_draft_of_a_loose_job_is_named_after_the_job_and_stays_within_63_characters() {
+    let now = jiff::Timestamp::from_second(1_790_000_000).expect("a timestamp");
+    let mut loose = job();
+    loose["metadata"]["name"] = json!("etl-1");
+    let body = rerun_job_draft(&loose, "shop", now).expect("a draft");
+    assert_eq!(body["metadata"]["name"], "etl-1-manual-1790000000");
+    loose["metadata"]["name"] = json!("x".repeat(63));
+    let body = rerun_job_draft(&loose, "shop", now).expect("a draft");
+    let name = body["metadata"]["name"].as_str().expect("a name");
+    assert_eq!(name.len(), 63);
+    assert!(name.ends_with("-manual-1790000000"));
+}
+
 #[test]
 fn rerun_needs_a_spec_and_a_namespace() {
     assert!(rerun_job_body(&json!({"metadata": {}}), Some("shop"), "j").is_none());

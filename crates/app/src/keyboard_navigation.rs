@@ -23,11 +23,11 @@ use crate::keymap::{
     EditMetadata, EditTaints, EditValues, EditYaml, EvictPod, ExpandClaim, ExtendTickDown,
     ExtendTickUp, GoBack, GoForward, LeaveInput, NextContainer, NextDockTab, OpenDrawer, OpenShell,
     PauseRollout, PortForward, PreviousContainer, PreviousDockTab, RenewCertificate,
-    ReplaceCertificate, RerunJob, RestartPod, RestartRollout, RollBack, Scale, SelectDrawerTab1,
-    SelectDrawerTab2, SelectDrawerTab3, SelectDrawerTab4, SelectDrawerTab5, SelectFirstRow,
-    SelectLastRow, SelectNextPage, SelectNextRow, SelectPreviousPage, SelectPreviousRow,
-    SetDefaultStorageClass, SetImage, SuspendCronJob, ToggleAllTicks, ToggleDock, ToggleDockZoom,
-    ToggleReadOnly, ToggleRowTick, TriggerCronJob, ViewLogs, ViewYaml,
+    ReplaceCertificate, RerunJob, RerunJobWithChanges, RestartPod, RestartRollout, RollBack, Scale,
+    SelectDrawerTab1, SelectDrawerTab2, SelectDrawerTab3, SelectDrawerTab4, SelectDrawerTab5,
+    SelectFirstRow, SelectLastRow, SelectNextPage, SelectNextRow, SelectPreviousPage,
+    SelectPreviousRow, SetDefaultStorageClass, SetImage, SuspendCronJob, ToggleAllTicks,
+    ToggleDock, ToggleDockZoom, ToggleReadOnly, ToggleRowTick, TriggerCronJob, ViewLogs, ViewYaml,
 };
 use crate::kind_drawer::REVISIONS_TITLE;
 use crate::live_sections::loaded_replica_sets;
@@ -254,6 +254,7 @@ pub(super) fn register_key_handlers(root: Div, cx: &Context<AppShell>) -> Div {
     let root = on_row_key::<SuspendCronJob>(root, RowAction::SuspendCronJob, cx);
     let root = on_row_key::<TriggerCronJob>(root, RowAction::TriggerCronJob, cx);
     let root = on_row_key::<RerunJob>(root, RowAction::RerunJob, cx);
+    let root = on_row_key::<RerunJobWithChanges>(root, RowAction::RerunJobWithChanges, cx);
     let root = on_row_key::<EditHpaRange>(root, RowAction::EditHpaRange, cx);
     let root = on_row_key::<ExpandClaim>(root, RowAction::ExpandClaim, cx);
     let root = on_row_key::<SetDefaultStorageClass>(root, RowAction::SetDefaultStorageClass, cx);
@@ -803,6 +804,9 @@ impl AppShell {
             ResourceAction::Scale(_) => self.open_scale_popover(&subject, window, cx),
             // One container of one workload: the ticked set plays no part.
             ResourceAction::SetImage(_) => self.open_image_popover(&subject, window, cx),
+            ResourceAction::RerunJobWithChanges => {
+                self.open_rerun_with_changes(&subject, window, cx);
+            }
             ResourceAction::EditHpaRange => self.open_hpa_range_popover(&subject, window, cx),
             ResourceAction::ExpandClaim => self.open_expand_popover(&subject, window, cx),
             ResourceAction::SetDefaultStorageClass => {

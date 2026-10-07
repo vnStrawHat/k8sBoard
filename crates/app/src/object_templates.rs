@@ -37,6 +37,23 @@ stringData:
         ObjectKind::RoleBinding => format!(
             "apiVersion: rbac.authorization.k8s.io/v1\nkind: RoleBinding\nmetadata:\n  name: new-binding\n  namespace: {namespace}\nroleRef:\n  apiGroup: rbac.authorization.k8s.io\n  kind: ClusterRole\n  name: view\nsubjects:\n  - kind: ServiceAccount\n    name: default\n    namespace: {namespace}\n"
         ),
+        ObjectKind::Job => format!(
+            "apiVersion: batch/v1
+kind: Job
+metadata:
+  name: new-job
+  namespace: {namespace}
+spec:
+  backoffLimit: 0
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: main
+          image: busybox
+          command: [\"true\"]
+"
+        ),
         _ => return None,
     };
     Some(text)
@@ -63,7 +80,7 @@ mod tests {
             .into_iter()
             .filter(|kind| kind.is_creatable())
             .collect();
-        assert_eq!(creatable.len(), 6);
+        assert_eq!(creatable.len(), 7);
         for kind in creatable {
             let text = template_text(kind, "payments").expect("a template");
             let draft = ObjectDraft::new(kind, &text);

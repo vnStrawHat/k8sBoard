@@ -72,6 +72,7 @@ gpui_kit::actions!(
         SuspendCronJob,
         TriggerCronJob,
         RerunJob,
+        RerunJobWithChanges,
         // Resource edits (0032b), also unbound: menus, the palette, and the selection bar start them.
         EditHpaRange,
         ExpandClaim,

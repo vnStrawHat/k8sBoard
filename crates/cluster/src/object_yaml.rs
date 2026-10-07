@@ -24,6 +24,7 @@ use crate::connection::{ClusterConnection, ClusterError};
 use crate::custom_resource_definition::{CustomResourceType, ResourceScope, custom_api_resource};
 use crate::edit_placeholders::HIDDEN;
 use crate::storage_class::mask_mount_option;
+use crate::workload_write_bodies::rerun_job_draft;
 
 const ACTION: &str = "reading the object YAML";
 const IDENTITY_ACTION: &str = "reading the object before deleting it";
@@ -369,6 +370,25 @@ impl ClusterConnection {
     ) -> Result<ObjectYaml, ClusterError> {
         let value = self.get_object(replica_set, ACTION).await?;
         pod_template_text(value, env).map_err(|message| self.unexpected_response(ACTION, message))
+    }
+
+    /// One GET of a Job, as the YAML of a new Job to edit and create (Re-run with changes): no
+    /// owner, selector, or controller label, not suspended, named `{cronjob}-manual-{unix seconds}`.
+    /// Env literals are kept: the text is created as written, so a hidden value would be sent as
+    /// the placeholder. Read-only; the text is user input from here on and is never logged.
+    pub async fn job_draft_text(
+        &self,
+        namespace: &str,
+        name: &str,
+        now: jiff::Timestamp,
+    ) -> Result<String, ClusterError> {
+        let job = ObjectRef::new(ObjectKind::Job, Some(namespace.to_owned()), name.to_owned())
+            .ok_or_else(|| self.unexpected_response(ACTION, CONVERSION_FAILURE))?;
+        let value = self.get_object(&job, ACTION).await?;
+        let mut draft = rerun_job_draft(&value, namespace, now)
+            .ok_or_else(|| self.unexpected_response(ACTION, CONVERSION_FAILURE))?;
+        draft.sort_all_objects();
+        yaml_text(&draft).map_err(|message| self.unexpected_response(ACTION, message))
     }
 
     /// One GET of `object` as raw JSON. The value can hold secrets: callers mask it before it

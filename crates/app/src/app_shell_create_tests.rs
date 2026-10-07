@@ -26,6 +26,9 @@ const NOT_FOUND: &str = r#"{"kind":"Status","apiVersion":"v1","status":"Failure"
 const TOO_MANY: &str = r#"{"kind":"Status","apiVersion":"v1","status":"Failure","message":"slow down","reason":"TooManyRequests","code":429}"#;
 const EXISTS: &str = r#"{"kind":"Status","apiVersion":"v1","status":"Failure","message":"configmaps \"new-config\" already exists","reason":"AlreadyExists","code":409}"#;
 
+/// A failed Job of the CronJob `report-failed`, as the API server returns it.
+const FAILED_JOB: &str = r#"{"apiVersion":"batch/v1","kind":"Job","metadata":{"name":"report-failed-29","namespace":"team-a","uid":"job-uid","resourceVersion":"7","labels":{"app":"report","controller-uid":"c"},"ownerReferences":[{"apiVersion":"batch/v1","kind":"CronJob","name":"report-failed","uid":"cron-uid","controller":true}]},"spec":{"selector":{"matchLabels":{"controller-uid":"c"}},"template":{"metadata":{"labels":{"app":"report","controller-uid":"c"}},"spec":{"containers":[{"name":"report","image":"busybox","command":["sh","-c","exit 3"]}],"restartPolicy":"Never"}}},"status":{"failed":1}}"#;
+
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
@@ -54,6 +57,9 @@ impl CreateServer {
     }
 
     fn answer(&self, request: &RecordedRequest) -> (u16, String) {
+        if request.method == "GET" && request.path.ends_with("/jobs/report-failed-29") {
+            return (200, FAILED_JOB.to_owned());
+        }
         if request.method != "POST" {
             return (404, NOT_FOUND.to_owned());
         }
@@ -702,4 +708,49 @@ fn cluster_switch_lists_unsaved_new_object(cx: &mut TestAppContext) {
         .read_with(cx, |shell, cx| shell.leaving_work(&leaving, cx));
     assert_eq!(work.unsaved_edit.as_deref(), Some("Unsaved new ConfigMap"));
     assert_eq!(work.lines(), ["Unsaved new ConfigMap".to_owned()]);
+}
+
+// ---- Re-run with changes ----
+
+#[gpui_kit::test]
+fn rerun_with_changes_opens_the_new_view_on_a_copy_of_the_job(cx: &mut TestAppContext) {
+    let t = create_test("create-rerun-with-changes", cx);
+    let mut failed = crate::workload_actions::workload_actions_tests::job("report-failed-29");
+    failed.status = cluster::JobStatus::Failed;
+    t.show(
+        ResourceKind::Jobs,
+        vec![crate::batch_rows::job_row(&failed)],
+        cx,
+    );
+    t.t.cursor_on(&t.t.stg, ResourceKind::Jobs, "report-failed-29", cx);
+    let action = crate::resource_actions::RowAction::RerunJobWithChanges.key_action();
+    t.t.fixture
+        .with_window(cx, |window, cx| window.dispatch_action(action, cx));
+    t.t.wait_for("the New view", cx, |cx| t.edit(cx).is_some());
+    let text = t.text(cx);
+    assert!(text.contains("kind: Job"), "{text}");
+    assert!(
+        text.contains("name: report-failed-manual-"),
+        "named for a new run of the CronJob: {text}"
+    );
+    assert!(text.contains("namespace: team-a"), "{text}");
+    for owned in [
+        "uid:",
+        "resourceVersion",
+        "ownerReferences",
+        "selector",
+        "controller-uid",
+        "status:",
+    ] {
+        assert!(!text.contains(owned), "{owned} in {text}");
+    }
+    // The old Job is only read: nothing is written until the user creates the copy.
+    assert!(t.posts().is_empty(), "{:?}", t.posts());
+    t.change("exit 3", "exit 0", cx);
+    t.check_then_confirm(cx);
+    t.t.confirm(cx);
+    t.t.wait_for("the create", cx, |_| t.posts().len() == 2);
+    let posts = t.posts();
+    assert_eq!(posts[1].path, "/apis/batch/v1/namespaces/team-a/jobs");
+    assert!(posts[1].body.contains("exit 0"), "{}", posts[1].body);
 }

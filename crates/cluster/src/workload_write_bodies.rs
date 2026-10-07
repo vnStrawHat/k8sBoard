@@ -172,6 +172,37 @@ pub(crate) fn rerun_job_body(job: &Value, namespace: Option<&str>, name: &str) -
     Some(json!({ "apiVersion": "batch/v1", "kind": "Job", "metadata": metadata, "spec": spec }))
 }
 
+/// How many characters of the base name a draft keeps: with `-manual-` and ten digits of unix
+/// time the name stays within the 63 characters of a Job name.
+const DRAFT_BASE_CHARS: usize = 45;
+
+/// A copy of a Job as the text of a new Job to edit: the body of `rerun_job_body` with a name of
+/// its own, `{cronjob}-manual-{unix seconds}` (the Job's own name when no CronJob owns it), where a
+/// create needs one instead of a `generateName`.
+pub(crate) fn rerun_job_draft(job: &Value, namespace: &str, now: jiff::Timestamp) -> Option<Value> {
+    let name = job.pointer("/metadata/name")?.as_str()?;
+    let owner = job
+        .pointer("/metadata/ownerReferences")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .find(|owner| owner.get("kind").and_then(Value::as_str) == Some("CronJob"))
+        .and_then(|owner| owner.get("name")?.as_str());
+    let base: String = owner
+        .unwrap_or(name)
+        .chars()
+        .take(DRAFT_BASE_CHARS)
+        .collect();
+    let mut body = rerun_job_body(job, Some(namespace), name)?;
+    let metadata = body.get_mut("metadata")?.as_object_mut()?;
+    metadata.remove("generateName");
+    metadata.insert(
+        "name".to_owned(),
+        Value::from(format!("{base}-manual-{}", now.as_second())),
+    );
+    Some(body)
+}
+
 fn remove_controller_labels(labels: &mut serde_json::Map<String, Value>) {
     for label in JOB_CONTROLLER_LABELS {
         labels.remove(label);
