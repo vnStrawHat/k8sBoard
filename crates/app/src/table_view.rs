@@ -10,6 +10,7 @@ use gpui_kit::App;
 use gpui_kit::SharedString;
 use gpui_kit::component::table::TableDelegate;
 
+use crate::age::format_age;
 use crate::app_shell::Screen;
 use crate::resource_kind::ResourceKind;
 use crate::settings::{SavedSort, TablePrefs};
@@ -35,6 +36,30 @@ pub(crate) trait TableRow {
     /// Whether the row passes the screen's own switch. A switch the screen does not have
     /// keeps every row.
     fn in_preset(&self, preset: &FilterPreset) -> bool;
+    /// The text of the cell for an export: what the table shows where it shows text, the full
+    /// value where it shows an abbreviation. A kind row overrides it for its richer cells.
+    fn export_text(&self, column: usize, now: jiff::Timestamp) -> String {
+        cell_text(self.value(column), now)
+    }
+}
+
+/// A cell's value as export text: a number as its digits, an age or a span as the table shows it.
+pub(crate) fn cell_text(value: CellValue<'_>, now: jiff::Timestamp) -> String {
+    match value {
+        CellValue::Text(text) => text.into_owned(),
+        CellValue::Qualified {
+            prefix: Some(prefix),
+            text,
+        } => format!("{prefix}/{text}"),
+        CellValue::Qualified { prefix: None, text } => text.to_owned(),
+        CellValue::Status { text, .. } => text.to_string(),
+        CellValue::Number(number) => number.to_string(),
+        CellValue::Age(at) => at.map_or_else(String::new, |at| format_age(Some(at), now)),
+        CellValue::Span { started, finished } => started.map_or_else(String::new, |started| {
+            format_age(Some(started), finished.unwrap_or(now))
+        }),
+        CellValue::Absent => String::new(),
+    }
 }
 
 /// One cell as the filter and the sort read it.
@@ -73,6 +98,9 @@ pub(crate) trait FilteredTable: TableDelegate {
     fn rebuild_view(&mut self, cx: &App) -> bool;
     /// Ticks or unticks rows of the view, reading the session items for their identity.
     fn check_rows(&mut self, change: RowCheck, cx: &App);
+    /// The table as CSV: the columns the view shows, for the rows it shows, in its order. `None`
+    /// for a kind table without a kind.
+    fn export_csv(&self, now: jiff::Timestamp, cx: &App) -> Option<String>;
 }
 
 /// Filter, sort, and hidden columns of one table, and the item indices they produce.

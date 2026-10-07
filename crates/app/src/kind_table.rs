@@ -15,6 +15,7 @@ use gpui_kit::{
 };
 
 use crate::age::format_age;
+use crate::app_shell::table_export::table_csv;
 use crate::app_shell::{AppShell, Screen};
 use crate::batch_rows::cron_state_at;
 use crate::cell_truncation::{NameScope, Sibling, mono_capacity, qualified_text, scoped_name_text};
@@ -41,7 +42,9 @@ use crate::table_layout::{
     ColumnPlan, TableLayout, centered_cell, clickable_row, header_cell, select_cell,
 };
 use crate::table_selection::{ClusterObject, ResourceKey};
-use crate::table_view::{CellValue, FilteredTable, RowCheck, TableRow, TableView, default_filter};
+use crate::table_view::{
+    CellValue, FilteredTable, RowCheck, TableRow, TableView, cell_text, default_filter,
+};
 
 /// The logical column of the Name column, for the kinds that show it.
 const NAME: usize = 0;
@@ -397,6 +400,23 @@ impl TableRow for KindTableRow<'_> {
         }
     }
 
+    /// The cells that show less than they hold, in full: the quantity's text, a `+n` owner count, a
+    /// label's whole term list, and the date of a schedule or an expiry.
+    fn export_text(&self, column: usize, now: jiff::Timestamp) -> String {
+        let cell = cell_index(self.name_column, column).and_then(|index| self.row.cells.get(index));
+        match cell {
+            Some(KindCell::Hinted { tooltip, .. }) => tooltip.to_string(),
+            Some(KindCell::Quantity { text, .. }) => text.to_string(),
+            Some(KindCell::MonoWithMore { text, more }) => format!("{text} +{more}"),
+            Some(KindCell::NextRun(schedule)) => schedule
+                .next_after(now)
+                .map_or_else(String::new, |next| next.timestamp().to_string()),
+            Some(KindCell::Expiry { not_after }) => not_after.to_string(),
+            Some(KindCell::Date { at, .. }) => at.to_string(),
+            _ => cell_text(self.value(column), now),
+        }
+    }
+
     fn in_preset(&self, preset: &FilterPreset) -> bool {
         match preset {
             // A scaled-to-zero set is `Done`.
@@ -438,6 +458,11 @@ impl FilteredTable for KindTableDelegate {
             view.apply_check(&rows, change);
             self.all_checked = view.all_checked(&rows);
         }
+    }
+
+    fn export_csv(&self, now: jiff::Timestamp, cx: &App) -> Option<String> {
+        let view = self.view()?;
+        Some(table_csv(view, &self.layout.plan, &self.rows(cx), now))
     }
 
     #[cfg_attr(

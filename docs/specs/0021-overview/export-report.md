@@ -54,3 +54,7 @@ pub(crate) fn overview_report(inputs: &ReportInputs) -> String;
   - Both clear on the next export.
 - **Same cluster.** The snapshot closure compares the session captured at the click with the current one; a context switch while the dialog is open fails with `the cluster changed while the dialog was open`.
 - **Cancel.** Cancel → `Idle`; nothing is written. Paths and file names are never traced (0019 decision 31).
+
+## Export table… (UX round 3, P9)
+
+Every list screen (Pods, Nodes, Issues, and each kind) has `Export table…` at the right of its header. It uses the save flow of the report (`file_export::start_export`): the dialog opens first on `{plural}-{context}-{time}Z.csv` in the stored export folder, and nothing is written before a path is chosen. The file holds what the table shows at that moment: the columns the Columns menu leaves on, the rows the filter keeps, in the sort order, as RFC 4180 CSV with a header line. A cell is its text (`namespace/name`, the status text, an age such as `4h`, a quantity as written, `api-0 +2` for an owner count), never the raw number the table sorts by; CPU and memory of a pod use the table's own format. A text that starts with `=`, `+`, `-`, or `@` and is no number gets a leading `'`, so a spreadsheet does not run a label or an event message as a formula. The result reads `Saved to {file}` beside the button until the screen changes; a failure is an alert under the header. A switch of screen or cluster while the dialog is open cancels the export.

@@ -167,6 +167,7 @@ impl AppShell {
             .children(self.render_filter_bar(toolkit, cx))
             .children(self.render_overview_stats(cx))
             .children(self.render_overview_export_error())
+            .children(self.render_table_export_error())
             .children(self.render_interruption_banner(cx))
             // The floating selection bar must not cover the last rows: pad the body by its height.
             .child(
@@ -489,7 +490,7 @@ impl AppShell {
             Screen::Overview => self.overview_header_buttons(cx),
             Screen::Topology => self.topology_header_buttons(cx),
             Screen::PortForwarding => self.port_forward_header_buttons(cx),
-            Screen::Issues => return self.render_issues_status(cx),
+            Screen::Issues => self.render_issues_status(cx).into_iter().collect(),
             Screen::Nodes => self.node_header_buttons(cx),
             Screen::Kind(ResourceKind::NetworkPolicies) => {
                 self.render_test_traffic(cx).into_iter().collect()
@@ -519,15 +520,23 @@ impl AppShell {
                     .flatten()
                     .collect()
             }
-            screen => {
-                let (kind, label) = new_button_of(screen)?;
-                if kind == ObjectKind::Secret {
-                    vec![self.render_new_secret_button(label, cx)]
-                } else {
-                    vec![self.render_new_button(kind, label, cx)]
-                }
-            }
+            screen => new_button_of(screen)
+                .map(|(kind, label)| {
+                    if kind == ObjectKind::Secret {
+                        self.render_new_secret_button(label, cx)
+                    } else {
+                        self.render_new_button(kind, label, cx)
+                    }
+                })
+                .into_iter()
+                .collect(),
         };
+        // The last button of every list screen; the Overview and Topology have their own export.
+        let export = self.export_table_buttons(cx);
+        let buttons: Vec<AnyElement> = buttons.into_iter().chain(export).collect();
+        if buttons.is_empty() {
+            return None;
+        }
         Some(
             h_flex()
                 .ml_auto()
@@ -556,6 +565,54 @@ impl AppShell {
                 .ml_auto()
                 .text_sm()
                 .child(coverage_status(board.coverage(), cx))
+                .into_any_element(),
+        )
+    }
+
+    /// `Export table…` of a list screen, after the text that says where the last export went. Off
+    /// without a live cluster and while an export runs.
+    fn export_table_buttons(&self, cx: &Context<Self>) -> Vec<AnyElement> {
+        if matches!(
+            self.screen,
+            Screen::Overview | Screen::Topology | Screen::PortForwarding
+        ) {
+            return Vec::new();
+        }
+        let saved = match &self.table_export {
+            ExportState::Saved { file_name } => Some(
+                div()
+                    .text_xs()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(format!("Saved to {file_name}"))
+                    .into_any_element(),
+            ),
+            _ => None,
+        };
+        let button = Button::new("export-table")
+            .ghost()
+            .small()
+            .icon(Icon::new(IconName::Download))
+            .label("Export table…")
+            .tooltip("Save the shown columns of the filtered rows as a CSV file…")
+            .disabled(!self.has_table_to_export(cx) || self.table_export.is_busy())
+            .on_click(cx.listener(|shell, _, _, cx| shell.export_table(cx)));
+        saved
+            .into_iter()
+            .chain([button.into_any_element()])
+            .collect()
+    }
+
+    /// Under the header of a list screen: why the last table export failed.
+    fn render_table_export_error(&self) -> Option<AnyElement> {
+        let ExportState::Failed { message } = &self.table_export else {
+            return None;
+        };
+        Some(
+            div()
+                .flex_shrink_0()
+                .px_4()
+                .py_1()
+                .child(Alert::error("table-export-error", message.clone()))
                 .into_any_element(),
         )
     }

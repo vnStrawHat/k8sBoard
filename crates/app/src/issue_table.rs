@@ -15,6 +15,7 @@ use gpui_kit::{
 };
 
 use crate::age::format_age;
+use crate::app_shell::table_export::table_csv;
 use crate::app_shell::{AppShell, Screen};
 use crate::cell_truncation::{middle_truncate, mono_capacity};
 use crate::dock::Dock;
@@ -189,6 +190,15 @@ impl FilteredTable for IssueTableDelegate {
 
     /// Issues have no checkbox: nothing acts on several of them.
     fn check_rows(&mut self, _: RowCheck, _: &App) {}
+
+    fn export_csv(&self, now: jiff::Timestamp, cx: &App) -> Option<String> {
+        Some(table_csv(
+            &self.view,
+            &self.layout.plan,
+            self.issues(cx),
+            now,
+        ))
+    }
 
     fn rebuild_view(&mut self, cx: &App) -> bool {
         let issues = self.issues(cx);

@@ -11,6 +11,7 @@ use gpui_kit::{
 };
 
 use crate::age::format_age;
+use crate::app_shell::table_export::table_csv;
 use crate::app_shell::{AppShell, Screen};
 use crate::cell_truncation::{NameScope, mono_capacity, plain_text, scoped_name_text};
 use crate::dock::Dock;
@@ -29,7 +30,9 @@ use crate::table_layout::{
     ColumnPlan, TableLayout, centered_cell, clickable_row, header_cell, select_cell,
 };
 use crate::table_selection::{ClusterObject, ResourceKey};
-use crate::table_view::{CellValue, FilteredTable, RowCheck, TableRow, TableView, default_filter};
+use crate::table_view::{
+    CellValue, FilteredTable, RowCheck, TableRow, TableView, cell_text, default_filter,
+};
 use crate::usage_format::Measure;
 
 const NAME: usize = 0;
@@ -282,6 +285,15 @@ impl TableRow for PodRow<'_> {
     fn in_preset(&self, _: &FilterPreset) -> bool {
         true
     }
+
+    /// The usage as the table writes it (`120m`, `64 MiB`), not as the raw number it sorts by.
+    fn export_text(&self, column: usize, now: jiff::Timestamp) -> String {
+        match (column, self.usage) {
+            (CPU, Some(usage)) => Measure::Cpu.format(usage.cpu.cores()),
+            (MEMORY, Some(usage)) => Measure::Bytes.format(usage.memory.bytes() as f64),
+            _ => cell_text(self.value(column), now),
+        }
+    }
 }
 
 impl FilteredTable for PodTableDelegate {
@@ -301,6 +313,15 @@ impl FilteredTable for PodTableDelegate {
         let rows = self.rows(cx);
         self.view.apply_check(&rows, change);
         self.all_checked = self.view.all_checked(&rows);
+    }
+
+    fn export_csv(&self, now: jiff::Timestamp, cx: &App) -> Option<String> {
+        Some(table_csv(
+            &self.view,
+            &self.layout.plan,
+            &self.rows(cx),
+            now,
+        ))
     }
 
     #[cfg_attr(

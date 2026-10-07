@@ -194,6 +194,8 @@ mod rollout_watch;
 pub(crate) mod secret_form;
 #[path = "shell_open.rs"]
 pub(crate) mod shell_open;
+#[path = "table_export.rs"]
+pub(crate) mod table_export;
 #[path = "values_edit_flow.rs"]
 mod values_edit_flow;
 #[path = "volume_edit_flow.rs"]
@@ -607,6 +609,10 @@ pub(crate) struct AppShell {
     #[cfg(feature = "screenshot")]
     launch_failure: Option<String>,
     requested: RequestedStart,
+    /// Export table…: the save dialog, the write, and what they ended in. The result is said under
+    /// the screen's header and forgotten when the screen changes.
+    table_export: ExportState,
+    _table_export: Option<Task<()>>,
     /// The `/` input. Its text belongs to the screen in `quick_filter_screen`.
     quick_filter: Entity<InputState>,
     /// The screen whose filter text the input shows; `None` makes the next render load it.
@@ -882,6 +888,8 @@ impl AppShell {
                 explicit_files,
                 namespace: options.namespace,
             },
+            table_export: ExportState::Idle,
+            _table_export: None,
             quick_filter,
             quick_filter_screen: None,
             focus_handle,
@@ -1742,6 +1750,11 @@ impl AppShell {
         }
         self.screen = screen;
         self.unticked_notice = None;
+        // An export of the table of the screen we left says nothing here; one still choosing a
+        // path is cancelled by its own check of the screen.
+        if !self.table_export.is_busy() {
+            self.table_export = ExportState::Idle;
+        }
         self.close_value_popover(cx);
         self.drawer.tab = DrawerTab::Overview;
         self.drawer.container_tab = ContainerTab::Info;

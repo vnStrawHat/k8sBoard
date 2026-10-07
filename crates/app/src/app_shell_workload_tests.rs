@@ -2039,3 +2039,59 @@ fn view_all_opens_the_events_with_the_changes_chip_on(cx: &mut TestAppContext) {
     // Changes are Normal events, which a Warnings-only list would not fetch.
     assert_eq!(filter, Some(cluster::EventFilter::All));
 }
+
+#[gpui_kit::test]
+fn export_table_writes_the_shown_columns_of_the_filtered_rows(cx: &mut TestAppContext) {
+    let t = workload_clusters("export-table", cx);
+    t.show_kind(
+        ResourceKind::Deployments,
+        deployments(false),
+        deployments(false),
+        cx,
+    );
+    let dir = std::env::temp_dir().join(format!("k8sboard-table-export-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("temp folder");
+    let target = dir.join("deployments.csv");
+    t.fixture
+        .shell
+        .update(cx, |shell, cx| shell.export_table(cx));
+    cx.run_until_parked();
+    // The dialog is open and nothing is written before it returns a path.
+    assert!(!target.exists());
+    let chosen = target.clone();
+    cx.simulate_new_path_selection(move |_| Some(chosen.clone()));
+    for _ in 0..200 {
+        cx.run_until_parked();
+        if target.exists() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    cx.run_until_parked();
+    let csv = std::fs::read_to_string(&target).expect("the table is written");
+    let lines: Vec<&str> = csv.lines().collect();
+    assert!(lines[0].starts_with("Name,"), "{csv}");
+    assert_eq!(lines.len(), 2, "{csv}");
+    assert!(lines[1].starts_with("team-a/api,"), "{csv}");
+    let state = t
+        .fixture
+        .shell
+        .read_with(cx, |shell, _| shell.table_export.clone());
+    assert_eq!(
+        state,
+        crate::file_export::ExportState::Saved {
+            file_name: "deployments.csv".to_owned()
+        }
+    );
+    // Another screen forgets the result.
+    t.fixture
+        .shell
+        .update(cx, |shell, cx| shell.show_screen(Screen::Pods, cx));
+    let state = t
+        .fixture
+        .shell
+        .read_with(cx, |shell, _| shell.table_export.clone());
+    assert_eq!(state, crate::file_export::ExportState::Idle);
+    let _ = std::fs::remove_dir_all(&dir);
+}
