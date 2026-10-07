@@ -51,8 +51,8 @@ use crate::settings::AppSettings;
 use crate::table_selection::{ClusterObject, ResourceKey};
 use crate::value_popover::ValuePopover;
 use crate::workload_actions::{
-    PAUSED_REASON, RevisionTarget, ScaleTarget, WorkloadScope, named_restart_intent,
-    pending_changes_note, roll_back_intent, row_block, scale_intent, state_label, workload_intent,
+    PAUSED_REASON, RevisionTarget, ScaleTarget, WorkloadScope, pending_changes_note,
+    roll_back_intent, row_block, scale_intent, state_label, workload_intent,
 };
 use crate::write_guard::{ActionRisk, ClusterGuard, DialogConfirm, WriteLock, confirm_step};
 
@@ -885,8 +885,8 @@ impl AppShell {
                 cluster_name: guard.display_name(),
             };
             let now = jiff::Timestamp::now();
-            match (live.row_of(&subject.key), action, &subject.key) {
-                (Some(row), _, _) => {
+            match live.row_of(&subject.key) {
+                Some(row) => {
                     if let Some(reason) = row_block(action, &row.object, None) {
                         let label = state_label(action, label, &row.object);
                         notify(window, cx, unavailable_text(label, &reason));
@@ -906,18 +906,7 @@ impl AppShell {
                     }
                     intent
                 }
-                // A Restart of a Used by consumer: the drawer of a ConfigMap or Secret is open, so
-                // no list holds the workload, and it is restarted by the name its pods gave.
-                (
-                    None,
-                    ResourceAction::RestartRollout(kind),
-                    ResourceKey::Kind {
-                        namespace: Some(namespace),
-                        name,
-                        ..
-                    },
-                ) => named_restart_intent(&scope, kind, namespace, name, now),
-                (None, _, _) => {
+                None => {
                     let text = unavailable_text(label, "the object is no longer listed");
                     notify(window, cx, text);
                     return;
@@ -1434,7 +1423,7 @@ pub(super) fn notify(window: &mut Window, cx: &mut App, text: String) {
 
 /// A success notice with a View button that reveals `subject` (recorded for Back). `toast` is the
 /// id the end of the rollout watch replaces the notice under.
-fn notify_with_view(
+pub(super) fn notify_with_view(
     window: &mut Window,
     cx: &mut App,
     text: String,

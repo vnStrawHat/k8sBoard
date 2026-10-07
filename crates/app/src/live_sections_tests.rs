@@ -1895,7 +1895,7 @@ fn only_an_env_reading_workload_gets_a_restart_button_that_follows_the_gate() {
     let env = workload_user(ResourceKind::Deployments, "api", &["env"]);
     assert!(matches!(
         restart_button(&env, Some(&open)),
-        RestartButton::Enabled(subject, ResourceAction::RestartRollout(ObjectKind::Deployment))
+        RestartButton::Enabled(subject, ObjectKind::Deployment)
             if subject.key == env.target.clone().expect("a target")
     ));
     // Mounted files update on their own; a bare pod or a CronJob is not restarted.

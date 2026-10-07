@@ -32,7 +32,7 @@ use crate::drawer::{
 use crate::helm_release_view::HelmReleaseView;
 use crate::helm_rows::VALUES_CHANGE_TITLE;
 use crate::kind_diagnosis::{
-    DiagnosisInputs, KindDiagnosis, kind_diagnosis, missing_storage_class,
+    DiagnosisInputs, KindDiagnosis, kind_diagnosis, missing_storage_class, rollout_progress,
 };
 use crate::kind_join::{matching_pods, service_health_of};
 use crate::kind_row::{DetailRow, KindCell, KindObject, KindRow, LiveContent};
@@ -444,20 +444,25 @@ fn row_diagnosis(
         _ => None,
     };
     let bindings = lists.as_ref().map(BindingIndex::build);
-    kind_diagnosis(
-        &row.object,
-        &DiagnosisInputs {
-            pods: pods.as_deref(),
-            nodes: live.nodes.items(),
-            service,
-            bindings: bindings.as_ref(),
-            tls_secrets: companion
-                .and_then(CompanionLists::tls_secrets)
-                .and_then(|list| list.ready_items()),
-            events: loaded_events(kind, row, live),
-            now,
-        },
-    )
+    let inputs = DiagnosisInputs {
+        pods: pods.as_deref(),
+        nodes: live.nodes.items(),
+        service,
+        bindings: bindings.as_ref(),
+        tls_secrets: companion
+            .and_then(CompanionLists::tls_secrets)
+            .and_then(|list| list.ready_items()),
+        events: loaded_events(kind, row, live),
+        now,
+    };
+    let problem = kind_diagnosis(&row.object, &inputs);
+    // A rollout that is only going on is no problem, so it shows when nothing else does.
+    match &row.object {
+        KindObject::Deployment(deployment) => {
+            problem.or_else(|| rollout_progress(deployment, &inputs))
+        }
+        _ => problem,
+    }
 }
 
 /// The box: tone, title, text, and under it a link to the pod the text is about (a failed Job's

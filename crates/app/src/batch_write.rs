@@ -22,7 +22,7 @@ use super::object_delete::{
 use super::rollout_watch::{notify_rollout, rollout_toast_id};
 use super::write_flow::{
     CheckedWriteError, CommitMode, Confirmed, DryRunState, WriteIntent, WriteStep, checked_write,
-    notify, notify_unavailable, notify_with, write_error_text,
+    notify, notify_unavailable, notify_with, notify_with_view, write_error_text,
 };
 use super::{AppShell, Screen};
 use crate::cluster_registry::ClusterRef;
@@ -773,7 +773,20 @@ impl AppShell {
                     None if !watched.is_empty() => {
                         let id = rollout_toast_id(&watched);
                         let text = format!("{notice} · watching…");
-                        notify_rollout(window, cx, text, is_success, id);
+                        // One workload: the toast offers View, like the toast of a single Restart.
+                        let subject = match (watched.as_slice(), is_success) {
+                            ([(namespace, name)], true) => {
+                                ResourceKey::of_object("Deployment", Some(namespace), name)
+                            }
+                            _ => None,
+                        };
+                        match subject {
+                            Some(key) => {
+                                let subject = ClusterObject::new(cluster.clone(), key);
+                                notify_with_view(window, cx, text, &shell, subject, Some(id));
+                            }
+                            None => notify_rollout(window, cx, text, is_success, id),
+                        }
                         let _ = shell.update(cx, |shell, cx| {
                             shell.watch_rollouts(cluster, watched, handle, cx);
                         });
@@ -855,6 +868,29 @@ impl AppShell {
         for intent in intents.into_iter().rev() {
             self.start_batch(intent, window, cx);
         }
+    }
+
+    /// The Restart button of one Used by row: the same batch of one workload as the toast's button, so
+    /// the confirm names the edited object, checks the lists for a paused or OnDelete workload, and
+    /// carries the Helm line. The edited object is the one the open drawer shows.
+    pub(crate) fn restart_used_by(
+        &mut self,
+        consumer: &ClusterObject,
+        kind: ObjectKind,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(source) = self
+            .drawer_subject()
+            .and_then(|subject| match &subject.key {
+                ResourceKey::Kind { name, .. } => Some(name.clone()),
+                ResourceKey::Pod { .. } | ResourceKey::Node { .. } => None,
+            })
+        else {
+            return;
+        };
+        let consumers = [(kind, consumer.key.clone())];
+        self.restart_consumers(&consumer.cluster, &consumers, &source, window, cx);
     }
 }
 

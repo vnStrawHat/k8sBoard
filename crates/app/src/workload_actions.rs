@@ -209,7 +209,7 @@ const NAMED_RESTART_WARNING: &str =
     "Its state is not loaded: a paused rollout or an OnDelete strategy is not checked";
 
 /// Restart rollout of the workload `name` of `namespace`, which no loaded list holds.
-pub(crate) fn named_restart_intent(
+fn named_restart_intent(
     scope: &WorkloadScope<'_>,
     kind: ObjectKind,
     namespace: &str,

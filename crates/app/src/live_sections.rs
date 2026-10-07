@@ -53,7 +53,7 @@ use crate::object_events::event_subject;
 use crate::permission_table::{CanDoChips, can_do_chips, permission_table};
 use crate::policy_rows::{fullest_item, quota_text};
 use crate::related_objects::{RelatedSubject, key_related_subject, related_subject};
-use crate::resource_actions::{ActionAvailability, ResourceAction, with_next_step};
+use crate::resource_actions::{ActionAvailability, with_next_step};
 use crate::resource_kind::ResourceKind;
 use crate::revision_diff::{RevisionDiffRequest, RevisionSide, diff_request};
 use crate::secret_rows::{MASK, MaskedKeyRow, certificate_rows, secret_data_rows};
@@ -1185,7 +1185,7 @@ enum RestartButton {
     /// a CronJob is not restarted.
     Absent,
     Disabled(SharedString),
-    Enabled(ClusterObject, ResourceAction),
+    Enabled(ClusterObject, ObjectKind),
 }
 
 /// A Deployment, StatefulSet, or DaemonSet that reads the value through env needs a restart to see
@@ -1200,7 +1200,7 @@ fn restart_button(used_by: &UsedBy, gate: Option<&DrawerWriteGate>) -> RestartBu
     match gate.restart.iter().find(|(kind, _)| *kind == object) {
         Some((_, ActionAvailability::Enabled)) => RestartButton::Enabled(
             ClusterObject::new(gate.subject.cluster.clone(), key.clone()),
-            ResourceAction::RestartRollout(object),
+            object,
         ),
         Some((_, ActionAvailability::Disabled { reason })) => {
             RestartButton::Disabled(reason.clone())
@@ -1249,14 +1249,14 @@ fn used_by_element(
                     .tooltip(with_next_step(&reason))
                     .into_any_element(),
             ),
-            RestartButton::Enabled(subject, action) => Some(
+            RestartButton::Enabled(subject, kind) => Some(
                 Button::new(("used-by-restart", ix))
                     .label("Restart")
                     .xsmall()
                     .ghost()
                     .tooltip("Restart rollout of this workload so it reads the new value")
                     .on_click(cx.listener(move |shell, _, window, cx| {
-                        shell.start_workload_action(action, &subject, window, cx);
+                        shell.restart_used_by(&subject, kind, window, cx);
                     }))
                     .into_any_element(),
             ),

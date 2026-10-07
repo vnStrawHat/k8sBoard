@@ -708,6 +708,59 @@ fn deployment_diagnosis(
     })
 }
 
+/// The box of a Deployment whose rollout is still going: the newest ReplicaSet does not hold every
+/// replica yet, or not all of them are available. While old pods keep the Deployment green, this is
+/// the only place the drawer says so. It is not a problem by itself, so the issue feeds and the
+/// topology checks never read it; the drawer asks for it when `kind_diagnosis` has nothing. A pod
+/// with a Bad cause among the new pods (created after the last write of the pod template) is named,
+/// so a broken release shows its reason before the progress deadline passes. Needs no pods list.
+pub(crate) fn rollout_progress(
+    deployment: &DeploymentSummary,
+    inputs: &DiagnosisInputs,
+) -> Option<KindDiagnosis> {
+    if deployment.desired == 0 || deployment.is_paused {
+        return None;
+    }
+    let is_complete =
+        deployment.up_to_date >= deployment.desired && deployment.available >= deployment.desired;
+    if is_complete {
+        return None;
+    }
+    let mut text = format!(
+        "{} of {} pods run the new template; {} of {} are available.",
+        deployment.up_to_date, deployment.desired, deployment.available, deployment.desired
+    );
+    let newest_write = deployment.template_change.as_ref().map(|writer| writer.at);
+    let problem = inputs.pods.into_iter().flatten().find_map(|pod| {
+        let is_new = match (pod.created_at, newest_write) {
+            (Some(created), Some(written)) => created >= written,
+            _ => true,
+        };
+        let diagnosis = pod_diagnosis(pod, None, inputs.now)
+            .filter(|diagnosis| is_new && diagnosis.tone == StatusTone::Bad)?;
+        Some((*pod, diagnosis))
+    });
+    if let Some((pod, diagnosis)) = &problem {
+        let new_pod = match diagnosis.container {
+            Some(_) => format!(
+                "New pod {} is {}: {}",
+                pod.name,
+                pod_status_label(pod).text,
+                diagnosis.text
+            ),
+            None => format!("New pod {}: {}", pod.name, diagnosis.text),
+        };
+        text.push(' ');
+        text.push_str(&new_pod);
+    }
+    Some(KindDiagnosis {
+        tone: StatusTone::Warn,
+        title: "ROLLOUT IN PROGRESS".to_owned(),
+        text,
+        link: problem.map(|(pod, _)| ResourceKey::of_pod(pod)),
+    })
+}
+
 // ---- DaemonSets ----
 
 /// A pod that is not running with every container ready.

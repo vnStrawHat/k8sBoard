@@ -149,6 +149,9 @@ impl Clusters {
 
 fn deployments(paused: bool) -> Vec<KindRow> {
     let mut summary = deployment("api");
+    // Fully rolled out: a rollout in progress adds a box to the drawer, which would push the
+    // Revisions out of the test window.
+    (summary.ready, summary.available) = (summary.desired, summary.desired);
     summary.is_paused = paused;
     vec![deployment_row(&summary)]
 }
@@ -563,7 +566,7 @@ fn the_popover_follows_the_count_the_row_has_now(cx: &mut TestAppContext) {
     let popover = t.popover(cx).expect("the popover is open");
     assert_eq!(
         popover.read_with(cx, |popover, cx| popover.state_line(cx)),
-        "Now 3 desired · 2 ready"
+        "Now 3 desired · 3 ready"
     );
     // The list moved on to 5 while the form was open: 5 is no change now, 3 is.
     let mut moved = deployment("api");
@@ -1777,16 +1780,23 @@ fn restart_consumers_opens_one_batch_dialog_per_workload_kind(cx: &mut TestAppCo
 }
 
 #[gpui_kit::test]
-fn a_used_by_restart_needs_no_loaded_row(cx: &mut TestAppContext) {
+fn a_used_by_restart_opens_the_consumer_confirm_of_the_edited_object(cx: &mut TestAppContext) {
+    // No Deployments list is loaded: the consumer is named by the Used by row, and the confirm is
+    // the toast's, which names the ConfigMap the drawer shows.
     let t = workload_clusters("restart-named", cx);
     let subject = ClusterObject::new(t.stg.clone(), consumer("Deployment", "api"));
     t.fixture.with_window(cx, |window, cx| {
         t.fixture.shell.update(cx, |shell, cx| {
-            let action = ResourceAction::RestartRollout(ObjectKind::Deployment);
-            shell.start_workload_action(action, &subject, window, cx);
+            let source = consumer("ConfigMap", "web-config");
+            shell.selected = Some(ClusterObject::new(t.stg.clone(), source));
+            shell.drawer.is_open = true;
+            shell.restart_used_by(&subject, ObjectKind::Deployment, window, cx);
         });
     });
-    assert_eq!(t.dialog_label(cx), "Restart rollout of deployment api");
+    assert_eq!(
+        t.dialog_label(cx),
+        "Restart 1 deployment that reads web-config"
+    );
     t.wait_for_dry_run(cx);
     let sent = writes(&t.stg_api);
     assert_eq!(sent.len(), 1, "{sent:?}");

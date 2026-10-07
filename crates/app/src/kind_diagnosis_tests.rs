@@ -631,6 +631,93 @@ fn container_cause_names_the_pod_status() {
     assert_eq!(diagnosis.link, pod_key("api-2"));
 }
 
+// ---- Rollout in progress ----
+
+fn progress(deployment: DeploymentSummary, pods: Option<&[PodSummary]>) -> Option<KindDiagnosis> {
+    let refs: Option<Vec<&PodSummary>> = pods.map(|pods| pods.iter().collect());
+    rollout_progress(
+        &deployment,
+        &DiagnosisInputs {
+            pods: refs.as_deref(),
+            nodes: &[],
+            service: None,
+            bindings: None,
+            tls_secrets: None,
+            events: None,
+            now: at(1_000),
+        },
+    )
+}
+
+fn image_pull_failing(name: &str, created: i64) -> PodSummary {
+    let mut pod = warming_up(name);
+    pod.status = PodStatus::Reason(StatusReason::ErrImagePull);
+    pod.created_at = Some(at(created));
+    pod.containers[0].state = ContainerState::Waiting {
+        reason: Some(StatusReason::ErrImagePull),
+        message: None,
+    };
+    pod
+}
+
+/// A broken release behind old pods: every old pod is ready, so the Deployment is green.
+fn broken_release() -> DeploymentSummary {
+    let mut broken = deployment(3, 3);
+    broken.up_to_date = 1;
+    broken.template_change = Some(cluster::FieldWriter {
+        manager: "k8sboard".to_owned(),
+        at: at(900),
+    });
+    broken
+}
+
+#[test]
+fn a_rollout_with_a_failing_new_pod_names_it_while_old_pods_keep_the_deployment_green() {
+    let mut old = pod("api-old", None);
+    old.created_at = Some(at(100));
+    let pods = [old, image_pull_failing("api-new", 950)];
+    let diagnosis = progress(broken_release(), Some(&pods)).expect("a progress box");
+    assert_eq!(diagnosis.tone, StatusTone::Warn);
+    assert_eq!(diagnosis.title, "ROLLOUT IN PROGRESS");
+    assert!(
+        diagnosis.text.starts_with(
+            "1 of 3 pods run the new template; 3 of 3 are available. New pod api-new is ErrImagePull:"
+        ),
+        "{}",
+        diagnosis.text
+    );
+    assert_eq!(diagnosis.link, pod_key("api-new"));
+    // The problem rules of the Deployment have nothing to say: it is green.
+    let object = KindObject::Deployment(broken_release());
+    assert_eq!(run(object, Some(&pods), &[]), None);
+}
+
+#[test]
+fn a_failing_pod_older_than_the_template_change_is_not_a_new_pod() {
+    let pods = [image_pull_failing("api-old", 100)];
+    let diagnosis = progress(broken_release(), Some(&pods)).expect("a progress box");
+    assert_eq!(diagnosis.link, None);
+    assert!(!diagnosis.text.contains("New pod"), "{}", diagnosis.text);
+}
+
+#[test]
+fn a_warming_up_pod_is_not_named_and_no_pods_list_is_needed() {
+    let pods = [pod("api-1", None), warming_up("api-2")];
+    let diagnosis = progress(deployment(3, 1), Some(&pods)).expect("a progress box");
+    assert_eq!(diagnosis.link, None);
+    let diagnosis = progress(broken_release(), None).expect("a progress box");
+    assert_eq!(diagnosis.title, "ROLLOUT IN PROGRESS");
+}
+
+#[test]
+fn a_finished_scaled_to_zero_or_paused_rollout_raises_no_progress_box() {
+    assert_eq!(progress(deployment(3, 3), Some(&[])), None);
+    assert_eq!(progress(deployment(0, 0), Some(&[])), None);
+    let mut paused = broken_release();
+    paused.is_paused = true;
+    assert_eq!(progress(paused, Some(&[])), None);
+}
+
 // ---- Services ----
 
 fn service() -> ServiceSummary {
