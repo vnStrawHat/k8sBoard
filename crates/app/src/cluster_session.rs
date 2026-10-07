@@ -1049,6 +1049,9 @@ pub(crate) enum CountTrigger {
     Review,
     /// The user went to another screen: counts again only when the numbers are 30 s old.
     Navigation,
+    /// The 30 s ticker of a live session: counts again for the scope already counted, unless a run
+    /// is still counting.
+    Tick,
 }
 
 /// The sidebar numbers of kinds whose watch is not running, from one-shot `limit=1` lists.
@@ -1061,6 +1064,10 @@ pub(crate) struct KindCounts {
     /// a slow run never lets a second one begin right behind it.
     refreshed_at: Option<Instant>,
     task: Option<Task<()>>,
+    /// Counts again every `KIND_COUNT_REFRESH` while the session lives, so a number that changes
+    /// with no navigation (the events a scale leaves behind) does not stay stale. Started by the
+    /// first run; dropped with the counts.
+    ticker: Option<Task<()>>,
 }
 
 impl KindCounts {
@@ -1076,6 +1083,7 @@ impl KindCounts {
                         .refreshed_at
                         .is_some_and(|at| now.duration_since(at) >= KIND_COUNT_REFRESH)
             }
+            CountTrigger::Tick => is_counted && self.task.is_none(),
         }
     }
 
@@ -2280,6 +2288,19 @@ impl ClusterSession {
         live.kind_counts.scope = Some(scope);
         live.kind_counts.refreshed_at = Some(now);
         live.kind_counts.task = Some(task);
+        if live.kind_counts.ticker.is_none() {
+            live.kind_counts.ticker = Some(cx.spawn(async move |this, cx| {
+                loop {
+                    cx.background_executor().timer(KIND_COUNT_REFRESH).await;
+                    let refreshed = this.update(cx, |session, cx| {
+                        session.refresh_kind_counts(CountTrigger::Tick, cx);
+                    });
+                    if refreshed.is_err() {
+                        break;
+                    }
+                }
+            }));
+        }
     }
 
     /// Lists the names of the index kinds for the palette's name search, one metadata-only list

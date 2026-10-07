@@ -259,6 +259,10 @@ mod app_shell_certificate_tests;
 mod app_shell_delete_tests;
 
 #[cfg(test)]
+#[path = "app_shell_kind_count_tests.rs"]
+mod app_shell_kind_count_tests;
+
+#[cfg(test)]
 #[path = "app_shell_metadata_edit_tests.rs"]
 mod app_shell_metadata_edit_tests;
 

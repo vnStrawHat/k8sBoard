@@ -539,6 +539,7 @@ fn counted(scope: &NamespaceScope, started_at: Instant) -> KindCounts {
         counts: HashMap::from([(ResourceKind::Deployments, 3)]),
         refreshed_at: Some(started_at),
         task: None,
+        ticker: None,
     }
 }
 
@@ -579,6 +580,18 @@ fn navigation_refresh_waits_30_seconds() {
         &named,
         started + Duration::from_secs(60)
     ));
+}
+
+#[test]
+fn the_ticker_counts_a_counted_scope_again_unless_a_run_is_counting() {
+    let now = Instant::now();
+    let all = NamespaceScope::All;
+    let named = NamespaceScope::Named("team-a".to_owned());
+    // A tick does not wait for the numbers to be 30 s old: the ticker is the 30 s.
+    assert!(counted(&all, now).wants_run(CountTrigger::Tick, &all, now));
+    // Nothing counted yet, or another scope: the review starts that run.
+    assert!(!KindCounts::default().wants_run(CountTrigger::Tick, &all, now));
+    assert!(!counted(&all, now).wants_run(CountTrigger::Tick, &named, now));
 }
 
 #[test]
