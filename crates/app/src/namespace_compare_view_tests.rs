@@ -1,6 +1,6 @@
 use cluster::WritePolicy;
 use cluster::fake_api::FakeApi;
-use gpui_kit::{Entity, TestAppContext};
+use gpui_kit::{AnyWindowHandle, Entity, TestAppContext};
 use serde_json::json;
 
 use super::*;
@@ -17,7 +17,7 @@ fn deployment(replicas: u32) -> serde_json::Value {
 fn open_view(
     runtime: &tokio::runtime::Runtime,
     cx: &mut TestAppContext,
-) -> Entity<NamespaceCompareView> {
+) -> (AnyWindowHandle, Entity<NamespaceCompareView>) {
     cx.executor().allow_parking();
     cx.update(|cx| cx.set_global(ClusterRuntime::new(runtime.handle().clone())));
     let (connection, _api) = {
@@ -52,7 +52,6 @@ fn open_view(
             })
         })
         .expect("open the test window")
-        .1
     })
 }
 
@@ -78,7 +77,7 @@ fn runtime() -> tokio::runtime::Runtime {
 #[gpui_kit::test]
 fn the_dialog_starts_on_the_choice_and_leaves_the_left_side_out(cx: &mut TestAppContext) {
     let runtime = runtime();
-    let view = open_view(&runtime, cx);
+    let (_, view) = open_view(&runtime, cx);
     view.read_with(cx, |view, _| {
         assert!(view.ready_lines().is_none());
         assert_eq!(view.candidates, ["kube-system", "lab-shop-stg"]);
@@ -88,7 +87,7 @@ fn the_dialog_starts_on_the_choice_and_leaves_the_left_side_out(cx: &mut TestApp
 #[gpui_kit::test]
 fn picking_a_namespace_reads_both_and_lists_the_difference(cx: &mut TestAppContext) {
     let runtime = runtime();
-    let view = open_view(&runtime, cx);
+    let (_, view) = open_view(&runtime, cx);
     view.update(cx, |view, cx| view.choose_for_test("lab-shop-stg", cx));
     wait_until_ready(&view, cx);
     view.read_with(cx, |view, _| {
@@ -106,7 +105,7 @@ fn picking_a_namespace_reads_both_and_lists_the_difference(cx: &mut TestAppConte
 #[gpui_kit::test]
 fn open_diff_shows_the_line_diff_and_a_second_toggle_hides_it(cx: &mut TestAppContext) {
     let runtime = runtime();
-    let view = open_view(&runtime, cx);
+    let (_, view) = open_view(&runtime, cx);
     view.update(cx, |view, cx| view.choose_for_test("lab-shop-stg", cx));
     wait_until_ready(&view, cx);
     let diff_rows = |view: &Entity<NamespaceCompareView>, cx: &mut TestAppContext| {
@@ -126,4 +125,43 @@ fn open_diff_shows_the_line_diff_and_a_second_toggle_hides_it(cx: &mut TestAppCo
         view.toggle_diff_for_test(ObjectKind::Deployment, "web", cx);
     });
     assert_eq!(diff_rows(&view, cx), 0);
+}
+
+#[gpui_kit::test]
+fn enter_in_the_filter_picks_the_first_namespace_that_matches(cx: &mut TestAppContext) {
+    let runtime = runtime();
+    let (window, view) = open_view(&runtime, cx);
+    cx.update(|cx| {
+        window
+            .update(cx, |_, window, cx| {
+                let filter = view.read(cx).filter.clone();
+                filter.update(cx, |input, cx| input.set_value("stg", window, cx));
+            })
+            .expect("the window is open");
+    });
+    view.update(cx, |view, cx| view.choose_first_match(cx));
+    wait_until_ready(&view, cx);
+    let right = view.read_with(cx, |view, _| match &view.state {
+        CompareState::Ready { comparison, .. } => comparison.right.clone(),
+        _ => String::new(),
+    });
+    assert_eq!(right, "lab-shop-stg");
+}
+
+#[gpui_kit::test]
+fn enter_with_no_match_picks_nothing(cx: &mut TestAppContext) {
+    let runtime = runtime();
+    let (window, view) = open_view(&runtime, cx);
+    cx.update(|cx| {
+        window
+            .update(cx, |_, window, cx| {
+                let filter = view.read(cx).filter.clone();
+                filter.update(cx, |input, cx| input.set_value("zzz", window, cx));
+            })
+            .expect("the window is open");
+    });
+    view.update(cx, |view, cx| view.choose_first_match(cx));
+    view.read_with(cx, |view, _| {
+        assert!(matches!(view.state, CompareState::Pick))
+    });
 }

@@ -58,9 +58,15 @@ pub(crate) fn summary_text(comparison: &NamespaceComparison) -> String {
 /// The note under the summary when env literals are hidden, `None` when none are.
 pub(crate) fn hidden_env_note(comparison: &NamespaceComparison) -> Option<String> {
     let count = comparison.hidden_env_values;
-    (count > 0).then(|| {
-        format!("{count} env values are hidden and not compared; Show env values compares them")
-    })
+    let words = match count {
+        0 => return None,
+        1 => "env value is",
+        _ => "env values are",
+    };
+    Some(format!(
+        "{count} {words} hidden and not compared; Show env values compares {}",
+        if count == 1 { "it" } else { "them" }
+    ))
 }
 
 /// Every line of the comparison, kinds with nothing to show left out. `open` names the differing

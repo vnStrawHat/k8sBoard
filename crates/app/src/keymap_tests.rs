@@ -286,7 +286,7 @@ fn every_sheet_row_has_a_binding(cx: &mut TestAppContext) {
 fn every_bound_action_is_on_the_sheet(cx: &mut TestAppContext) {
     bind_all(cx);
     let rows = shortcut_rows();
-    let without_row: [&dyn Action; 22] = [
+    let without_row: [&dyn Action; 23] = [
         &LeaveInput,
         &CloseTerminalFind,
         &PalettePreview,
@@ -309,6 +309,7 @@ fn every_bound_action_is_on_the_sheet(cx: &mut TestAppContext) {
         &SwitcherPrevious,
         &SwitcherConfirm,
         &CloseClusterSwitcher,
+        &PickNamespace,
     ];
     for binding in app_bindings(cx) {
         let action = binding.action();

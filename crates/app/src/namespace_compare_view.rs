@@ -11,12 +11,15 @@ use gpui_kit::component::{
     ActiveTheme as _, Disableable as _, Sizable as _, StyledExt as _, h_flex, v_flex,
 };
 use gpui_kit::{
-    AnyElement, AppContext as _, Context, Div, Entity, InteractiveElement as _, IntoElement,
-    ParentElement as _, Render, SharedString, StatefulInteractiveElement as _, Styled as _,
-    Subscription, Task, Window, div, prelude::FluentBuilder as _, px,
+    AnyElement, AppContext as _, Context, Div, Entity, FocusHandle, Focusable as _,
+    InteractiveElement as _, IntoElement, KeyDownEvent, ParentElement as _, Point, Render,
+    ScrollHandle, SharedString, StatefulInteractiveElement as _, Styled as _, Subscription, Task,
+    Window, div, point, prelude::FluentBuilder as _, px,
 };
 
 use crate::cluster_runtime::ClusterRuntime;
+use crate::drawer::{DrawerScroll, scrolled_offset};
+use crate::keymap::{NAMESPACE_COMPARE, PickNamespace};
 use crate::namespace_compare_rows::{
     CompareLine, OpenDiffs, compare_lines, hidden_env_note, summary_text,
 };
@@ -25,6 +28,8 @@ use crate::yaml_edit::yaml_edit_panels::diff_row_element;
 
 /// The dialog is a share of the window high, so the lines have room to scroll.
 const HEIGHT_SHARE: f32 = 0.7;
+/// How many frames the filter is given the focus, see `focus_tries`.
+const FOCUS_TRIES: u8 = 6;
 const INDENT_NAME: f32 = 24.;
 const INDENT_CHANGE: f32 = 40.;
 
@@ -48,6 +53,13 @@ pub(crate) struct NamespaceCompareView {
     candidates: Vec<String>,
     connection: ClusterConnection,
     filter: Entity<InputState>,
+    /// Takes the focus when the lines show, so the page keys scroll them.
+    focus_handle: FocusHandle,
+    scroll: ScrollHandle,
+    /// Frames left to put the focus in the filter (Pick) or the lines (Ready): the menu a dialog was
+    /// opened from can hand the focus back to the table after the first render, so one attempt is
+    /// not enough.
+    focus_tries: u8,
     env: EnvValues,
     open_diffs: OpenDiffs,
     state: CompareState,
@@ -66,12 +78,14 @@ impl NamespaceCompareView {
         candidates.sort();
         let filter = cx.new(|cx| InputState::new(window, cx).placeholder("Filter namespaces…"));
         let events = cx.subscribe_in(&filter, window, Self::on_filter_event);
-        filter.update(cx, |input, cx| input.focus(window, cx));
         Self {
             left,
             candidates,
             connection,
             filter,
+            focus_handle: cx.focus_handle(),
+            scroll: ScrollHandle::new(),
+            focus_tries: FOCUS_TRIES,
             env: EnvValues::Hidden,
             open_diffs: OpenDiffs::new(),
             state: CompareState::Pick,
@@ -86,10 +100,8 @@ impl NamespaceCompareView {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        match event {
-            InputEvent::Change => cx.notify(),
-            InputEvent::PressEnter { .. } => self.choose_first_match(cx),
-            _ => {}
+        if matches!(event, InputEvent::Change) {
+            cx.notify();
         }
     }
 
@@ -128,6 +140,8 @@ impl NamespaceCompareView {
                 view.state = match read {
                     Ok(comparison) => {
                         let lines = compare_lines(&comparison, &view.open_diffs);
+                        view.focus_tries = FOCUS_TRIES;
+                        view.scroll.set_offset(Point::default());
                         CompareState::Ready { comparison, lines }
                     }
                     Err(_) => CompareState::Failed("The request stopped before it finished".into()),
@@ -151,9 +165,53 @@ impl NamespaceCompareView {
         cx.notify();
     }
 
-    fn change_namespace(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    fn change_namespace(&mut self, cx: &mut Context<Self>) {
         self.state = CompareState::Pick;
-        self.filter.update(cx, |input, cx| input.focus(window, cx));
+        self.focus_tries = FOCUS_TRIES;
+        cx.notify();
+    }
+
+    /// Page Up, Page Down, Home and End scroll the lines like the drawer: nothing else in the dialog
+    /// takes them while the comparison shows.
+    fn scroll_key(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) {
+        if !matches!(self.state, CompareState::Ready { .. }) {
+            return;
+        }
+        let step = match event.keystroke.key.as_str() {
+            "pagedown" => DrawerScroll::PageDown,
+            "pageup" => DrawerScroll::PageUp,
+            "home" => DrawerScroll::Top,
+            "end" => DrawerScroll::Bottom,
+            _ => return,
+        };
+        let offset = self.scroll.offset();
+        let y = scrolled_offset(
+            offset.y.into(),
+            self.scroll.bounds().size.height.into(),
+            self.scroll.max_offset().y.into(),
+            step,
+        );
+        self.scroll.set_offset(point(offset.x, px(y)));
+        cx.notify();
+    }
+
+    /// Gives the focus to what the phase shows (the filter, or the lines) while the tries last.
+    fn focus_phase(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let target = match self.state {
+            CompareState::Pick => self.filter.read(cx).focus_handle(cx),
+            CompareState::Ready { .. } => self.focus_handle.clone(),
+            CompareState::Loading { .. } | CompareState::Failed(_) => return,
+        };
+        if self.focus_tries == 0 {
+            return;
+        }
+        self.focus_tries -= 1;
+        if target.is_focused(window) {
+            self.focus_tries = 0;
+            return;
+        }
+        window.focus(&target, cx);
+        // The next frame checks that the focus stayed.
         cx.notify();
     }
 
@@ -241,9 +299,7 @@ impl NamespaceCompareView {
                         .label("Change namespace")
                         .small()
                         .outline()
-                        .on_click(
-                            cx.listener(|view, _, window, cx| view.change_namespace(window, cx)),
-                        ),
+                        .on_click(cx.listener(|view, _, _, cx| view.change_namespace(cx))),
                 )
             })
             .into_any_element()
@@ -269,14 +325,20 @@ impl NamespaceCompareView {
                     }),
             )
         } else {
+            let hover = cx.theme().list_hover;
             list.children(shown.into_iter().enumerate().map(|(index, name)| {
                 let picked = name.clone();
-                Button::new(("compare-candidate", index))
-                    .ghost()
-                    .small()
-                    .w_full()
-                    .label(SharedString::from(name.clone()))
+                div()
+                    .id(("compare-candidate", index))
+                    .px_2()
+                    .py_1()
+                    .rounded_md()
+                    .cursor_pointer()
+                    .text_sm()
+                    .font_family(cx.theme().mono_font_family.clone())
+                    .hover(|row| row.bg(hover))
                     .on_click(cx.listener(move |view, _, _, cx| view.choose(picked.clone(), cx)))
+                    .child(SharedString::from(name.clone()))
             }))
         };
         v_flex()
@@ -292,6 +354,7 @@ impl NamespaceCompareView {
             .id("compare-lines")
             .size_full()
             .overflow_y_scroll()
+            .track_scroll(&self.scroll)
             .children(
                 lines
                     .iter()
@@ -429,8 +492,15 @@ fn centered(content: impl IntoElement) -> AnyElement {
 }
 
 impl Render for NamespaceCompareView {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.focus_phase(window, cx);
         v_flex()
+            .key_context(NAMESPACE_COMPARE)
+            .track_focus(&self.focus_handle)
+            .on_key_down(
+                cx.listener(|view, event: &KeyDownEvent, _, cx| view.scroll_key(event, cx)),
+            )
+            .on_action(cx.listener(|view, _: &PickNamespace, _, cx| view.choose_first_match(cx)))
             .size_full()
             .child(self.render_toolbar(cx))
             .child(div().flex_1().min_h_0().child(self.render_body(cx)))

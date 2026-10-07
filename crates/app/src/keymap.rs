@@ -82,6 +82,8 @@ gpui_kit::actions!(
         // Compare with another namespace (0057): V on a Namespaces row; the chord needs no row.
         CompareNamespaces,
         OpenNamespaceCompare,
+        // Enter in the filter of the comparison dialog picks the first namespace that matches.
+        PickNamespace,
         // Certificate Renew now (0018 step 6), unbound like the other resource edits.
         RenewCertificate,
         // The value popover and the palette argument (0032): Escape steps back one level.
@@ -149,6 +151,10 @@ const PALETTE_ARGUMENT_INPUT: &str = "PaletteArgument > Input";
 /// The New forward and Change local port forms (spec 0035), which handle a fresh Enter themselves.
 pub(crate) const FORWARD_FORM: &str = "ForwardForm";
 const FORWARD_FORM_INPUT: &str = "ForwardForm > Input";
+/// The filter of the namespace comparison dialog (spec 0057): Enter picks a namespace there, and the
+/// kit dialog must not take the same Enter as its confirm.
+pub(crate) const NAMESPACE_COMPARE: &str = "NamespaceCompare";
+const NAMESPACE_COMPARE_INPUT: &str = "NamespaceCompare > Input";
 /// The Edit YAML view (spec 0031): its editor is a text field, and so is the rest of the view for the
 /// workspace's single keys.
 pub(crate) const YAML_EDIT: &str = "YamlEdit";
@@ -257,6 +263,7 @@ pub(crate) fn bind_keys(cx: &mut App) {
         KeyBinding::new("enter", gpui_kit::NoAction, Some(WRITE_CONFIRM_INPUT)),
         KeyBinding::new("enter", gpui_kit::NoAction, Some(FORWARD_FORM)),
         KeyBinding::new("enter", gpui_kit::NoAction, Some(FORWARD_FORM_INPUT)),
+        KeyBinding::new("enter", PickNamespace, Some(NAMESPACE_COMPARE_INPUT)),
     ]);
     // Escape in the popover and in the palette argument steps back one level, text field included:
     // the kit binds Escape inside its own `Input`, which would otherwise win.
