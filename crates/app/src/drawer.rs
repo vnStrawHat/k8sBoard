@@ -919,9 +919,9 @@ pub(crate) fn open_link(
     shell.follow_link(target, window, cx);
 }
 
-/// A mono value that opens `target` on its own screen. When the open session's scope covers more
-/// than one namespace, a namespaced target reads `namespace/text`, so two objects of the same name
-/// are told apart (UX round 3, P33).
+/// A mono value that opens `target` on its own screen, named like every object in a drawer (see
+/// `object_text`): `pod: web-0`, or `pod: lab-shop/web-0` when the open session's scope covers
+/// more than one namespace, so two objects of the same name are told apart (UX round 3, P33).
 pub(crate) fn link_text(
     id: usize,
     text: &SharedString,
@@ -937,9 +937,10 @@ pub(crate) fn link_text(
         .into_any_element()
 }
 
-/// How a drawer names an object in text or in a link: `text`, with the namespace of `target` in
-/// front when the open session's scope covers more than one namespace. Every object mention in a
-/// drawer goes through this one rule.
+/// How a drawer names an object in text or in a link: `kind: text`, the kind in its lowercase
+/// kubectl short form, with the namespace of `target` in front of the text when the open session's
+/// scope covers more than one namespace. Every object mention in a drawer goes through this one
+/// rule; a mention without a `target` stays as given.
 pub(crate) fn object_text(
     text: impl Into<SharedString>,
     target: Option<&ResourceKey>,
@@ -947,8 +948,8 @@ pub(crate) fn object_text(
 ) -> SharedString {
     let text = text.into();
     match target {
-        Some(target) if scope_has_many_namespaces(cx) => qualified_link_text(&text, target),
-        _ => text,
+        Some(target) => named_object_text(&text, target, scope_has_many_namespaces(cx)),
+        None => text,
     }
 }
 
@@ -971,25 +972,42 @@ fn scope_shows_namespace(scope: &NamespaceScope) -> bool {
     !matches!(scope, NamespaceScope::Named(_))
 }
 
-/// `text` with the namespace of `target` in front, unless the target has none or `text` already
-/// starts with it. Pure.
-fn qualified_link_text(text: &SharedString, target: &ResourceKey) -> SharedString {
-    let namespace = match target {
-        ResourceKey::Pod { namespace, .. } => Some(namespace),
-        ResourceKey::Kind { namespace, .. } => namespace.as_ref(),
-        ResourceKey::Node { .. } => None,
+/// `kind: [namespace/]name` for `target`. A leading namespace or kind that `text` already carries
+/// (`lab-shop/deployment/web`, `replicaset/web-abc`) is dropped first, so each reads once. Pure.
+pub(crate) fn named_object_text(
+    text: &str,
+    target: &ResourceKey,
+    shows_namespace: bool,
+) -> SharedString {
+    let (short_kind, kind_name, namespace) = match target {
+        ResourceKey::Pod { namespace, .. } => ("pod".to_owned(), "Pod", Some(namespace)),
+        ResourceKey::Node { .. } => ("node".to_owned(), "Node", None),
+        ResourceKey::Kind {
+            kind, namespace, ..
+        } => (kind.short_kind(), kind.display_name(), namespace.as_ref()),
     };
+    let mut name = text;
+    if let Some(rest) = namespace.and_then(|namespace| {
+        name.strip_prefix(namespace.as_str())
+            .and_then(|rest| rest.strip_prefix('/'))
+    }) {
+        name = rest;
+    }
+    if let Some((word, rest)) = name.split_once('/')
+        && (word.eq_ignore_ascii_case(kind_name) || word.eq_ignore_ascii_case(&short_kind))
+    {
+        name = rest;
+    }
     match namespace {
-        Some(namespace) if !text.starts_with(&format!("{namespace}/")) => {
-            format!("{namespace}/{text}").into()
-        }
-        _ => text.clone(),
+        Some(namespace) if shows_namespace => format!("{short_kind}: {namespace}/{name}").into(),
+        _ => format!("{short_kind}: {name}").into(),
     }
 }
 
-/// A list row's object name: link-styled text inside a row whose own click opens the object.
-pub(crate) fn link_name(id: usize, name: &str, cx: &App) -> AnyElement {
-    let name = SharedString::from(name.to_owned());
+/// A list row's object name: link-styled text inside a row whose own click opens the object. The
+/// caller names the object with `named_object_text`, so the row reads like every other link.
+pub(crate) fn link_name(id: usize, name: impl Into<SharedString>, cx: &App) -> AnyElement {
+    let name = name.into();
     link_style(div().id(("link-name", id)), &name, cx)
         .child(name)
         .into_any_element()
@@ -1153,38 +1171,85 @@ mod tests {
         ])));
     }
 
-    #[test]
-    fn a_namespaced_link_reads_namespace_slash_text_once() {
-        let deployment = ResourceKey::Kind {
-            kind: ResourceKind::Deployments,
-            namespace: Some("lab-shop-stg".to_owned()),
-            name: "web".to_owned(),
-        };
-        let text = SharedString::from("deployment/web");
-        let qualified = qualified_link_text(&text, &deployment);
-        assert_eq!(qualified, "lab-shop-stg/deployment/web");
-        assert_eq!(qualified_link_text(&qualified, &deployment), qualified);
-        let pod = ResourceKey::Pod {
+    fn pod(name: &str) -> ResourceKey {
+        ResourceKey::Pod {
             namespace: "lab-shop".to_owned(),
-            name: "web-0".to_owned(),
-        };
-        assert_eq!(qualified_link_text(&"web-0".into(), &pod), "lab-shop/web-0");
+            name: name.to_owned(),
+        }
+    }
+
+    fn kind_key(kind: ResourceKind, namespace: Option<&str>, name: &str) -> ResourceKey {
+        ResourceKey::Kind {
+            kind,
+            namespace: namespace.map(str::to_owned),
+            name: name.to_owned(),
+        }
     }
 
     #[test]
-    fn a_cluster_scoped_link_keeps_its_text() {
+    fn a_link_reads_short_kind_then_name() {
+        let web = pod("web-0");
+        assert_eq!(named_object_text("web-0", &web, false), "pod: web-0");
+        let service = kind_key(ResourceKind::Services, Some("lab-shop"), "api");
+        assert_eq!(named_object_text("api", &service, false), "svc: api");
+        let config = kind_key(ResourceKind::ConfigMaps, Some("lab-shop"), "app");
+        assert_eq!(named_object_text("app", &config, false), "cm: app");
+        let secret = kind_key(ResourceKind::Secrets, Some("lab-shop"), "tls");
+        assert_eq!(named_object_text("tls", &secret, false), "secret: tls");
+    }
+
+    #[test]
+    fn a_namespaced_link_reads_kind_then_namespace_slash_name_once() {
+        let web = pod("web-0");
+        assert_eq!(
+            named_object_text("web-0", &web, true),
+            "pod: lab-shop/web-0"
+        );
+        // The namespace already in the text is not repeated.
+        assert_eq!(
+            named_object_text("lab-shop/web-0", &web, true),
+            "pod: lab-shop/web-0"
+        );
+        assert_eq!(
+            named_object_text("lab-shop/web-0", &web, false),
+            "pod: web-0"
+        );
+    }
+
+    #[test]
+    fn a_kind_the_text_already_names_is_not_repeated() {
+        let deployment = kind_key(ResourceKind::Deployments, Some("lab-shop-stg"), "web");
+        assert_eq!(
+            named_object_text("deployment/web", &deployment, true),
+            "deploy: lab-shop-stg/web"
+        );
+        assert_eq!(
+            named_object_text("lab-shop-stg/deployment/web", &deployment, true),
+            "deploy: lab-shop-stg/web"
+        );
+        let replica_set = kind_key(ResourceKind::ReplicaSets, Some("kube-system"), "coredns-76");
+        assert_eq!(
+            named_object_text("replicaset/coredns-76", &replica_set, false),
+            "rs: coredns-76"
+        );
+        // A path that only looks like a kind prefix stays whole.
+        let ingress = kind_key(ResourceKind::Ingresses, Some("shop"), "web");
+        assert_eq!(
+            named_object_text("shop.example/api", &ingress, false),
+            "ing: shop.example/api"
+        );
+    }
+
+    #[test]
+    fn a_cluster_scoped_link_has_no_namespace() {
         let node = ResourceKey::Node {
             name: "node-1".to_owned(),
         };
-        let namespaces = ResourceKey::Kind {
-            kind: ResourceKind::Namespaces,
-            namespace: None,
-            name: "lab-shop".to_owned(),
-        };
-        assert_eq!(qualified_link_text(&"node-1".into(), &node), "node-1");
+        let namespaces = kind_key(ResourceKind::Namespaces, None, "lab-shop");
+        assert_eq!(named_object_text("node-1", &node, true), "node: node-1");
         assert_eq!(
-            qualified_link_text(&"lab-shop".into(), &namespaces),
-            "lab-shop"
+            named_object_text("lab-shop", &namespaces, true),
+            "ns: lab-shop"
         );
     }
 

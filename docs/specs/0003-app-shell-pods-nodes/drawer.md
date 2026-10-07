@@ -97,3 +97,4 @@ pub(crate) struct DrawerHeader { kind_badge: &'static str /* "Po" | "No" */, nam
 ## As built (2026-10-07): short kind names
 
 - The header caption before the object name is the first kubectl short name in upper case (`SVC`, `DEPLOY`, `STS`, `CRD`), from `ResourceKind::short_names()`; Pod, Node, Job, Secret, Role, Helm release and custom kinds keep the whole word. The tooltip keeps the full kind.
+- A drawer link and every object mention that goes through `object_text` read `kind: name` with the lowercase short name (`pod: web-0`, `svc: api`, `rs: coredns-76f75df574`), or `pod: lab-shop/web-0` when the scope has several namespaces. A kind or namespace the text already carries (`replicaset/web`) is dropped, so each reads once.

@@ -8,12 +8,12 @@ use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{ActiveTheme as _, h_flex, v_flex};
 use gpui_kit::{
     AnyElement, Context, InteractiveElement as _, IntoElement, ParentElement as _,
-    StatefulInteractiveElement as _, Styled as _, div, prelude::FluentBuilder as _, px,
+    StatefulInteractiveElement as _, Styled as _, div, px,
 };
 
 use crate::app_shell::AppShell;
 use crate::cluster_session::{LiveCluster, namespaces_label};
-use crate::drawer::{link_name, open_link, section_title};
+use crate::drawer::{link_name, named_object_text, open_link, section_title};
 use crate::kind_diagnosis::first_main_termination;
 use crate::kind_row::{
     DAEMON_SET_KIND, JOB_KIND, KindObject, PodOwner, STATEFUL_SET_KIND, owns_pod,
@@ -307,6 +307,16 @@ fn related_pod_row(
         | PodRowDetail::NamespaceAndStatus => None,
     };
     let hover_bg = theme.muted;
+    // A node's pods come from every namespace, so their links name it.
+    let pod_link = link_name(
+        index,
+        named_object_text(
+            &pod.name,
+            &key,
+            matches!(detail, PodRowDetail::NamespaceAndStatus),
+        ),
+        cx,
+    );
     h_flex()
         .id(("related-pod", index))
         .gap_2()
@@ -326,17 +336,7 @@ fn related_pod_row(
                 .items_center()
                 .overflow_hidden()
                 .font_family(theme.mono_font_family.clone())
-                .when(matches!(detail, PodRowDetail::NamespaceAndStatus), |this| {
-                    this.child(
-                        div()
-                            .flex_shrink_0()
-                            .max_w(px(160.))
-                            .truncate()
-                            .text_color(theme.muted_foreground)
-                            .child(format!("{}/", pod.namespace)),
-                    )
-                })
-                .child(link_name(index, &pod.name, cx)),
+                .child(pod_link),
         )
         .child(toned_text(pod_status_label(pod), cx))
         .children(tags.into_iter().map(|tag| drain_tag(tag, cx)))

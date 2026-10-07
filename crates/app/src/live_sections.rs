@@ -40,7 +40,8 @@ use crate::cluster_session::{
 use crate::config_map_rows::{format_bytes, key_size_text};
 use crate::custom_rows::{FieldsSide, conditions_rows, field_list_rows};
 use crate::drawer::{
-    link_name, link_text, object_text, open_link, truncated_text, wide_detail_row,
+    link_name, link_text, named_object_text, object_text, open_link, truncated_text,
+    wide_detail_row,
 };
 use crate::helm_release_view::ValuesLayout;
 use crate::helm_rows::{HistoryModel, HistoryRow, history_model};
@@ -444,7 +445,7 @@ fn revision_element(
             v_flex()
                 .flex_1()
                 .min_w_0()
-                .child(div().flex().child(link_name(ix, &title, cx)))
+                .child(div().flex().child(link_name(ix, title, cx)))
                 .children(set.change_cause.as_ref().map(|cause| {
                     div()
                         .truncate()
@@ -672,6 +673,10 @@ fn job_element(
     let theme = cx.theme();
     let hover_bg = theme.muted;
     let target = ResourceKey::of_object("Job", Some(&job.namespace), &job.name);
+    let job_name = match &target {
+        Some(target) => named_object_text(&job.name, target, false),
+        None => job.name.clone().into(),
+    };
     let duration = job
         .started_at
         .map(|started| format_age(Some(started), job.finished_at.unwrap_or(now)));
@@ -694,7 +699,7 @@ fn job_element(
                 .flex_1()
                 .min_w_0()
                 .flex()
-                .child(link_name(ix, &job.name, cx)),
+                .child(link_name(ix, job_name, cx)),
         )
         .child(toned_text(job_status_label(job.status), cx).flex_shrink_0())
         .children(duration.map(|duration| {
@@ -793,7 +798,7 @@ fn not_ready_element(
                 .flex_1()
                 .min_w_0()
                 .flex()
-                .child(link_name(ix, &title, cx)),
+                .child(link_name(ix, title, cx)),
         )
         .child(toned_text(not_ready_label(pod, nodes), cx).flex_shrink_0())
         .into_any_element()
@@ -964,7 +969,7 @@ fn endpoint_element(ix: usize, row: &EndpointRow, cx: &Context<AppShell>) -> Any
                         .text_color(theme.muted_foreground)
                         .child(" · "),
                 )
-                .child(link_name(ix, name, cx));
+                .child(link_name(ix, named_object_text(name, &target, false), cx));
         }
         element = element
             .cursor_pointer()
@@ -1637,6 +1642,7 @@ fn selected_pod_element(ix: usize, entry: &SelectedPod, cx: &Context<AppShell>) 
     let theme = cx.theme();
     let hover_bg = theme.muted;
     let key = ResourceKey::of_pod(entry.pod);
+    let pod_link = link_name(ix, named_object_text(&entry.pod.name, &key, false), cx);
     let (text, tone) = if entry.is_healthy {
         ("healthy", StatusTone::Ok)
     } else {
@@ -1654,13 +1660,7 @@ fn selected_pod_element(ix: usize, entry: &SelectedPod, cx: &Context<AppShell>) 
         .on_click(cx.listener(move |shell, _, window, cx| {
             open_link(shell, key.clone(), window, cx);
         }))
-        .child(
-            div()
-                .flex_1()
-                .min_w_0()
-                .flex()
-                .child(link_name(ix, &entry.pod.name, cx)),
-        )
+        .child(div().flex_1().min_w_0().flex().child(pod_link))
         .child(
             toned_text(
                 StatusLabel {
@@ -1834,6 +1834,7 @@ fn mounting_pod_element(
     let theme = cx.theme();
     let hover_bg = theme.muted;
     let key = ResourceKey::of_pod(pod);
+    let pod_link = link_name(ix, named_object_text(&pod.name, &key, false), cx);
     let node = pod.node_name.as_deref().unwrap_or("unscheduled");
     h_flex()
         .id(("mounted-by", ix))
@@ -1847,13 +1848,7 @@ fn mounting_pod_element(
         .on_click(cx.listener(move |shell, _, window, cx| {
             open_link(shell, key.clone(), window, cx);
         }))
-        .child(
-            div()
-                .flex_1()
-                .min_w_0()
-                .flex()
-                .child(link_name(ix, &pod.name, cx)),
-        )
+        .child(div().flex_1().min_w_0().flex().child(pod_link))
         .child(
             div()
                 .min_w_0()
