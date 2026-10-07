@@ -16,6 +16,7 @@ use gpui_kit::{
 use crate::app_shell::AppShell;
 use crate::audit_log::AuditIdentity;
 use crate::cluster_registry::ClusterRef;
+use crate::counted_text::counted_text;
 use crate::drain_run::{BlockingBudget, DrainRun, NodeState, RunEnd, StatusLine};
 use crate::drawer::link_style;
 use crate::resource_kind::ResourceKind;
@@ -221,7 +222,9 @@ impl DrainTab {
     /// The header: the line, with the budgets that block the drain as links to them.
     fn render_status(&self, line: StatusLine, cx: &Context<Self>) -> impl IntoElement {
         if line.blockers.is_empty() {
-            return div().text_sm().child(format!("{}{}", line.lead, line.tail));
+            return div()
+                .text_sm()
+                .child(counted_text(format!("{}{}", line.lead, line.tail)));
         }
         let last = line.blockers.len() - 1;
         let links = line
@@ -256,7 +259,11 @@ impl DrainTab {
         // text does, and the budget names stay links.
         let words = |text: String| -> Vec<AnyElement> {
             text.split_inclusive(' ')
-                .map(|word| div().child(word.to_owned()).into_any_element())
+                .map(|word| {
+                    div()
+                        .child(counted_text(word.to_owned()))
+                        .into_any_element()
+                })
                 .collect()
         };
         let mut flow = words(format!("{} · blocked by ", line.lead));
@@ -409,7 +416,7 @@ impl Render for DrainTab {
                             .flex_shrink_0()
                             .text_xs()
                             .text_color(muted)
-                            .child(format!("{gone} of {total} gone")),
+                            .child(counted_text(format!("{gone} of {total} gone"))),
                     ),
             )
             .children(self.run.poll_error().map(|text| {

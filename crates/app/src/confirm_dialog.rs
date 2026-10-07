@@ -40,6 +40,7 @@ use crate::app_shell::write_flow::{
     is_secret_form_action, typed_match, unlock_block,
 };
 use crate::cluster_registry::ClusterRef;
+use crate::counted_text::counted_text;
 use crate::environment::{Environment, environment_badge};
 use crate::node_edits::taint_rows_of_request;
 use crate::port_forwards::{LOCAL_PORT_FIELD_ERROR, LocalPortSpec, parse_local_port_field};
@@ -1141,7 +1142,7 @@ impl ConfirmDialog {
                 div()
                     .text_sm()
                     .text_color(tone_color(StatusTone::Warn, cx))
-                    .child(warning.clone())
+                    .child(counted_text(warning.clone()))
             });
             return Some(
                 v_flex()
@@ -1203,7 +1204,7 @@ impl ConfirmDialog {
             div()
                 .text_sm()
                 .text_color(tone_color(StatusTone::Warn, cx))
-                .child(warning.clone())
+                .child(counted_text(warning.clone()))
         });
         Some(v_flex().gap_1().children(lines).children(warnings))
     }
@@ -1294,7 +1295,7 @@ impl ConfirmDialog {
             div()
                 .text_sm()
                 .text_color(color)
-                .child(text)
+                .child(counted_text(text))
                 .into_any_element(),
         )
     }

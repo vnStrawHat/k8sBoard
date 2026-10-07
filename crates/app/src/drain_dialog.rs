@@ -43,6 +43,7 @@ use crate::cell_truncation::cell_tooltip;
 use crate::cluster_registry::ClusterRef;
 use crate::cluster_runtime::ClusterRuntime;
 use crate::confirm_dialog::{typed_prompt, typed_prompt_text};
+use crate::counted_text::counted_text;
 use crate::drain_placement::placement_note;
 use crate::drain_plan::{
     BudgetPolicy, CordonCheck, DrainOption, DrainOptions, GRACE_CHOICES, NodePlan, OptionCounts,
@@ -1050,7 +1051,7 @@ impl DrainDialog {
                     .gap_1()
                     .items_center()
                     .child(div().font_semibold().child((index + 1).to_string()))
-                    .child(div().text_color(muted).child(text))
+                    .child(div().text_color(muted).child(counted_text(text)))
             }))
             .into_any_element()
     }
@@ -1079,7 +1080,7 @@ impl DrainDialog {
                     .pl_6()
                     .text_xs()
                     .text_color(muted)
-                    .child(option_hint(option, counts)),
+                    .child(counted_text(option_hint(option, counts))),
             )
             .into_any_element()
     }
@@ -1278,7 +1279,10 @@ impl DrainDialog {
                     .justify_between()
                     .text_xs()
                     .text_color(muted)
-                    .child(preview_header(&self.plans, self.options.budgets))
+                    .child(counted_text(preview_header(
+                        &self.plans,
+                        self.options.budgets,
+                    )))
                     .child("Result"),
             )
             .child(
@@ -1385,7 +1389,7 @@ impl DrainDialog {
         div()
             .text_sm()
             .text_color(color)
-            .child(text)
+            .child(counted_text(text))
             .into_any_element()
     }
 

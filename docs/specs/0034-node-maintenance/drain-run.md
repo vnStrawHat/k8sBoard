@@ -116,3 +116,7 @@ loop {
 - After the end (any end) open pods stop reading as live work: `Waiting` → `Not evicted`, `Evicting…` → `Eviction sent, still on node` (`Delete sent, still on node` under Skip PDBs), a refusal → `Blocked by PDB {name}` (the name read from the API message). A stuck header appends the blocking budgets: `Stuck on wk-04: Timed out after 20 min: 11 pods left · blocked by api-pdb`; each name is a link that reveals that PodDisruptionBudget in the pod's namespace.
 - Buttons: `Cancel` (danger outline) while running; after a stuck, failed, or stopped end `Drain again…` (reopens the Drain dialog on the nodes left undrained, with the timeout, grace period, and toggles of the drain it repeats; Skip PodDisruptionBudgets is never carried over), then `Uncordon {m} node(s)` and `Close`. The tab's ✕ and Ctrl W are disabled while running (`Cancel the drain first`).
 - Ends with a notification: `Drain: wk-04 drained`, `Drain stopped: wk-05 stuck ({reason})`, or `Drain cancelled`.
+
+## As built (2026-10-07): counts in semibold
+
+The drain dialog's step strip (`Evict 23 pods · 1 cannot move`), option hints, preview header and dry-run line, and the drain tab's status line (`Stuck on wk-04: Timed out after 20 min: 11 pods left`) and `12 of 23 gone` counter render their counts in semibold through `counted_text` (see 0040 pod-removal).

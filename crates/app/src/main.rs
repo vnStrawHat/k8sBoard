@@ -27,6 +27,7 @@ mod command_palette;
 mod config_map_rows;
 mod confirm_dialog;
 mod container_detail;
+mod counted_text;
 mod crd_rows;
 mod custom_kind;
 mod custom_rows;

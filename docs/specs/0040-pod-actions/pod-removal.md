@@ -98,3 +98,7 @@ One line per commit through `checked_write`: `Restart pod` with `deleteOptions.p
 |---|---|
 | `restart-pod-confirm` | PROD TypeName tier, a StatefulSet pod `data/kafka-1`, row `passed · 112 ms`, the PDB and StatefulSet warnings, pod-name field empty |
 | `evict-confirm` | STG Click tier, `payments/api-7d9f8c-m8n2p`, row `refused for now: The disruption budget api-pdb needs 2 healthy pods and has 2 currently`, Apply disabled |
+
+## As built (2026-10-07): counts in semibold
+
+The kit alert and the dialog lines take a plain string, so `counted_text` (`counted_text.rs`) renders one text element with the counts as semibold highlights (a digit run that stands alone as a word; digits in names, units, fractions and clocks stay plain). The confirm dialog uses it for its warning lines and the dry-run line (`2 pods are not managed…`, `Server dry-run passed for 12 of 12`), so Delete and Evict read alike.
