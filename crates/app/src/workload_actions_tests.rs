@@ -715,6 +715,7 @@ pub(crate) fn replica_set(
             name: owner.to_owned(),
         }),
         revision: revision.map(str::to_owned),
+        change_cause: None,
         selector: Vec::new(),
         containers: vec![cluster::TemplateContainer {
             name: "web".to_owned(),

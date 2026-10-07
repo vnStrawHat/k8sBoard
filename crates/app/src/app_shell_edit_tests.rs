@@ -1945,6 +1945,7 @@ fn go_to_deployment_reveals_and_closes(cx: &mut TestAppContext) {
             tag: None,
             is_current: false,
             created_at: None,
+            change_cause: None,
         },
         crate::revision_diff::RevisionSide {
             replica_set: "api-b".to_owned(),
@@ -1952,6 +1953,7 @@ fn go_to_deployment_reveals_and_closes(cx: &mut TestAppContext) {
             tag: None,
             is_current: true,
             created_at: None,
+            change_cause: None,
         },
     );
     let shell = t.shell().downgrade();

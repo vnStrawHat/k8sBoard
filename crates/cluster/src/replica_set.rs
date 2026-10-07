@@ -10,8 +10,8 @@ use crate::object_yaml::{ObjectKind, ObjectRef};
 use crate::pod_status::non_negative;
 use crate::resource_watch::{WatchUpdate, selected_summary_watch, summary_watch};
 use crate::workload::{
-    ControllerRef, TemplateContainer, controller_ref, label_terms, optional_count, revision,
-    selector_terms, template_containers,
+    ControllerRef, TemplateContainer, change_cause, controller_ref, label_terms, optional_count,
+    revision, selector_terms, template_containers,
 };
 
 /// The action text of `deployment_revisions`.
@@ -32,6 +32,8 @@ pub struct ReplicaSetSummary {
     pub owner: Option<ControllerRef>,
     /// The `deployment.kubernetes.io/revision` annotation.
     pub revision: Option<String>,
+    /// The `kubernetes.io/change-cause` annotation: what `kubectl rollout history` lists.
+    pub change_cause: Option<String>,
     pub selector: Vec<String>,
     pub containers: Vec<TemplateContainer>,
 }
@@ -133,6 +135,7 @@ pub(crate) fn replica_set_summary(replica_set: &ReplicaSet) -> ReplicaSetSummary
         ready: optional_count(status.and_then(|status| status.ready_replicas)),
         owner: controller_ref(&replica_set.metadata),
         revision: revision(&replica_set.metadata),
+        change_cause: change_cause(&replica_set.metadata),
         selector: spec.map_or_else(Vec::new, |spec| selector_terms(&spec.selector)),
         containers: spec
             .and_then(|spec| spec.template.as_ref())
@@ -185,6 +188,29 @@ mod tests {
             })
         );
         assert_eq!(summary.revision.as_deref(), Some("4"));
+    }
+
+    #[test]
+    fn replica_set_summary_reads_the_change_cause() {
+        let with = |cause: Option<&str>| {
+            let annotations = cause.map(|text| {
+                BTreeMap::from([("kubernetes.io/change-cause".to_owned(), text.to_owned())])
+            });
+            replica_set_summary(&ReplicaSet {
+                metadata: ObjectMeta {
+                    annotations,
+                    ..Default::default()
+                },
+                ..Default::default()
+            })
+        };
+        assert_eq!(
+            with(Some("release test")).change_cause.as_deref(),
+            Some("release test")
+        );
+        // An empty annotation is no cause.
+        assert_eq!(with(Some("")).change_cause, None);
+        assert_eq!(with(None).change_cause, None);
     }
 
     #[test]

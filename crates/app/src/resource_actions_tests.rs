@@ -550,6 +550,7 @@ fn replica_set_row_owned_by(owner: Option<(&str, &str)>) -> KindRow {
             name: name.to_owned(),
         }),
         revision: None,
+        change_cause: None,
         selector: Vec::new(),
         containers: Vec::new(),
     })

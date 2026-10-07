@@ -5,6 +5,8 @@
 
 use serde_json::{Value, json};
 
+use crate::workload::CHANGE_CAUSE_ANNOTATION;
+
 const REVISION_ANNOTATION: &str = "deployment.kubernetes.io/revision";
 const POD_TEMPLATE_HASH: &str = "pod-template-hash";
 /// The labels and selectors of a Job that its controller owns; a copy must not carry them.
@@ -74,9 +76,6 @@ pub(crate) fn rollback_operations(
     ]))
 }
 
-/// The annotation `kubectl rollout history` prints as the CHANGE-CAUSE of a revision; the Deployment's
-/// copy is what its next ReplicaSet inherits.
-pub(crate) const CHANGE_CAUSE_ANNOTATION: &str = "kubernetes.io/change-cause";
 /// The longest change cause Set image accepts: a cause is one line of a history list.
 pub(crate) const MAX_CHANGE_CAUSE_CHARS: usize = 256;
 

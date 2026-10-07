@@ -13,6 +13,7 @@ use cluster::{
     ServiceAccountSummary, ServiceSummary, Subject, SubjectKind, ValuePreview, VolumeSource,
 };
 use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{ActiveTheme as _, Disableable as _, Sizable as _, h_flex, v_flex};
 use gpui_kit::{
     AnyElement, Context, InteractiveElement as _, IntoElement, ParentElement as _, Pixels,
@@ -55,7 +56,7 @@ use crate::policy_rows::{fullest_item, quota_text};
 use crate::related_objects::{RelatedSubject, key_related_subject, related_subject};
 use crate::resource_actions::{ActionAvailability, with_next_step};
 use crate::resource_kind::ResourceKind;
-use crate::revision_diff::{RevisionDiffRequest, RevisionSide, diff_request};
+use crate::revision_diff::{RevisionDiffRequest, RevisionSide, diff_request, revision_tooltip};
 use crate::secret_rows::{MASK, MaskedKeyRow, certificate_rows, secret_data_rows};
 use crate::status_tone::{
     StatusLabel, StatusTone, pod_status_label, readiness_text, tone_color, toned_text,
@@ -402,6 +403,11 @@ fn revision_element(
         Some(_) => format!("{} ago", format_age(set.created_at, now)),
         None => "—".to_owned(),
     };
+    let tooltip = revision_tooltip(
+        set.created_at,
+        set.change_cause.as_deref(),
+        &jiff::tz::TimeZone::system(),
+    );
     let current_tone = if set.ready >= set.desired {
         StatusTone::Ok
     } else {
@@ -423,12 +429,21 @@ fn revision_element(
                 open_link(shell, target.clone(), window, cx);
             }
         }))
+        .when_some(tooltip, |row, text| {
+            row.tooltip(move |window, cx| Tooltip::new(text.clone()).build(window, cx))
+        })
         .child(
-            div()
+            v_flex()
                 .flex_1()
                 .min_w_0()
-                .flex()
-                .child(link_name(ix, &title, cx)),
+                .child(div().flex().child(link_name(ix, &title, cx)))
+                .children(set.change_cause.as_ref().map(|cause| {
+                    div()
+                        .truncate()
+                        .text_xs()
+                        .text_color(theme.muted_foreground)
+                        .child(cause.clone())
+                })),
         )
         // Fixed slots keep the columns aligned from row to row: the current row leaves the
         // Roll back slot empty.

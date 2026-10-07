@@ -16,6 +16,7 @@ use gpui_kit::{
     prelude::FluentBuilder as _, px,
 };
 
+use crate::age::format_local_time;
 use crate::app_shell::AppShell;
 use crate::cluster_runtime::ClusterRuntime;
 use crate::cluster_session::error_text;
@@ -43,12 +44,15 @@ pub(crate) struct RevisionSide {
     pub(crate) is_current: bool,
     /// When the ReplicaSet was created; the history list shows its age.
     pub(crate) created_at: Option<jiff::Timestamp>,
+    /// Its `kubernetes.io/change-cause`: why the revision was made.
+    pub(crate) change_cause: Option<String>,
 }
 
 impl RevisionSide {
     pub(crate) fn of(replica_set: &ReplicaSetSummary, is_current: bool) -> Self {
         Self {
             created_at: replica_set.created_at,
+            change_cause: replica_set.change_cause.clone(),
             replica_set: replica_set.name.clone(),
             revision: replica_set
                 .revision
@@ -76,6 +80,11 @@ impl RevisionSide {
         title
     }
 
+    /// The hover text of the revision: the whole cause, then the absolute creation time.
+    pub(crate) fn tooltip(&self, zone: &jiff::tz::TimeZone) -> Option<String> {
+        revision_tooltip(self.created_at, self.change_cause.as_deref(), zone)
+    }
+
     /// The title, with `(current)` after the side the Deployment runs.
     fn label(&self) -> String {
         let mut label = self.title();
@@ -101,6 +110,24 @@ impl RevisionSide {
             || self.replica_set.clone(),
             |number| format!("rev {number}"),
         )
+    }
+}
+
+/// The hover text of a revision row: its change cause (a row cuts a long one), then `Created` with
+/// the absolute time in `zone`. `None` when the row knows neither. Pure.
+pub(crate) fn revision_tooltip(
+    created_at: Option<jiff::Timestamp>,
+    change_cause: Option<&str>,
+    zone: &jiff::tz::TimeZone,
+) -> Option<String> {
+    let created = created_at.map(|time| format!("Created {}", format_local_time(time, zone)));
+    match (change_cause, created) {
+        (Some(cause), Some(created)) => Some(format!(
+            "{cause}
+{created}"
+        )),
+        (Some(cause), None) => Some(cause.to_owned()),
+        (None, created) => created,
     }
 }
 
@@ -197,6 +224,19 @@ impl RevisionDiffRequest {
     /// `rev 12 · v2.1 → rev 14 · v2.3 (current)`.
     pub(crate) fn subtitle(&self) -> String {
         format!("{} → {}", self.older.label(), self.newer.label())
+    }
+
+    /// One line per side that has a change cause: `rev 12: release test`. Empty when neither has one.
+    pub(crate) fn cause_lines(&self) -> Vec<String> {
+        [&self.older, &self.newer]
+            .into_iter()
+            .filter_map(|side| {
+                let number = side
+                    .revision
+                    .map_or_else(|| "—".to_owned(), |number| number.to_string());
+                Some(format!("rev {number}: {}", side.change_cause.as_ref()?))
+            })
+            .collect()
     }
 
     /// `Revision diff · deployment/api`.
@@ -484,13 +524,18 @@ impl RevisionDiffView {
             .pb_2()
             .items_center()
             .child(
-                div()
+                v_flex()
                     .flex_1()
                     .min_w_0()
-                    .truncate()
                     .text_xs()
                     .text_color(theme.muted_foreground)
-                    .child(self.request.subtitle()),
+                    .child(div().truncate().child(self.request.subtitle()))
+                    .children(
+                        self.request
+                            .cause_lines()
+                            .into_iter()
+                            .map(|line| div().truncate().child(line)),
+                    ),
             )
             .when(has_toggle, |bar| {
                 bar.child(

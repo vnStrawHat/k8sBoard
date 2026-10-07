@@ -75,3 +75,7 @@ pub(crate) struct RevisionDiffView { request: RevisionDiffRequest, connection: C
 `--screen revision-diff`: a fixture `RevisionDiffView` built `Ready` from two fixed template texts (no connection call), in the dialog over the Deployments screen.
 
 The footer also holds `Roll back to rev N…` (see 0041 revision-history.md, "Roll back where the comparison happens"). `diff_row_element` wraps long lines under the gutter and tints the changed span of a 1:1 pair (0031 editor-view.md).
+
+## Change causes in the header (UX round 3, O2)
+
+Under the `rev A · tag → rev B · tag (current)` line the toolbar lists one muted line per side that has a change cause: `rev 2: release test` (`RevisionDiffRequest::cause_lines`). A pair where neither side has one shows nothing extra.

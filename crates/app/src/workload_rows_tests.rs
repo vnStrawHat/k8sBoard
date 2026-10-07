@@ -304,6 +304,7 @@ fn replica_set() -> ReplicaSetSummary {
             name: "api".to_owned(),
         }),
         revision: Some("3".to_owned()),
+        change_cause: None,
         selector: Vec::new(),
         containers: Vec::new(),
     }

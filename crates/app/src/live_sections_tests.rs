@@ -181,6 +181,7 @@ fn replica_set(
         ready: 3,
         owner,
         revision: revision.map(str::to_owned),
+        change_cause: None,
         selector: Vec::new(),
         containers: vec![TemplateContainer {
             name: "web".to_owned(),

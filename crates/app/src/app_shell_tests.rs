@@ -1495,6 +1495,7 @@ fn revision_request() -> crate::revision_diff::RevisionDiffRequest {
             revision: Some(revision),
             tag: None,
             is_current,
+            change_cause: None,
             created_at: None,
         };
     crate::revision_diff::diff_request(

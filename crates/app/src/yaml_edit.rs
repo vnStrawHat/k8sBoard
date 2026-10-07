@@ -1154,6 +1154,7 @@ fn history_fixture(
             revision: Some(revision),
             tag: Some(tag.to_owned()),
             is_current,
+            change_cause: (revision != 36).then(|| format!("release {tag}")),
             created_at: jiff::Timestamp::now()
                 .checked_sub(jiff::SignedDuration::from_hours(hours))
                 .ok(),

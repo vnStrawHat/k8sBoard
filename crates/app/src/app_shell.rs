@@ -1988,6 +1988,7 @@ impl AppShell {
             tag: Some(tag.to_owned()),
             is_current,
             created_at: None,
+            change_cause: None,
         };
         let request = diff_request(
             ResourceKey::Kind {

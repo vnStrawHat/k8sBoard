@@ -11,6 +11,9 @@ use crate::pod_status::non_negative;
 use crate::selector::Selector;
 
 const REVISION_ANNOTATION: &str = "deployment.kubernetes.io/revision";
+/// The annotation `kubectl rollout history` prints as the CHANGE-CAUSE of a revision; the
+/// Deployment's copy is what its next ReplicaSet inherits.
+pub(crate) const CHANGE_CAUSE_ANNOTATION: &str = "kubernetes.io/change-cause";
 
 /// The owner reference with `controller == true`.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -153,6 +156,18 @@ pub(crate) fn revision(metadata: &ObjectMeta) -> Option<String> {
         .as_ref()?
         .get(REVISION_ANNOTATION)
         .cloned()
+}
+
+/// The change cause of a Deployment or a ReplicaSet, when it has a non-empty one. Read here once, so
+/// no other annotation is ever kept.
+pub(crate) fn change_cause(metadata: &ObjectMeta) -> Option<String> {
+    non_empty(
+        metadata
+            .annotations
+            .as_ref()?
+            .get(CHANGE_CAUSE_ANNOTATION)
+            .map(String::as_str),
+    )
 }
 
 pub(crate) fn non_empty(text: Option<&str>) -> Option<String> {

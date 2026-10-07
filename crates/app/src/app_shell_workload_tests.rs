@@ -1813,6 +1813,7 @@ fn open_revision_dialog(t: &Clusters, cx: &mut TestAppContext) {
         revision: Some(revision),
         tag: Some(tag.to_owned()),
         is_current,
+        change_cause: None,
         created_at: None,
     };
     let request = diff_request(

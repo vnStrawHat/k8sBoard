@@ -18,6 +18,7 @@ fn side(replica_set: &str, revision: Option<u64>, is_current: bool) -> RevisionS
         tag: Some("v1".to_owned()),
         is_current,
         created_at: None,
+        change_cause: None,
     }
 }
 
@@ -32,6 +33,7 @@ fn replica_set(revision: Option<&str>, image: &str) -> ReplicaSetSummary {
         ready: 1,
         owner: None,
         revision: revision.map(str::to_owned),
+        change_cause: None,
         selector: Vec::new(),
         containers: vec![TemplateContainer {
             name: "api".to_owned(),
@@ -94,6 +96,7 @@ fn subtitle_names_revisions_and_tags() {
         tag: None,
         is_current: false,
         created_at: None,
+        change_cause: None,
     };
     assert_eq!(bare.label(), "rev —");
 }
@@ -242,4 +245,62 @@ fn roll_back_has_no_target_without_exactly_one_current_side() {
 #[test]
 fn the_current_revision_has_no_roll_back_target() {
     assert_eq!(side("api-new", Some(38), true).roll_back_target(), None);
+}
+
+fn with_cause(mut set: ReplicaSetSummary, cause: Option<&str>) -> ReplicaSetSummary {
+    set.change_cause = cause.map(str::to_owned);
+    set
+}
+
+#[test]
+fn a_side_keeps_the_change_cause_of_its_replica_set() {
+    let set = with_cause(replica_set(Some("7"), "api:v1"), Some("release test"));
+    assert_eq!(
+        RevisionSide::of(&set, false).change_cause.as_deref(),
+        Some("release test")
+    );
+    assert_eq!(
+        RevisionSide::of(&replica_set(Some("7"), "api:v1"), false).change_cause,
+        None
+    );
+}
+
+#[test]
+fn the_tooltip_has_the_whole_cause_then_the_absolute_creation_time() {
+    let created: jiff::Timestamp = "2026-10-06T10:26:00Z".parse().expect("a timestamp");
+    let zone = jiff::tz::TimeZone::fixed(jiff::tz::offset(7));
+    assert_eq!(
+        revision_tooltip(Some(created), Some("release test"), &zone).as_deref(),
+        Some("release test\nCreated 2026-10-06 17:26 +07")
+    );
+    assert_eq!(
+        revision_tooltip(Some(created), None, &zone).as_deref(),
+        Some("Created 2026-10-06 17:26 +07")
+    );
+    assert_eq!(
+        revision_tooltip(None, Some("release test"), &zone).as_deref(),
+        Some("release test")
+    );
+    assert_eq!(revision_tooltip(None, None, &zone), None);
+}
+
+#[test]
+fn the_diff_header_names_the_cause_of_each_side_that_has_one() {
+    let mut older = side("api-old", Some(37), false);
+    let mut newer = side("api-new", Some(38), true);
+    older.change_cause = Some("hotfix".to_owned());
+    let request = diff_request(deployment_key(), older.clone(), newer.clone());
+    assert_eq!(request.cause_lines(), ["rev 37: hotfix"]);
+    newer.change_cause = Some("release test".to_owned());
+    let request = diff_request(deployment_key(), older, newer);
+    assert_eq!(
+        request.cause_lines(),
+        ["rev 37: hotfix", "rev 38: release test"]
+    );
+    let plain = diff_request(
+        deployment_key(),
+        side("api-a", Some(1), false),
+        side("api-b", Some(2), true),
+    );
+    assert!(plain.cause_lines().is_empty());
 }

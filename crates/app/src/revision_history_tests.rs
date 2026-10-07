@@ -225,6 +225,7 @@ fn detail_note_is_none_only_with_a_diff() {
         tag: None,
         is_current,
         created_at: None,
+        change_cause: None,
     };
     assert_eq!(detail_note(&[], None, false), Some("No revisions found"));
     assert_eq!(detail_note(&[side(false)], Some(0), true), None);
@@ -242,6 +243,7 @@ fn detail_note_is_neutral_without_revision_numbers() {
         tag: None,
         is_current: false,
         created_at: None,
+        change_cause: None,
     };
     assert_eq!(
         detail_note(&[side(None), side(None)], None, false),

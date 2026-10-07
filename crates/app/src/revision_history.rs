@@ -5,6 +5,7 @@
 
 use cluster::{ClusterConnection, ClusterError, ObjectRef, ReplicaSetSummary};
 use gpui_kit::component::button::ButtonVariants as _;
+use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{ActiveTheme as _, Sizable as _, h_flex, v_flex};
 use gpui_kit::{
     AnyElement, AppContext as _, Context, Entity, InteractiveElement as _, IntoElement,
@@ -173,6 +174,7 @@ impl RevisionHistory {
     fn render_list(&self, sides: &[RevisionSide], cx: &Context<Self>) -> AnyElement {
         let theme = cx.theme();
         let now = jiff::Timestamp::now();
+        let zone = jiff::tz::TimeZone::system();
         let (active, hover) = (theme.list_active, theme.list_hover);
         v_flex()
             .id("history-list")
@@ -186,6 +188,7 @@ impl RevisionHistory {
             .overflow_y_scroll()
             .children(sides.iter().enumerate().map(|(index, side)| {
                 let is_selected = self.selected == Some(index);
+                let tooltip = side.tooltip(&zone);
                 h_flex()
                     .id(("history-rev", index))
                     .gap_2()
@@ -198,6 +201,9 @@ impl RevisionHistory {
                     .when(is_selected, |row| row.bg(active))
                     .hover(move |style| style.bg(hover))
                     .on_click(cx.listener(move |history, _, _, cx| history.select(index, cx)))
+                    .when_some(tooltip, |row, text| {
+                        row.tooltip(move |window, cx| Tooltip::new(text.clone()).build(window, cx))
+                    })
                     .child(
                         v_flex()
                             .flex_1()
@@ -208,6 +214,13 @@ impl RevisionHistory {
                                     .font_family(theme.mono_font_family.clone())
                                     .child(side.title()),
                             )
+                            .children(side.change_cause.as_ref().map(|cause| {
+                                div()
+                                    .truncate()
+                                    .text_xs()
+                                    .text_color(theme.muted_foreground)
+                                    .child(cause.clone())
+                            }))
                             .child(div().text_xs().text_color(theme.muted_foreground).child(
                                 match side.created_at {
                                     Some(_) => {

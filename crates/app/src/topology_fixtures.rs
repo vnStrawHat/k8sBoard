@@ -261,6 +261,7 @@ pub(crate) fn replica_set(
         ready: current,
         owner: owner.map(|owner| controller("Deployment", owner)),
         revision: Some("3".to_owned()),
+        change_cause: None,
         selector: Vec::new(),
         containers: Vec::new(),
     }
