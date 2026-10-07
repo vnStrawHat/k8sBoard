@@ -268,6 +268,7 @@ fn write_entry_uses_the_intent_cluster() {
         request,
         risk: ActionRisk::Change,
         warnings: Vec::new(),
+        change_lines: Vec::new(),
     };
     let access = AccessState::Unknown;
     // The guard is the intent's cluster, whatever else is viewed.

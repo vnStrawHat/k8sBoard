@@ -26,10 +26,15 @@ use crate::resource_edits::{
 use crate::status_tone::{StatusTone, tone_color};
 use crate::table_selection::ClusterObject;
 use crate::workload_actions::{
-    ReplicasInput, ScaleTarget, parse_replicas, replicas_input, scale_warnings,
+    ImageInput, ImageTarget, ReplicasInput, ScaleTarget, image_input, image_warnings,
+    parse_replicas, replicas_input, scale_warnings, tag_range,
 };
 
 const POPOVER_WIDTH: f32 = 320.;
+/// Wide enough for a registry host, a repository path, and a tag.
+const IMAGE_POPOVER_WIDTH: f32 = 440.;
+/// What the Set image popover says about the pods, whatever the container.
+const IMAGE_STATE_TEXT: &str = "The pods are replaced with the new image";
 
 /// What the popover asks for, with the inputs it owns.
 pub(crate) enum ValueForm {
@@ -42,6 +47,13 @@ pub(crate) enum ValueForm {
     },
     Storage {
         input: Entity<InputState>,
+    },
+    /// Set image: the container picked (an index into the target's containers), its image, and the
+    /// change cause.
+    Image {
+        selected: usize,
+        image: Entity<InputState>,
+        cause: Entity<InputState>,
     },
 }
 
@@ -69,6 +81,11 @@ pub(crate) enum ValueTargets {
     },
     /// The ticked claims.
     ClaimTicked { count: usize },
+    /// The cursor workload that takes Set image, in its own cluster.
+    ImageOne {
+        object: ClusterObject,
+        target: Box<ImageTarget>,
+    },
 }
 
 pub(crate) struct ValuePopover {
@@ -180,6 +197,67 @@ impl ValuePopover {
         Self::open_storage(shell, targets, "", window, cx)
     }
 
+    /// A Set image popover for one workload: the first container, its image with the tag selected.
+    pub(crate) fn image_one(
+        shell: WeakEntity<AppShell>,
+        object: ClusterObject,
+        target: ImageTarget,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let initial = target.containers[0].image.clone();
+        let image = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder("registry/name:tag")
+                .default_value(initial.clone())
+        });
+        let cause = cx.new(|cx| InputState::new(window, cx).placeholder("Change cause (optional)"));
+        let subscriptions = Self::listen(&[&image, &cause], window, cx);
+        let mut popover = Self {
+            shell,
+            form: ValueForm::Image {
+                selected: 0,
+                image,
+                cause,
+            },
+            targets: ValueTargets::ImageOne {
+                object,
+                target: Box::new(target),
+            },
+            _subscriptions: subscriptions,
+        };
+        popover.show_image(&initial, window, cx);
+        popover
+    }
+
+    /// Puts `text` in the image field with its tag selected, and focuses the field.
+    fn show_image(&mut self, text: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let ValueForm::Image { image, .. } = &self.form else {
+            return;
+        };
+        image.update(cx, |input, cx| {
+            input.set_value(text.to_owned(), window, cx);
+            input.set_selected_range(tag_range(text), cx);
+            input.focus(window, cx);
+        });
+    }
+
+    /// The container buttons: another container shows its own image.
+    fn pick_container(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let ValueTargets::ImageOne { target, .. } = &self.targets else {
+            return;
+        };
+        let Some(container) = target.containers.get(index) else {
+            return;
+        };
+        let text = container.image.clone();
+        if let ValueForm::Image { selected, .. } = &mut self.form {
+            *selected = index;
+        }
+        self.show_image(&text, window, cx);
+        cx.notify();
+    }
+
     fn open_replicas(
         shell: WeakEntity<AppShell>,
         targets: ValueTargets,
@@ -268,6 +346,38 @@ impl ValuePopover {
             ValueForm::Replicas { input } => input.read(cx).value(),
             ValueForm::ReplicaRange { min, .. } => min.read(cx).value(),
             ValueForm::Storage { input } => input.read(cx).value(),
+            ValueForm::Image { image, .. } => image.read(cx).value(),
+        }
+    }
+
+    /// The workload of a Set image popover as it is now; the row the form opened on stands in when
+    /// it is no longer listed, and the submit refuses that case with a notice.
+    fn current_image_target(&self, cx: &App) -> Option<ImageTarget> {
+        let ValueTargets::ImageOne { object, target } = &self.targets else {
+            return None;
+        };
+        let current = self
+            .shell
+            .upgrade()
+            .and_then(|shell| shell.read(cx).image_target_of(object, cx));
+        Some(current.unwrap_or_else(|| (**target).clone()))
+    }
+
+    /// The container the Set image popover has picked, with the image it has now.
+    fn picked_container(&self, cx: &App) -> Option<(String, String)> {
+        let ValueForm::Image { selected, .. } = &self.form else {
+            return None;
+        };
+        let target = self.current_image_target(cx)?;
+        let container = target.containers.get(*selected)?;
+        Some((container.name.clone(), container.image.clone()))
+    }
+
+    /// What the Set image button would do with the text now.
+    fn image_choice(&self, cx: &App) -> ImageInput {
+        match self.picked_container(cx) {
+            Some((_, current)) => image_input(&self.typed(cx), &current),
+            None => ImageInput::Invalid,
         }
     }
 
@@ -354,6 +464,7 @@ impl ValuePopover {
                 matches!(self.range_choice(cx), RangeInput::Set { .. })
             }
             ValueForm::Storage { .. } => matches!(self.storage_choice(cx), StorageInput::Set(_)),
+            ValueForm::Image { .. } => matches!(self.image_choice(cx), ImageInput::Set(_)),
         }
     }
 
@@ -368,6 +479,9 @@ impl ValuePopover {
             ValueTargets::HpaTicked { count } => format!("Edit min / max of {count} hpas"),
             ValueTargets::ClaimOne { claim, .. } => format!("Expand claim {}", claim.name),
             ValueTargets::ClaimTicked { count } => format!("Expand {count} claims"),
+            ValueTargets::ImageOne { target, .. } => {
+                format!("Set image of {}", target.subject_text())
+            }
         }
     }
 
@@ -389,6 +503,7 @@ impl ValuePopover {
                 .map(|claim| claim_state_text(&claim))
                 .unwrap_or_default(),
             ValueTargets::ClaimTicked { count } => format!("One size for the {count} ticked rows"),
+            ValueTargets::ImageOne { .. } => IMAGE_STATE_TEXT.to_owned(),
         }
     }
 
@@ -398,6 +513,7 @@ impl ValuePopover {
             ValueForm::Replicas { .. } => "Scale",
             ValueForm::ReplicaRange { .. } => "Set limits",
             ValueForm::Storage { .. } => "Expand",
+            ValueForm::Image { .. } => "Set image",
         }
     }
 
@@ -419,7 +535,8 @@ impl ValuePopover {
                     ValueTargets::HpaOne { .. }
                     | ValueTargets::HpaTicked { .. }
                     | ValueTargets::ClaimOne { .. }
-                    | ValueTargets::ClaimTicked { .. } => {}
+                    | ValueTargets::ClaimTicked { .. }
+                    | ValueTargets::ImageOne { .. } => {}
                 });
             }
             ValueForm::ReplicaRange { .. } => {
@@ -436,7 +553,8 @@ impl ValuePopover {
                     ValueTargets::One { .. }
                     | ValueTargets::Ticked { .. }
                     | ValueTargets::ClaimOne { .. }
-                    | ValueTargets::ClaimTicked { .. } => {}
+                    | ValueTargets::ClaimTicked { .. }
+                    | ValueTargets::ImageOne { .. } => {}
                 });
             }
             ValueForm::Storage { .. } => {
@@ -453,7 +571,22 @@ impl ValuePopover {
                     ValueTargets::One { .. }
                     | ValueTargets::Ticked { .. }
                     | ValueTargets::HpaOne { .. }
-                    | ValueTargets::HpaTicked { .. } => {}
+                    | ValueTargets::HpaTicked { .. }
+                    | ValueTargets::ImageOne { .. } => {}
+                });
+            }
+            ValueForm::Image { cause, .. } => {
+                let ImageInput::Set(image) = self.image_choice(cx) else {
+                    return;
+                };
+                let Some((container, _)) = self.picked_container(cx) else {
+                    return;
+                };
+                let cause = cause.read(cx).value();
+                let _ = self.shell.update(cx, |shell, cx| {
+                    if let ValueTargets::ImageOne { object, .. } = &self.targets {
+                        shell.submit_set_image(object, &container, &image, &cause, window, cx);
+                    }
                 });
             }
         }
@@ -481,6 +614,10 @@ impl ValuePopover {
                 (Some(claim), StorageInput::Set(_)) => expand_warnings(&claim),
                 _ => Vec::new(),
             },
+            ValueForm::Image { .. } => self
+                .current_image_target(cx)
+                .map(|target| image_warnings(&target))
+                .unwrap_or_default(),
         }
     }
 
@@ -489,6 +626,12 @@ impl ValuePopover {
     fn field_error(&self, cx: &App) -> Option<String> {
         match &self.form {
             ValueForm::Replicas { .. } => None,
+            ValueForm::Image { .. } => match self.image_choice(cx) {
+                ImageInput::Invalid if !self.typed(cx).trim().is_empty() => {
+                    Some("An image has no spaces".to_owned())
+                }
+                ImageInput::Invalid | ImageInput::Unchanged | ImageInput::Set(_) => None,
+            },
             ValueForm::ReplicaRange { .. } => match self.range_choice(cx) {
                 RangeInput::Refused(reason) => Some(reason.to_owned()),
                 RangeInput::Incomplete | RangeInput::Unchanged | RangeInput::Set { .. } => None,
@@ -500,9 +643,68 @@ impl ValuePopover {
         }
     }
 
-    fn render_fields(&self) -> AnyElement {
+    /// The container buttons of a Set image popover: one per container of the template, shown only
+    /// when there is a choice.
+    fn render_container_picker(
+        &self,
+        selected: usize,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        let ValueTargets::ImageOne { target, .. } = &self.targets else {
+            return None;
+        };
+        if target.containers.len() < 2 {
+            return None;
+        }
+        let buttons = target
+            .containers
+            .iter()
+            .enumerate()
+            .map(|(index, container)| {
+                let button = Button::new(("image-container", index))
+                    .label(container.name.clone())
+                    .small()
+                    .on_click(cx.listener(move |popover, _, window, cx| {
+                        popover.pick_container(index, window, cx);
+                    }));
+                if index == selected {
+                    button.primary()
+                } else {
+                    button.outline()
+                }
+            });
+        Some(
+            v_flex()
+                .gap_1()
+                .child(div().text_xs().child("Container"))
+                .child(h_flex().gap_1().flex_wrap().children(buttons))
+                .into_any_element(),
+        )
+    }
+
+    fn render_fields(&self, cx: &mut Context<Self>) -> AnyElement {
         match &self.form {
             ValueForm::Replicas { input } => NumberInput::new(input).into_any_element(),
+            ValueForm::Image {
+                selected,
+                image,
+                cause,
+            } => v_flex()
+                .gap_2()
+                .children(self.render_container_picker(*selected, cx))
+                .child(
+                    v_flex()
+                        .gap_1()
+                        .child(div().text_xs().child("Image"))
+                        .child(Input::new(image)),
+                )
+                .child(
+                    v_flex()
+                        .gap_1()
+                        .child(div().text_xs().child("Change cause"))
+                        .child(Input::new(cause)),
+                )
+                .into_any_element(),
             ValueForm::Storage { input } => Input::new(input).into_any_element(),
             ValueForm::ReplicaRange { min, max } => h_flex()
                 .gap_2()
@@ -528,8 +730,8 @@ impl ValuePopover {
 impl Render for ValuePopover {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
-        let (muted, warning, danger) = (
-            theme.muted_foreground,
+        let (muted, border, popover) = (theme.muted_foreground, theme.border, theme.popover);
+        let (warning, danger) = (
             tone_color(StatusTone::Warn, cx),
             tone_color(StatusTone::Bad, cx),
         );
@@ -537,19 +739,23 @@ impl Render for ValuePopover {
         let state = self.state_text(cx);
         let can_submit = self.is_submittable(cx);
         let error = self.field_error(cx);
+        let fields = self.render_fields(cx);
         v_flex()
             .key_context("ValuePopover")
             .on_action(cx.listener(|popover, _: &CancelValuePopover, _, cx| popover.cancel(cx)))
-            .w(px(POPOVER_WIDTH))
+            .w(px(match self.form {
+                ValueForm::Image { .. } => IMAGE_POPOVER_WIDTH,
+                _ => POPOVER_WIDTH,
+            }))
             .gap_2()
             .p_3()
             .rounded_lg()
             .border_1()
-            .border_color(theme.border)
-            .bg(theme.popover)
+            .border_color(border)
+            .bg(popover)
             .shadow_md()
             .child(div().text_sm().font_semibold().truncate().child(title))
-            .child(self.render_fields())
+            .child(fields)
             .children(error.map(|reason| div().text_xs().text_color(danger).child(reason)))
             .child(div().text_xs().text_color(muted).child(state))
             .children(
@@ -590,6 +796,41 @@ impl ValuePopover {
             return;
         };
         input.update(cx, |input, cx| input.set_value(text.to_owned(), window, cx));
+    }
+
+    /// Types into the image field of a Set image popover.
+    pub(crate) fn type_image(&mut self, text: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let ValueForm::Image { image, .. } = &self.form else {
+            return;
+        };
+        image.update(cx, |input, cx| input.set_value(text.to_owned(), window, cx));
+    }
+
+    /// Types into the change cause field of a Set image popover.
+    pub(crate) fn type_cause(&mut self, text: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let ValueForm::Image { cause, .. } = &self.form else {
+            return;
+        };
+        cause.update(cx, |input, cx| input.set_value(text.to_owned(), window, cx));
+    }
+
+    /// The container button at `index` of a Set image popover.
+    pub(crate) fn press_container(
+        &mut self,
+        index: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.pick_container(index, window, cx);
+    }
+
+    /// The selected bytes of the image field: the tag a Set image popover opens with.
+    pub(crate) fn selected_image_text(&self, cx: &App) -> Option<String> {
+        let ValueForm::Image { image, .. } = &self.form else {
+            return None;
+        };
+        let input = image.read(cx);
+        Some(input.value()[input.selected_range()].to_string())
     }
 
     /// Types into the size field of an Expand popover.

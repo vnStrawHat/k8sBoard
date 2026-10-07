@@ -1065,3 +1065,146 @@ async fn the_raw_query_carries_no_other_parameter() {
         "dryRun=All&fieldManager=k8sboard"
     );
 }
+
+fn set_image(kind: ObjectKind, change_cause: Option<&str>) -> WriteRequest {
+    request(
+        kind,
+        "api",
+        WriteOperation::SetContainerImage {
+            container: "web".to_owned(),
+            image: "nginx:1.26-alpine".to_owned(),
+            previous_image: "nginx:1.27-alpine".to_owned(),
+            change_cause: change_cause.map(str::to_owned),
+        },
+    )
+}
+
+#[tokio::test]
+async fn set_image_sends_a_strategic_patch_to_each_workload_kind() {
+    for (kind, path) in [
+        (
+            ObjectKind::Deployment,
+            "/apis/apps/v1/namespaces/payments/deployments/api",
+        ),
+        (
+            ObjectKind::StatefulSet,
+            "/apis/apps/v1/namespaces/payments/statefulsets/api",
+        ),
+        (
+            ObjectKind::DaemonSet,
+            "/apis/apps/v1/namespaces/payments/daemonsets/api",
+        ),
+    ] {
+        let requests = written(&set_image(kind, Some("release test")), WriteMode::Commit).await;
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].method, "PATCH");
+        assert_eq!(requests[0].path, path);
+        assert_eq!(
+            requests[0].content_type.as_deref(),
+            Some("application/strategic-merge-patch+json")
+        );
+        let body = body_of(&requests[0]);
+        assert_eq!(
+            body["spec"]["template"]["spec"]["containers"],
+            json!([{"name": "web", "image": "nginx:1.26-alpine"}])
+        );
+        assert_eq!(
+            body["metadata"]["annotations"]["kubernetes.io/change-cause"],
+            "release test"
+        );
+        // The previous image is for the summary only.
+        assert!(!requests[0].body.contains("1.27"));
+    }
+}
+
+#[tokio::test]
+async fn set_image_dry_run_asks_the_server_to_check_only() {
+    let requests = written(&set_image(ObjectKind::Deployment, None), WriteMode::DryRun).await;
+    assert_eq!(
+        query_pairs(&requests[0]),
+        vec!["dryRun=All", "fieldManager=k8sboard"]
+    );
+}
+
+#[test]
+fn set_image_fits_the_three_pod_template_kinds_only() {
+    for kind in [
+        ObjectKind::Deployment,
+        ObjectKind::StatefulSet,
+        ObjectKind::DaemonSet,
+    ] {
+        assert!(WriteRequest::new(object(kind, "api"), set_image_operation()).is_some());
+    }
+    for kind in [ObjectKind::CronJob, ObjectKind::Job, ObjectKind::Pod] {
+        assert!(WriteRequest::new(object(kind, "api"), set_image_operation()).is_none());
+    }
+}
+
+fn set_image_operation() -> WriteOperation {
+    WriteOperation::SetContainerImage {
+        container: "web".to_owned(),
+        image: "nginx:1.26-alpine".to_owned(),
+        previous_image: String::new(),
+        change_cause: None,
+    }
+}
+
+#[test]
+fn set_image_refuses_a_container_or_image_the_server_would_refuse() {
+    let refused = |container: &str, image: &str, cause: Option<&str>| {
+        WriteRequest::new(
+            object(ObjectKind::Deployment, "api"),
+            WriteOperation::SetContainerImage {
+                container: container.to_owned(),
+                image: image.to_owned(),
+                previous_image: String::new(),
+                change_cause: cause.map(str::to_owned),
+            },
+        )
+        .is_none()
+    };
+    assert!(!refused("web", "nginx:1", None));
+    assert!(refused("Web", "nginx:1", None));
+    assert!(refused("", "nginx:1", None));
+    assert!(refused("web", "", None));
+    assert!(refused("web", "nginx 1", None));
+    assert!(refused("web", "nginx:1", Some("a\nb")));
+}
+
+#[test]
+fn set_image_stores_the_cause_trimmed_and_an_empty_one_as_none() {
+    let cause_of = |text: &str| match set_image(ObjectKind::Deployment, Some(text)).operation() {
+        WriteOperation::SetContainerImage { change_cause, .. } => change_cause.clone(),
+        _ => unreachable!("built as a Set image"),
+    };
+    assert_eq!(cause_of("  release test "), Some("release test".to_owned()));
+    assert_eq!(cause_of("   "), None);
+}
+
+#[test]
+fn set_image_summary_names_the_container_path_and_the_cause() {
+    let fields = set_image(ObjectKind::Deployment, Some("release test")).changed_fields();
+    let listed: Vec<_> = fields
+        .iter()
+        .map(|field| (field.path.to_string(), field.value.clone()))
+        .collect();
+    assert_eq!(
+        listed,
+        vec![
+            (
+                "spec.template.spec.containers[web].image".to_owned(),
+                Some("nginx:1.26-alpine".to_owned())
+            ),
+            (
+                "metadata.annotations[kubernetes.io/change-cause]".to_owned(),
+                Some("release test".to_owned())
+            ),
+        ]
+    );
+    assert_eq!(
+        set_image(ObjectKind::Deployment, None)
+            .changed_fields()
+            .len(),
+        1
+    );
+}

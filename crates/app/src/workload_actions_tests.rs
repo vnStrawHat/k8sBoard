@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use cluster::{
     CronJobSummary, CronSchedule, DaemonSetSummary, DeploymentSummary, JobStatus, JobSummary,
-    ReplicaSetSummary, StatefulSetSummary, WriteOperation,
+    ReplicaSetSummary, StatefulSetSummary, TemplateContainer, WriteOperation,
 };
 
 use super::*;
@@ -1175,4 +1175,153 @@ fn resume_without_a_running_replica_set_or_an_image_change_stays_general() {
         pending_changes_note(&paused, Some(&running_and_old("api:2.14.0"))),
         "Rolls out the pod template changes made while paused; no image changed"
     );
+}
+
+// ---- Set image ----
+
+fn container(name: &str, image: &str) -> TemplateContainer {
+    TemplateContainer {
+        name: name.to_owned(),
+        image: image.to_owned(),
+        ports: Vec::new(),
+    }
+}
+
+fn web_deployment(containers: Vec<TemplateContainer>) -> KindObject {
+    let mut summary = deployment("web");
+    summary.containers = containers;
+    KindObject::Deployment(summary)
+}
+
+fn set_image_to(target: &ImageTarget, container: &str, image: &str, cause: &str) -> WriteIntent {
+    let cluster = test_cluster();
+    let scope = WorkloadScope {
+        cluster: &cluster,
+        cluster_name: "stg-b",
+    };
+    set_image_intent(&scope, target, container, image, cause).expect("an intent")
+}
+
+#[test]
+fn the_tag_is_what_the_popover_selects() {
+    let selected = |image: &str| image[tag_range(image)].to_owned();
+    assert_eq!(selected("nginx:1.27-alpine"), "1.27-alpine");
+    assert_eq!(selected("repo.example.com:5000/library/nginx:1.27"), "1.27");
+    assert_eq!(selected("nginx@sha256:abc123"), "sha256:abc123");
+    // Without a tag the cursor lands at the end, where a tag is typed.
+    assert_eq!(selected("repo.example.com:5000/nginx"), "");
+    assert_eq!(tag_range("nginx"), 5..5);
+}
+
+#[test]
+fn an_image_is_unchanged_set_or_invalid() {
+    assert_eq!(image_input("nginx:1", "nginx:1"), ImageInput::Unchanged);
+    assert_eq!(image_input(" nginx:1 ", "nginx:1"), ImageInput::Unchanged);
+    assert_eq!(
+        image_input("nginx:2", "nginx:1"),
+        ImageInput::Set("nginx:2".to_owned())
+    );
+    assert_eq!(image_input("", "nginx:1"), ImageInput::Invalid);
+    assert_eq!(image_input("nginx 2", "nginx:1"), ImageInput::Invalid);
+}
+
+#[test]
+fn only_pod_template_workloads_with_a_container_take_set_image() {
+    let one = web_deployment(vec![container("web", "nginx:1")]);
+    assert!(ImageTarget::of(&one).is_some());
+    assert!(ImageTarget::of(&web_deployment(Vec::new())).is_none());
+    assert!(ImageTarget::of(&KindObject::Job(job("etl"))).is_none());
+}
+
+#[test]
+fn set_image_lists_the_old_and_the_new_image_and_the_cause() {
+    let object = web_deployment(vec![container("web", "nginx:1.27-alpine")]);
+    let target = ImageTarget::of(&object).expect("a target");
+    let intent = set_image_to(&target, "web", "nginx:1.26-alpine", " release test ");
+    assert_eq!(intent.label, "Set image of deployment web");
+    assert_eq!(intent.button, "Set image");
+    assert_eq!(intent.risk, ActionRisk::Change);
+    assert_eq!(
+        intent.action,
+        ResourceAction::SetImage(ObjectKind::Deployment)
+    );
+    assert_eq!(
+        intent.change_lines,
+        [
+            "image: nginx:1.27-alpine → nginx:1.26-alpine",
+            "change cause: release test"
+        ]
+    );
+}
+
+#[test]
+fn set_image_names_the_container_when_the_template_has_several() {
+    let object = web_deployment(vec![
+        container("web", "nginx:1"),
+        container("sidecar", "busybox:1"),
+    ]);
+    let target = ImageTarget::of(&object).expect("a target");
+    let intent = set_image_to(&target, "sidecar", "busybox:2", "");
+    assert_eq!(
+        intent.change_lines,
+        [
+            "image (sidecar): busybox:1 → busybox:2",
+            "change cause: none (an earlier one is cleared)"
+        ]
+    );
+}
+
+#[test]
+fn set_image_of_a_container_that_left_the_template_is_refused() {
+    let object = web_deployment(vec![container("web", "nginx:1")]);
+    let target = ImageTarget::of(&object).expect("a target");
+    let cluster = test_cluster();
+    let scope = WorkloadScope {
+        cluster: &cluster,
+        cluster_name: "stg-b",
+    };
+    assert!(set_image_intent(&scope, &target, "gone", "nginx:2", "").is_none());
+}
+
+#[test]
+fn set_image_warns_about_helm_and_a_paused_rollout() {
+    let mut summary = deployment("web");
+    summary.containers = vec![container("web", "nginx:1")];
+    summary.is_paused = true;
+    summary.labels = vec!["app.kubernetes.io/managed-by=Helm".to_owned()];
+    let target = ImageTarget::of(&KindObject::Deployment(summary)).expect("a target");
+    let intent = set_image_to(&target, "web", "nginx:2", "");
+    assert_eq!(
+        warnings(&intent),
+        [
+            "The rollout is paused: the pods change after Resume",
+            HELM_MANAGED_WARNING
+        ]
+    );
+}
+
+#[test]
+fn set_image_needs_the_patch_right_of_its_kind() {
+    for kind in [
+        ObjectKind::Deployment,
+        ObjectKind::StatefulSet,
+        ObjectKind::DaemonSet,
+    ] {
+        let object = match kind {
+            ObjectKind::Deployment => web_deployment(vec![container("web", "nginx:1")]),
+            ObjectKind::StatefulSet => {
+                let mut set = stateful_set("web", "RollingUpdate");
+                set.containers = vec![container("web", "nginx:1")];
+                KindObject::StatefulSet(set)
+            }
+            _ => {
+                let mut set = daemon_set("web", "RollingUpdate");
+                set.containers = vec![container("web", "nginx:1")];
+                KindObject::DaemonSet(set)
+            }
+        };
+        let target = ImageTarget::of(&object).expect("a target");
+        let intent = set_image_to(&target, "web", "nginx:2", "");
+        assert_eq!(intent.request.target().kind_name(), kind.name());
+    }
 }

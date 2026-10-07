@@ -584,6 +584,7 @@ fn unshipped_row_actions_are_never_enabled() {
                 | RowAction::CopyName
                 | RowAction::PortForward
                 | RowAction::RestartRollout
+                | RowAction::SetImage
                 | RowAction::PauseRollout
                 | RowAction::Scale
                 // Opens the drawer on the Revisions, which loads them.

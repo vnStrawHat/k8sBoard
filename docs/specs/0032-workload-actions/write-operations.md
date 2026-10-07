@@ -21,6 +21,7 @@ pub enum WriteOperation {                      // 0030 variant kept; Debug stays
     RestartRollout { restarted_at: jiff::Timestamp },         // Deployment, StatefulSet, DaemonSet
     SetRolloutPaused { paused: bool },                        // Deployment
     RollBackDeployment { replica_set: String, revision: u64 },// Deployment
+    SetContainerImage { container, image, previous_image, change_cause: Option<String> }, // Deployment, StatefulSet, DaemonSet (UX round 3, O3)
     SetCronJobSuspended { suspended: bool },                  // CronJob
     TriggerCronJob,                                           // CronJob
     RerunJob,                                                 // Job

@@ -51,8 +51,8 @@ use crate::settings::AppSettings;
 use crate::table_selection::{ClusterObject, ResourceKey};
 use crate::value_popover::ValuePopover;
 use crate::workload_actions::{
-    PAUSED_REASON, RevisionTarget, ScaleTarget, WorkloadScope, pending_changes_note,
-    roll_back_intent, row_block, scale_intent, state_label, workload_intent,
+    ImageTarget, PAUSED_REASON, RevisionTarget, ScaleTarget, WorkloadScope, pending_changes_note,
+    roll_back_intent, row_block, scale_intent, set_image_intent, state_label, workload_intent,
 };
 use crate::write_guard::{ActionRisk, ClusterGuard, DialogConfirm, WriteLock, confirm_step};
 
@@ -72,6 +72,9 @@ pub(crate) struct WriteIntent {
     pub(crate) risk: ActionRisk,
     /// Non-blocking context lines of the dialog.
     pub(crate) warnings: Vec<SharedString>,
+    /// What the dialog lists as the change, such as `image: a → b`. Empty lists the request's
+    /// changed fields, which hold paths and new values only.
+    pub(crate) change_lines: Vec<SharedString>,
 }
 
 impl WriteIntent {
@@ -662,11 +665,12 @@ fn success_notice(label: &str, created: Option<&str>, is_watched: bool) -> Strin
 const WATCHING_ROLLOUT: &str = "Watching rollout…";
 
 /// Whether the commit starts a Deployment rollout the app follows to its end (`rollout_watch`):
-/// only a Deployment reports the status it needs. A Restart, a Roll back, a Resume, a Scale, and
-/// an Edit YAML that changes the pod template or the replicas qualify.
+/// only a Deployment reports the status it needs. A Restart, a Set image, a Roll back, a Resume, a Scale,
+/// and an Edit YAML that changes the pod template or the replicas qualify.
 pub(crate) fn watches_rollout(intent: &WriteIntent) -> bool {
     match (intent.action, intent.request.operation()) {
         (ResourceAction::RestartRollout(ObjectKind::Deployment), _)
+        | (ResourceAction::SetImage(ObjectKind::Deployment), _)
         | (ResourceAction::RollBack, _)
         | (ResourceAction::Scale(ObjectKind::Deployment), _) => true,
         (ResourceAction::PauseRollout, WriteOperation::SetRolloutPaused { paused }) => !paused,
@@ -712,7 +716,7 @@ fn watched_workload(intent: &WriteIntent, is_watched: bool) -> Option<(String, S
 fn starts_rollout(action: ResourceAction) -> bool {
     matches!(
         action,
-        ResourceAction::RestartRollout(_) | ResourceAction::RollBack
+        ResourceAction::RestartRollout(_) | ResourceAction::SetImage(_) | ResourceAction::RollBack
     )
 }
 
@@ -787,6 +791,7 @@ pub(crate) fn cordon_intent(
         request,
         risk: action_risk(ResourceAction::Cordon),
         warnings: Vec::new(),
+        change_lines: Vec::new(),
     })
 }
 
@@ -1044,6 +1049,76 @@ impl AppShell {
         let (shell, subject) = (cx.weak_entity(), subject.clone());
         let popover = cx.new(|cx| ValuePopover::scale_one(shell, subject, target, window, cx));
         self.set_value_popover(popover, cx);
+    }
+
+    /// The row under `subject` as a Set image target: its containers with the images they have now.
+    pub(crate) fn image_target_of(&self, subject: &ClusterObject, cx: &App) -> Option<ImageTarget> {
+        let live = self.live_of(&subject.cluster, cx)?;
+        ImageTarget::of(&live.row_of(&subject.key)?.object)
+    }
+
+    /// Set image on the cursor row: the one popover that the menu, the key, and the palette share.
+    pub(crate) fn open_image_popover(
+        &mut self,
+        subject: &ClusterObject,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(target) = self.image_target_of(subject, cx) else {
+            let label = action_label(ResourceAction::SetImage(ObjectKind::Deployment));
+            notify(
+                window,
+                cx,
+                unavailable_text(label, "the object is no longer listed or has no container"),
+            );
+            return;
+        };
+        let (shell, subject) = (cx.weak_entity(), subject.clone());
+        let popover = cx.new(|cx| ValuePopover::image_one(shell, subject, target, window, cx));
+        self.set_value_popover(popover, cx);
+    }
+
+    /// Set image of the popover: the popover closes, and the change goes to the confirm dialog.
+    /// The row is read again, so the dialog names the image it has now.
+    pub(crate) fn submit_set_image(
+        &mut self,
+        subject: &ClusterObject,
+        container: &str,
+        image: &str,
+        change_cause: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.close_value_popover(cx);
+        let label = action_label(ResourceAction::SetImage(ObjectKind::Deployment));
+        let Some(target) = self.image_target_of(subject, cx) else {
+            let text = unavailable_text(label, "the object is no longer listed");
+            notify(window, cx, text);
+            return;
+        };
+        let intent = {
+            let Some(guard) = self.guard_for(&subject.cluster, cx) else {
+                notify(
+                    window,
+                    cx,
+                    unavailable_text(label, "the cluster is not open"),
+                );
+                return;
+            };
+            let scope = WorkloadScope {
+                cluster: &subject.cluster,
+                cluster_name: guard.display_name(),
+            };
+            set_image_intent(&scope, &target, container, image, change_cause)
+        };
+        match intent {
+            Some(intent) => self.start_write(intent, window, cx),
+            None => notify(
+                window,
+                cx,
+                unavailable_text(label, "the container or the image is not valid"),
+            ),
+        }
     }
 
     pub(crate) fn set_value_popover(

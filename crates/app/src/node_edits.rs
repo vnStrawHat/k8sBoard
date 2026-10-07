@@ -485,6 +485,7 @@ pub(crate) fn taint_intent(
         request,
         risk,
         warnings,
+        change_lines: Vec::new(),
     })
 }
 
@@ -558,6 +559,7 @@ pub(crate) fn label_intent(
         request,
         risk: action_risk(ResourceAction::EditLabels),
         warnings: Vec::new(),
+        change_lines: Vec::new(),
     })
 }
 

@@ -97,6 +97,7 @@ fn intent_of(
         request,
         risk: described.risk,
         warnings: described.warnings,
+        change_lines: Vec::new(),
     })
 }
 
@@ -835,6 +836,193 @@ pub(crate) fn scale_intent(
         warnings: scale_warnings(target, replicas),
     };
     intent_of(scope, &workload, described)
+}
+
+// ---- Set image: one container of one workload ----
+
+/// A row that can take Set image, with what the popover says about it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ImageTarget {
+    pub(crate) kind: ObjectKind,
+    pub(crate) namespace: String,
+    pub(crate) name: String,
+    /// The containers of the pod template, in spec order; init containers are not listed.
+    pub(crate) containers: Vec<TemplateContainer>,
+    /// Helm renders the workload, so its next upgrade sets the image again.
+    pub(crate) is_helm_managed: bool,
+    /// A paused Deployment keeps its pods until it resumes.
+    pub(crate) is_paused: bool,
+}
+
+impl ImageTarget {
+    /// `None` for a row with no pod template (anything but a Deployment, StatefulSet, or
+    /// DaemonSet) or one with no container.
+    pub(crate) fn of(object: &KindObject) -> Option<Self> {
+        let (kind, namespace, name, containers, labels, is_paused) = match object {
+            KindObject::Deployment(d) => (
+                ObjectKind::Deployment,
+                &d.namespace,
+                &d.name,
+                &d.containers,
+                &d.labels,
+                d.is_paused,
+            ),
+            KindObject::StatefulSet(s) => (
+                ObjectKind::StatefulSet,
+                &s.namespace,
+                &s.name,
+                &s.containers,
+                &s.labels,
+                false,
+            ),
+            KindObject::DaemonSet(d) => (
+                ObjectKind::DaemonSet,
+                &d.namespace,
+                &d.name,
+                &d.containers,
+                &d.labels,
+                false,
+            ),
+            _ => return None,
+        };
+        (!containers.is_empty()).then(|| Self {
+            kind,
+            namespace: namespace.clone(),
+            name: name.clone(),
+            containers: containers.clone(),
+            is_helm_managed: terms_are_helm_managed(labels),
+            is_paused,
+        })
+    }
+
+    /// `deployment/api`.
+    pub(crate) fn subject_text(&self) -> String {
+        format!("{}/{}", self.kind.name().to_ascii_lowercase(), self.name)
+    }
+
+    /// The image `container` has now.
+    pub(crate) fn image_of(&self, container: &str) -> Option<&str> {
+        self.containers
+            .iter()
+            .find(|candidate| candidate.name == container)
+            .map(|candidate| candidate.image.as_str())
+    }
+}
+
+/// What the Set image button does with the typed image.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum ImageInput {
+    /// Empty, or with a space in it: the server would refuse it.
+    Invalid,
+    /// The image the container has already.
+    Unchanged,
+    Set(String),
+}
+
+pub(crate) fn image_input(text: &str, current: &str) -> ImageInput {
+    let image = text.trim();
+    if image.is_empty()
+        || image
+            .chars()
+            .any(|ch| ch.is_whitespace() || ch.is_control())
+    {
+        return ImageInput::Invalid;
+    }
+    if image == current {
+        return ImageInput::Unchanged;
+    }
+    ImageInput::Set(image.to_owned())
+}
+
+/// The bytes of `image` the popover selects for editing: the digest after `@`, else the tag after
+/// the last `:` of the name, else nothing (an empty range at the end, where a tag is typed).
+pub(crate) fn tag_range(image: &str) -> std::ops::Range<usize> {
+    if let Some(at) = image.find('@') {
+        return at + 1..image.len();
+    }
+    let name_start = image.rfind('/').map_or(0, |slash| slash + 1);
+    match image[name_start..].rfind(':') {
+        Some(colon) => name_start + colon + 1..image.len(),
+        None => image.len()..image.len(),
+    }
+}
+
+/// What a Set image of `target` warns about, in the order the popover and the dialog show it.
+pub(crate) fn image_warnings(target: &ImageTarget) -> Vec<SharedString> {
+    let mut warnings: Vec<SharedString> = Vec::new();
+    if target.is_paused {
+        warnings.push("The rollout is paused: the pods change after Resume".into());
+    }
+    if target.is_helm_managed {
+        warnings.push(HELM_MANAGED_WARNING.into());
+    }
+    warnings
+}
+
+/// The intent of changing the image of `container` of `target` to `image`, with `change_cause`
+/// (empty for none). `None` when the container is no longer in the template or the request is not
+/// valid.
+pub(crate) fn set_image_intent(
+    scope: &WorkloadScope<'_>,
+    target: &ImageTarget,
+    container: &str,
+    image: &str,
+    change_cause: &str,
+) -> Option<WriteIntent> {
+    let previous = target.image_of(container)?;
+    let action = ResourceAction::SetImage(target.kind);
+    let workload = Workload {
+        kind: target.kind,
+        namespace: &target.namespace,
+        name: &target.name,
+    };
+    let described = Described {
+        action,
+        label: format!("Set image of {} {}", workload.word(), target.name),
+        button: "Set image",
+        risk: action_risk(action),
+        operation: WriteOperation::SetContainerImage {
+            container: container.to_owned(),
+            image: image.to_owned(),
+            previous_image: previous.to_owned(),
+            change_cause: Some(change_cause.to_owned()),
+        },
+        warnings: image_warnings(target),
+    };
+    let mut intent = intent_of(scope, &workload, described)?;
+    intent.change_lines = image_change_lines(target, container, previous, &intent.request);
+    Some(intent)
+}
+
+/// `image: a → b` (named after the container when the template has several), then the cause as it
+/// is stored.
+fn image_change_lines(
+    target: &ImageTarget,
+    container: &str,
+    previous: &str,
+    request: &WriteRequest,
+) -> Vec<SharedString> {
+    let WriteOperation::SetContainerImage {
+        image,
+        change_cause,
+        ..
+    } = request.operation()
+    else {
+        return Vec::new();
+    };
+    let label = if target.containers.len() > 1 {
+        format!("image ({container})")
+    } else {
+        "image".to_owned()
+    };
+    let cause = match change_cause {
+        Some(cause) => format!("change cause: {cause}"),
+        None => "change cause: none (an earlier one is cleared)".to_owned(),
+    };
+    vec![
+        format!("{label}: {previous} → {image}").into(),
+        cause.into(),
+    ]
 }
 
 // ---- Bulk: the same actions on the ticked rows of one cluster ----

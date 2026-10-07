@@ -55,6 +55,7 @@ gpui_kit::actions!(
         EditYaml,
         EditValues,
         RestartRollout,
+        SetImage,
         Scale,
         Delete,
         // Unbound unless the wireframe gives them a key: menus and the palette dispatch them.
@@ -219,6 +220,7 @@ pub(crate) fn bind_keys(cx: &mut App) {
         KeyBinding::new("shift-r", RestartPod, Some(WORKSPACE)),
         KeyBinding::new("x", EvictPod, Some(WORKSPACE)),
         KeyBinding::new("shift-s", Scale, Some(WORKSPACE)),
+        KeyBinding::new("i", SetImage, Some(WORKSPACE)),
         KeyBinding::new("delete", Delete, Some(WORKSPACE)),
         // The table: the kit table binds these keys deeper, so they are taken over here.
         KeyBinding::new("down", SelectNextRow, Some(TABLE)),
@@ -444,6 +446,7 @@ pub(crate) fn shortcut_rows() -> Vec<ShortcutRow> {
         row(SelectedResource, "Restart pod", RestartPod),
         row(SelectedResource, "Evict pod", EvictPod),
         row(SelectedResource, "Scale", Scale),
+        row(SelectedResource, "Set image (workloads)", SetImage),
         row(SelectedResource, "Delete", Delete),
         row(Dock, "Toggle the dock", ToggleDock),
         row(Dock, "Zoom the dock in or out", ToggleDockZoom),

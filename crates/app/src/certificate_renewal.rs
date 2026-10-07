@@ -50,6 +50,7 @@ pub(crate) fn renew_intent(
         request,
         risk: action_risk(action),
         warnings: vec![RATE_LIMIT_WARNING.into(), PRIVATE_KEY_WARNING.into()],
+        change_lines: Vec::new(),
     })
 }
 

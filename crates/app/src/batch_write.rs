@@ -399,6 +399,7 @@ impl BatchIntent {
             request: item.request.clone(),
             risk: self.risk,
             warnings: self.warnings.clone(),
+            change_lines: Vec::new(),
         }
     }
 }

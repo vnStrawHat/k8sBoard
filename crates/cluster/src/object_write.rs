@@ -40,7 +40,8 @@ use crate::object_yaml::{ObjectKind, ObjectRef};
 use crate::quantity::ByteAmount;
 use crate::workload_write_bodies::{
     RERUN_BASE_CHARS, RERUN_SUFFIX, RollBackRefusal, TRIGGER_BASE_CHARS, TRIGGER_SUFFIX,
-    generate_name, rerun_job_body, rollback_operations, trigger_job_body,
+    generate_name, is_valid_change_cause, rerun_job_body, rollback_operations, set_image_patch,
+    trigger_job_body,
 };
 
 /// The server-side field manager of every write k8sBoard sends.
@@ -52,6 +53,8 @@ const KIND_SECRET: &str = "Secret";
 const READ_ACTION: &str = "reading the object before the change";
 /// The annotation `kubectl rollout restart` sets (kube's own `Api::restart` writes another one).
 const RESTARTED_AT: &str = "kubectl.kubernetes.io/restartedAt";
+/// The path a change cause is listed under in the confirm summary and the audit line.
+const CHANGE_CAUSE_PATH: &str = "metadata.annotations[kubernetes.io/change-cause]";
 /// Fixed text: a library error could quote the object's content.
 const UNUSABLE_OBJECT: &str = "the object could not be used for this change";
 const STALE_TEMPLATE: &str = "the deployment was replaced since it was read";
@@ -84,6 +87,15 @@ pub enum WriteOperation {
     /// JSON Patch that replaces a Deployment's pod template with one of its ReplicaSets
     /// (`kubectl rollout undo --to-revision`, 0032).
     RollBackDeployment { replica_set: String, revision: u64 },
+    /// Strategic merge patch of one container's image in the pod template of a Deployment,
+    /// StatefulSet, or DaemonSet, with the `kubernetes.io/change-cause` annotation (`kubectl set
+    /// image`, 0032). `previous_image` is never sent: it lets the summary name the change.
+    SetContainerImage {
+        container: String,
+        image: String,
+        previous_image: String,
+        change_cause: Option<String>,
+    },
     /// Merge patch `{"spec":{"suspend": b}}` on a CronJob (0032).
     SetCronJobSuspended { suspended: bool },
     /// Creates a Job from a CronJob's template (`kubectl create job --from`, 0032).
@@ -159,6 +171,7 @@ impl WriteOperation {
             Self::RestartRollout { .. } => "RestartRollout",
             Self::SetRolloutPaused { .. } => "SetRolloutPaused",
             Self::RollBackDeployment { .. } => "RollBackDeployment",
+            Self::SetContainerImage { .. } => "SetContainerImage",
             Self::SetCronJobSuspended { .. } => "SetCronJobSuspended",
             Self::TriggerCronJob => "TriggerCronJob",
             Self::RerunJob => "RerunJob",
@@ -397,6 +410,22 @@ impl WriteRequest {
                 "spec.template",
                 format!("rev {revision} ({replica_set})"),
             )],
+            WriteOperation::SetContainerImage {
+                container,
+                image,
+                change_cause,
+                ..
+            } => {
+                let mut fields = vec![ChangedField {
+                    path: Cow::Owned(format!("spec.template.spec.containers[{container}].image")),
+                    value: Some(image.clone()),
+                }];
+                fields.extend(change_cause.iter().map(|cause| ChangedField {
+                    path: Cow::Borrowed(CHANGE_CAUSE_PATH),
+                    value: Some(cause.clone()),
+                }));
+                fields
+            }
             WriteOperation::SetCronJobSuspended { suspended } => {
                 vec![field("spec.suspend", suspended.to_string())]
             }
@@ -534,6 +563,7 @@ impl WriteRequest {
             | WriteOperation::RestartRollout { .. }
             | WriteOperation::SetRolloutPaused { .. }
             | WriteOperation::RollBackDeployment { .. }
+            | WriteOperation::SetContainerImage { .. }
             | WriteOperation::SetCronJobSuspended { .. }
             | WriteOperation::TriggerCronJob
             | WriteOperation::RerunJob
@@ -581,6 +611,26 @@ fn checked_operation(operation: WriteOperation) -> Option<WriteOperation> {
         WriteOperation::CreateObject(draft) => draft
             .is_consistent()
             .then_some(WriteOperation::CreateObject(draft)),
+        // A cause is stored trimmed, and an empty one means none.
+        WriteOperation::SetContainerImage {
+            container,
+            image,
+            previous_image,
+            change_cause,
+        } => {
+            let change_cause = change_cause
+                .map(|cause| cause.trim().to_owned())
+                .filter(|cause| !cause.is_empty());
+            let is_valid = is_container_name(&container)
+                && is_valid_debug_image(&image)
+                && change_cause.as_deref().is_none_or(is_valid_change_cause);
+            is_valid.then_some(WriteOperation::SetContainerImage {
+                container,
+                image,
+                previous_image,
+                change_cause,
+            })
+        }
         // Listed one by one, not as `other`: a new operation does not compile until it gets a
         // validation decision here.
         operation @ (WriteOperation::SetNodeSchedulable { .. }
@@ -641,15 +691,18 @@ fn fitting_access_check(target: &ObjectRef, operation: &WriteOperation) -> Optio
         (WriteOperation::ScaleWorkload { .. }, ObjectKind::StatefulSet) => {
             AccessCheck::PatchStatefulSetScale
         }
-        (WriteOperation::RestartRollout { .. }, ObjectKind::Deployment) => {
-            AccessCheck::PatchDeployments
-        }
-        (WriteOperation::RestartRollout { .. }, ObjectKind::StatefulSet) => {
-            AccessCheck::PatchStatefulSets
-        }
-        (WriteOperation::RestartRollout { .. }, ObjectKind::DaemonSet) => {
-            AccessCheck::PatchDaemonSets
-        }
+        (
+            WriteOperation::RestartRollout { .. } | WriteOperation::SetContainerImage { .. },
+            ObjectKind::Deployment,
+        ) => AccessCheck::PatchDeployments,
+        (
+            WriteOperation::RestartRollout { .. } | WriteOperation::SetContainerImage { .. },
+            ObjectKind::StatefulSet,
+        ) => AccessCheck::PatchStatefulSets,
+        (
+            WriteOperation::RestartRollout { .. } | WriteOperation::SetContainerImage { .. },
+            ObjectKind::DaemonSet,
+        ) => AccessCheck::PatchDaemonSets,
         (
             WriteOperation::SetRolloutPaused { .. } | WriteOperation::RollBackDeployment { .. },
             ObjectKind::Deployment,
@@ -971,6 +1024,17 @@ impl ClusterConnection {
                     serde_json::from_value(operations).map_err(|_| self.unusable_object(mode))?;
                 let patch = Patch::<()>::Json(operations);
                 let sent = run_raw(api.patch(name, &params, &patch)).await;
+                self.settle(request, mode, sent)?;
+                Ok(Answer::patched())
+            }
+            WriteOperation::SetContainerImage {
+                container,
+                image,
+                change_cause,
+                ..
+            } => {
+                let body = set_image_patch(container, image, change_cause.as_deref());
+                let sent = run_raw(api.patch(name, &params, &Patch::Strategic(&body))).await;
                 self.settle(request, mode, sent)?;
                 Ok(Answer::patched())
             }

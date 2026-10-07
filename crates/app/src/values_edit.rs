@@ -960,6 +960,7 @@ impl ValuesEditView {
             request,
             risk: ActionRisk::Change,
             warnings,
+            change_lines: Vec::new(),
         };
         let open_id = self.open_id;
         let _ = self.shell.update(cx, |shell, cx| {

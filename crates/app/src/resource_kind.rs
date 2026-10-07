@@ -257,6 +257,10 @@ static DEPLOYMENTS: KindSpec = KindSpec {
             "Restart rollout",
             ResourceAction::RestartRollout(ObjectKind::Deployment),
         ),
+        KindAction::keyed(
+            "Set image…",
+            ResourceAction::SetImage(ObjectKind::Deployment),
+        ),
         KindAction::keyed("Roll back…", ResourceAction::RollBack),
         KindAction::keyed("Pause rollout", ResourceAction::PauseRollout),
     ],
@@ -289,6 +293,10 @@ static STATEFUL_SETS: KindSpec = KindSpec {
             "Restart rollout",
             ResourceAction::RestartRollout(ObjectKind::StatefulSet),
         ),
+        KindAction::keyed(
+            "Set image…",
+            ResourceAction::SetImage(ObjectKind::StatefulSet),
+        ),
     ],
     delete_label: "Delete statefulset…",
     has_port_forward: true,
@@ -316,10 +324,16 @@ static DAEMON_SETS: KindSpec = KindSpec {
         column("Node selector", 200., Align::Left).grows(2),
         AGE_COLUMN,
     ],
-    read_only_actions: &[KindAction::keyed(
-        "Restart rollout",
-        ResourceAction::RestartRollout(ObjectKind::DaemonSet),
-    )],
+    read_only_actions: &[
+        KindAction::keyed(
+            "Restart rollout",
+            ResourceAction::RestartRollout(ObjectKind::DaemonSet),
+        ),
+        KindAction::keyed(
+            "Set image…",
+            ResourceAction::SetImage(ObjectKind::DaemonSet),
+        ),
+    ],
     delete_label: "Delete daemonset…",
     has_port_forward: false,
 };
@@ -1479,10 +1493,10 @@ mod tests {
     }
 
     #[test]
-    fn deployments_offer_port_forward_and_four_read_only_actions() {
+    fn deployments_offer_port_forward_and_five_read_only_actions() {
         assert!(ResourceKind::Deployments.has_port_forward());
         assert!(!ResourceKind::Namespaces.has_port_forward());
-        assert_eq!(ResourceKind::Deployments.read_only_actions().len(), 4);
+        assert_eq!(ResourceKind::Deployments.read_only_actions().len(), 5);
         assert!(ResourceKind::Namespaces.read_only_actions().is_empty());
     }
 
@@ -1501,6 +1515,14 @@ mod tests {
         assert_eq!(
             action_of(ResourceKind::Deployments, "Restart rollout"),
             Some(Some(ResourceAction::RestartRollout(ObjectKind::Deployment)))
+        );
+        assert_eq!(
+            action_of(ResourceKind::Deployments, "Set image…"),
+            Some(Some(ResourceAction::SetImage(ObjectKind::Deployment)))
+        );
+        assert_eq!(
+            action_of(ResourceKind::DaemonSets, "Set image…"),
+            Some(Some(ResourceAction::SetImage(ObjectKind::DaemonSet)))
         );
         // Edit YAML is one item of every editable kind's menu, not a kind action of its own; Edit
         // values is the keyed kind action of ConfigMaps and Secrets (spec 0047).

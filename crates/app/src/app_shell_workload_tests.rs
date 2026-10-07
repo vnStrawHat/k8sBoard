@@ -1896,3 +1896,119 @@ fn shift_s_on_a_ticked_row_scales_the_ticked_set(cx: &mut TestAppContext) {
     });
     assert_eq!(t.dialog_label(cx), "Scale 2 deployments to 2");
 }
+
+// ---- Set image ----
+
+fn deployments_with_images() -> Vec<KindRow> {
+    let container = |name: &str, image: &str| cluster::TemplateContainer {
+        name: name.to_owned(),
+        image: image.to_owned(),
+        ports: Vec::new(),
+    };
+    let mut summary = deployment("api");
+    summary.containers = vec![
+        container("web", "repo.example.com/library/nginx:1.27-alpine"),
+        container("sidecar", "busybox:1.36"),
+    ];
+    vec![deployment_row(&summary)]
+}
+
+impl Clusters {
+    fn on_stg_deployment_with_images(&self, cx: &mut TestAppContext) {
+        self.show_kind(
+            ResourceKind::Deployments,
+            deployments_with_images(),
+            deployments_with_images(),
+            cx,
+        );
+        self.cursor_on(&self.stg, ResourceKind::Deployments, "api", cx);
+    }
+}
+
+#[gpui_kit::test]
+fn i_opens_the_image_popover_with_the_tag_selected(cx: &mut TestAppContext) {
+    let t = workload_clusters("set-image-key", cx);
+    t.on_stg_deployment_with_images(cx);
+    t.press("i", cx);
+    let popover = t.popover(cx).expect("the popover is open");
+    assert!(!t.has_dialog(cx));
+    popover.read_with(cx, |popover, cx| {
+        assert_eq!(popover.title_text(), "Set image of deployment/api");
+        assert_eq!(
+            popover.typed_text(cx),
+            "repo.example.com/library/nginx:1.27-alpine"
+        );
+        assert_eq!(
+            popover.selected_image_text(cx).as_deref(),
+            Some("1.27-alpine")
+        );
+        // It opens on the image the container has now, which is no change.
+        assert!(!popover.can_submit(cx));
+    });
+}
+
+#[gpui_kit::test]
+fn the_container_buttons_show_the_image_of_each_container(cx: &mut TestAppContext) {
+    let t = workload_clusters("set-image-pick", cx);
+    t.on_stg_deployment_with_images(cx);
+    t.press("i", cx);
+    let popover = t.popover(cx).expect("the popover is open");
+    t.fixture.with_window(cx, |window, cx| {
+        popover.update(cx, |popover, cx| popover.press_container(1, window, cx));
+    });
+    popover.read_with(cx, |popover, cx| {
+        assert_eq!(popover.typed_text(cx), "busybox:1.36");
+        assert_eq!(popover.selected_image_text(cx).as_deref(), Some("1.36"));
+    });
+}
+
+#[gpui_kit::test]
+fn set_image_confirms_a_strategic_patch_with_the_cause(cx: &mut TestAppContext) {
+    let t = workload_clusters("set-image-commit", cx);
+    t.on_stg_deployment_with_images(cx);
+    t.press("i", cx);
+    let popover = t.popover(cx).expect("the popover is open");
+    t.fixture.with_window(cx, |window, cx| {
+        popover.update(cx, |popover, cx| {
+            popover.type_image("repo.example.com/library/nginx:1.26-alpine", window, cx);
+            popover.type_cause("release test", window, cx);
+        });
+    });
+    assert!(popover.read_with(cx, |popover, cx| popover.can_submit(cx)));
+    t.fixture.with_window(cx, |window, cx| {
+        popover.update(cx, |popover, cx| popover.press_submit(window, cx));
+    });
+    assert!(t.popover(cx).is_none(), "the popover closes");
+    assert_eq!(t.dialog_label(cx), "Set image of deployment api");
+    t.wait_for_dry_run(cx);
+    let sent = writes(&t.stg_api);
+    assert_eq!(sent.len(), 1, "{sent:?}");
+    assert_eq!(sent[0].method, "PATCH");
+    assert_eq!(sent[0].path, restart_path());
+    assert!(sent[0].has_query("dryRun", "All"));
+    assert!(
+        sent[0]
+            .body
+            .contains("repo.example.com/library/nginx:1.26-alpine")
+    );
+    assert!(sent[0].body.contains("kubernetes.io/change-cause"));
+    assert!(sent[0].body.contains("release test"));
+    t.confirm(cx);
+    t.wait_for("the commit", cx, |_| writes(&t.stg_api).len() == 2);
+    assert!(!writes(&t.stg_api)[1].has_query_key("dryRun"));
+}
+
+#[gpui_kit::test]
+fn i_on_a_row_without_a_pod_template_does_nothing(cx: &mut TestAppContext) {
+    let t = workload_clusters("set-image-job", cx);
+    t.show_kind(
+        ResourceKind::Jobs,
+        vec![job_row(&job("etl"))],
+        vec![job_row(&job("etl"))],
+        cx,
+    );
+    t.cursor_on(&t.stg, ResourceKind::Jobs, "etl", cx);
+    t.press("i", cx);
+    assert!(t.popover(cx).is_none());
+    assert!(!t.has_dialog(cx));
+}

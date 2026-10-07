@@ -145,3 +145,36 @@ fn rerun_needs_a_spec_and_a_namespace() {
     assert!(rerun_job_body(&json!({"metadata": {}}), Some("shop"), "j").is_none());
     assert!(rerun_job_body(&job(), None, "j").is_none());
 }
+
+#[test]
+fn set_image_patch_merges_the_container_by_name_and_writes_the_cause() {
+    assert_eq!(
+        set_image_patch("web", "nginx:1.26-alpine", Some("release test")),
+        json!({
+            "metadata": {"annotations": {"kubernetes.io/change-cause": "release test"}},
+            "spec": {"template": {"spec": {"containers": [
+                {"name": "web", "image": "nginx:1.26-alpine"},
+            ]}}},
+        })
+    );
+}
+
+#[test]
+fn set_image_patch_without_a_cause_removes_the_old_one() {
+    let patch = set_image_patch("web", "nginx:1.26-alpine", None);
+    assert_eq!(
+        patch["metadata"]["annotations"]["kubernetes.io/change-cause"],
+        Value::Null
+    );
+}
+
+#[test]
+fn a_change_cause_is_one_line_of_bounded_length() {
+    assert!(is_valid_change_cause("release test"));
+    assert!(!is_valid_change_cause(""));
+    assert!(!is_valid_change_cause("two\nlines"));
+    assert!(is_valid_change_cause(&"x".repeat(MAX_CHANGE_CAUSE_CHARS)));
+    assert!(!is_valid_change_cause(
+        &"x".repeat(MAX_CHANGE_CAUSE_CHARS + 1)
+    ));
+}

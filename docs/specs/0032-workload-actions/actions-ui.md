@@ -61,9 +61,9 @@ After a create, the 0030 notice reads `Run cronjob reconcile now: created reconc
 
 | Kind | Items (key) |
 |---|---|
-| Deployments | `Scale…` (⇧S), `Restart rollout` (R), `Roll back…`, `Pause rollout`/`Resume rollout` |
-| StatefulSets | `Scale…` (⇧S), `Restart rollout` (R) |
-| DaemonSets | `Restart rollout` (R) |
+| Deployments | `Scale…` (⇧S), `Restart rollout` (R), `Set image…` (I), `Roll back…`, `Pause rollout`/`Resume rollout` |
+| StatefulSets | `Scale…` (⇧S), `Restart rollout` (R), `Set image…` (I) |
+| DaemonSets | `Restart rollout` (R), `Set image…` (I) |
 | Jobs | `Re-run job` |
 | CronJobs | `Trigger now`, `Suspend`/`Resume` |
 

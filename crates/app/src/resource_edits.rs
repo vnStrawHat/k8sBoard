@@ -114,6 +114,7 @@ pub(crate) fn hpa_range_intent(
         request,
         risk: action_risk(action),
         warnings: hpa_range_warnings(hpa, min, max),
+        change_lines: Vec::new(),
     })
 }
 
@@ -351,6 +352,7 @@ pub(crate) fn expand_intent(
         request,
         risk: action_risk(action),
         warnings: expand_warnings(claim),
+        change_lines: Vec::new(),
     })
 }
 

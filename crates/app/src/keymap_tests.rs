@@ -75,6 +75,7 @@ fn letters_resolve_in_the_workspace(cx: &mut TestAppContext) {
     assert_eq!(resolve("l", &TABLE_PATH, cx), Some("k8sboard::ViewLogs"));
     assert_eq!(resolve("y", &SHELL, cx), Some("k8sboard::ViewYaml"));
     assert_eq!(resolve("shift-s", &SHELL, cx), Some("k8sboard::Scale"));
+    assert_eq!(resolve("i", &SHELL, cx), Some("k8sboard::SetImage"));
     assert_eq!(resolve("s", &SHELL, cx), Some("k8sboard::OpenShell"));
     assert_eq!(resolve("delete", &SHELL, cx), Some("k8sboard::Delete"));
 }
@@ -83,7 +84,7 @@ fn letters_resolve_in_the_workspace(cx: &mut TestAppContext) {
 fn letters_do_nothing_in_text_inputs(cx: &mut TestAppContext) {
     bind_all(cx);
     for key in [
-        "?", "/", "j", "k", "[", "]", "enter", "l", "y", "s", "e", "delete",
+        "?", "/", "j", "k", "[", "]", "enter", "l", "y", "s", "e", "i", "delete",
     ] {
         let name = resolve(key, &INPUT_PATH, cx);
         assert!(!is_app_action(name), "{key} resolved to {name:?}");

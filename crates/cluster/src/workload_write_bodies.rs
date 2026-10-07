@@ -74,6 +74,29 @@ pub(crate) fn rollback_operations(
     ]))
 }
 
+/// The annotation `kubectl rollout history` prints as the CHANGE-CAUSE of a revision; the Deployment's
+/// copy is what its next ReplicaSet inherits.
+pub(crate) const CHANGE_CAUSE_ANNOTATION: &str = "kubernetes.io/change-cause";
+/// The longest change cause Set image accepts: a cause is one line of a history list.
+pub(crate) const MAX_CHANGE_CAUSE_CHARS: usize = 256;
+
+/// The strategic merge patch of a Set image: the container merges on its `name`, and the change
+/// cause is written (or, without one, removed: a cause left from an earlier change would be copied
+/// to the new ReplicaSet and name the wrong change).
+pub(crate) fn set_image_patch(container: &str, image: &str, change_cause: Option<&str>) -> Value {
+    json!({
+        "metadata": { "annotations": { CHANGE_CAUSE_ANNOTATION: change_cause } },
+        "spec": { "template": { "spec": { "containers": [{ "name": container, "image": image }] } } },
+    })
+}
+
+/// Whether `cause` is a one-line text of a length the history list can show.
+pub(crate) fn is_valid_change_cause(cause: &str) -> bool {
+    !cause.is_empty()
+        && cause.chars().count() <= MAX_CHANGE_CAUSE_CHARS
+        && !cause.chars().any(char::is_control)
+}
+
 /// The pod template of a Deployment or ReplicaSet without the controller's hash label.
 fn template_without_hash(object: &Value) -> Option<Value> {
     let mut template = object.pointer("/spec/template")?.clone();

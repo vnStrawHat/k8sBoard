@@ -69,6 +69,7 @@ pub(crate) fn removal_write(
         request,
         risk: action_risk(ResourceAction::Drain),
         warnings: Vec::new(),
+        change_lines: Vec::new(),
     })
 }
 

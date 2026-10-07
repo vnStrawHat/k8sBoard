@@ -25,9 +25,9 @@ use crate::keymap::{
     PortForward, PreviousContainer, PreviousDockTab, RenewCertificate, RerunJob, RestartPod,
     RestartRollout, RollBack, Scale, SelectDrawerTab1, SelectDrawerTab2, SelectDrawerTab3,
     SelectDrawerTab4, SelectDrawerTab5, SelectFirstRow, SelectLastRow, SelectNextPage,
-    SelectNextRow, SelectPreviousPage, SelectPreviousRow, SetDefaultStorageClass, SuspendCronJob,
-    ToggleAllTicks, ToggleDock, ToggleDockZoom, ToggleReadOnly, ToggleRowTick, TriggerCronJob,
-    ViewLogs, ViewYaml,
+    SelectNextRow, SelectPreviousPage, SelectPreviousRow, SetDefaultStorageClass, SetImage,
+    SuspendCronJob, ToggleAllTicks, ToggleDock, ToggleDockZoom, ToggleReadOnly, ToggleRowTick,
+    TriggerCronJob, ViewLogs, ViewYaml,
 };
 use crate::kind_drawer::REVISIONS_TITLE;
 use crate::live_sections::loaded_replica_sets;
@@ -245,6 +245,7 @@ pub(super) fn register_key_handlers(root: Div, cx: &Context<AppShell>) -> Div {
     let root = on_row_key::<RestartPod>(root, RowAction::RestartPod, cx);
     let root = on_row_key::<EvictPod>(root, RowAction::EvictPod, cx);
     let root = on_row_key::<Scale>(root, RowAction::Scale, cx);
+    let root = on_row_key::<SetImage>(root, RowAction::SetImage, cx);
     let root = on_row_key::<PauseRollout>(root, RowAction::PauseRollout, cx);
     let root = on_row_key::<RollBack>(root, RowAction::RollBack, cx);
     let root = on_row_key::<SuspendCronJob>(root, RowAction::SuspendCronJob, cx);
@@ -777,6 +778,8 @@ impl AppShell {
             | ResourceAction::TriggerCronJob
             | ResourceAction::RerunJob => self.start_workload_action(action, &subject, window, cx),
             ResourceAction::Scale(_) => self.open_scale_popover(&subject, window, cx),
+            // One container of one workload: the ticked set plays no part.
+            ResourceAction::SetImage(_) => self.open_image_popover(&subject, window, cx),
             ResourceAction::EditHpaRange => self.open_hpa_range_popover(&subject, window, cx),
             ResourceAction::ExpandClaim => self.open_expand_popover(&subject, window, cx),
             ResourceAction::SetDefaultStorageClass => {

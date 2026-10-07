@@ -474,6 +474,7 @@ fn debug_write_intent() -> Rc<WriteIntent> {
         request,
         risk: ActionRisk::Change,
         warnings: Vec::new(),
+        change_lines: Vec::new(),
     })
 }
 
@@ -756,6 +757,7 @@ fn job_intent(action: ResourceAction, kind: ObjectKind, operation: WriteOperatio
         request: WriteRequest::new(target, operation).expect("a fitting request"),
         risk: ActionRisk::Change,
         warnings: Vec::new(),
+        change_lines: Vec::new(),
     }
 }
 

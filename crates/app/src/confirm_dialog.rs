@@ -1142,8 +1142,14 @@ impl ConfirmDialog {
         // key is removed (the beta default annotation).
         let is_ordered = matches!(&self.kind, DialogKind::Batch(batch) if batch.plan.on_failure == BatchFailure::Stop);
         let is_batch = matches!(self.kind, DialogKind::Batch(_));
+        // An intent that names its own lines (Set image, Edit YAML) replaces the field list.
+        let own_lines = match &self.kind {
+            DialogKind::Write(intent) => intent.change_lines.as_slice(),
+            _ => &[],
+        };
         let lines = requests
             .into_iter()
+            .filter(|_| own_lines.is_empty())
             .flat_map(|request| match request.operation() {
                 // The values edit lists the ConfigMap text before and after; the audit line never has it.
                 WriteOperation::SetDataValues(edit) => edit.confirm_lines(),
@@ -1165,6 +1171,7 @@ impl ConfirmDialog {
                         .collect()
                 }
             })
+            .chain(own_lines.iter().map(ToString::to_string))
             .map(|text| div().text_sm().font_family(mono.clone()).child(text));
         let warnings = warnings.iter().map(|warning| {
             div()

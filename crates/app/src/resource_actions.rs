@@ -30,7 +30,7 @@ use crate::keymap::{
     Attach, CopyName, Cordon, DebugContainer, Delete, Drain, EditHpaRange, EditLabels, EditTaints,
     EditValues, EditYaml, EvictPod, ExpandClaim, OpenShell, PauseRollout, PortForward,
     RenewCertificate, RerunJob, RestartPod, RestartRollout, RollBack, Scale,
-    SetDefaultStorageClass, SuspendCronJob, TriggerCronJob, ViewLogs, ViewYaml,
+    SetDefaultStorageClass, SetImage, SuspendCronJob, TriggerCronJob, ViewLogs, ViewYaml,
 };
 use crate::kind_access::{KindAccess, KindAccessMap};
 use crate::kind_join::last_job_owner;
@@ -85,6 +85,9 @@ pub(crate) enum ResourceAction {
     Delete(ObjectKind),
     /// Carries the kind of the row: Deployments, StatefulSets, and DaemonSets restart.
     RestartRollout(ObjectKind),
+    /// Carries the kind of the row: changes the image of one container and writes a change cause
+    /// (spec 0032).
+    SetImage(ObjectKind),
     /// Deletes a controller-owned pod so its controller recreates it (spec 0040).
     RestartPod,
     /// Asks the eviction API to remove a pod, which checks its PodDisruptionBudgets (spec 0040).
@@ -129,6 +132,7 @@ pub(crate) enum RowAction {
     /// Edit values… of a ConfigMap or Secret (spec 0047); its key is E on those two screens.
     EditValues,
     RestartRollout,
+    SetImage,
     /// Have unbound unit actions only: the pod menu and the palette dispatch them (spec 0040).
     RestartPod,
     EvictPod,
@@ -281,6 +285,14 @@ impl ResourceAction {
                 },
                 None => ActionGate::Planned,
             },
+            // The patch needs the same permission as a restart of the kind.
+            Self::SetImage(kind) => match restart_check(kind) {
+                Some(check) => ActionGate::Mutating {
+                    checks: vec![check],
+                    is_shipped: true,
+                },
+                None => ActionGate::Planned,
+            },
             Self::PauseRollout => ActionGate::Mutating {
                 checks: vec![AccessCheck::PatchDeployments],
                 is_shipped: true,
@@ -374,6 +386,7 @@ impl ResourceAction {
             Self::EditValues(_) => RowAction::EditValues,
             Self::Delete(_) => RowAction::Delete,
             Self::RestartRollout(_) => RowAction::RestartRollout,
+            Self::SetImage(_) => RowAction::SetImage,
             Self::RestartPod => RowAction::RestartPod,
             Self::EvictPod => RowAction::EvictPod,
             Self::Scale(_) => RowAction::Scale,
@@ -412,6 +425,7 @@ impl RowAction {
             Self::EditValues => Box::new(EditValues),
             Self::Delete => Box::new(Delete),
             Self::RestartRollout => Box::new(RestartRollout),
+            Self::SetImage => Box::new(SetImage),
             Self::RestartPod => Box::new(RestartPod),
             Self::EvictPod => Box::new(EvictPod),
             Self::Scale => Box::new(Scale),
@@ -443,6 +457,7 @@ impl RowAction {
             Self::EditYaml => IconName::FilePenLine,
             Self::EditValues => IconName::Pencil,
             Self::RestartRollout | Self::RestartPod => IconName::RotateCw,
+            Self::SetImage => IconName::Package,
             Self::RenewCertificate => IconName::RefreshCw,
             Self::EvictPod => IconName::LogOut,
             Self::Scale | Self::EditHpaRange => IconName::ChevronsUpDown,
@@ -501,6 +516,7 @@ pub(crate) fn action_risk(action: ResourceAction) -> ActionRisk {
         | ResourceAction::EditValues(_)
         | ResourceAction::CreateObject(_)
         | ResourceAction::RestartRollout(_)
+        | ResourceAction::SetImage(_)
         | ResourceAction::Scale(_)
         | ResourceAction::PauseRollout
         | ResourceAction::RollBack
@@ -535,6 +551,7 @@ pub(crate) fn action_label(action: ResourceAction) -> &'static str {
         ResourceAction::CreateObject(kind) => create_label(kind),
         ResourceAction::Delete(_) => "Delete",
         ResourceAction::RestartRollout(_) => "Restart rollout",
+        ResourceAction::SetImage(_) => "Set image",
         ResourceAction::RestartPod => "Restart pod",
         ResourceAction::EvictPod => "Evict",
         ResourceAction::Scale(_) => "Scale",
@@ -638,6 +655,7 @@ pub(crate) fn subject_action(row: RowAction, subject: &ResourceKey) -> Option<Re
         .map(ResourceAction::EditValues),
         // The kind table is the one source of which workload kinds offer the action.
         RowAction::RestartRollout
+        | RowAction::SetImage
         | RowAction::Scale
         | RowAction::PauseRollout
         | RowAction::RollBack
