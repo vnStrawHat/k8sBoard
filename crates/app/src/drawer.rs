@@ -2,7 +2,7 @@ use std::cell::Cell;
 use std::rc::Rc;
 use std::time::Duration;
 
-use cluster::EventSummary;
+use cluster::{EventSummary, NamespaceScope};
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::tab::{Tab, TabBar};
@@ -16,6 +16,7 @@ use gpui_kit::{
     StatefulInteractiveElement as _, Styled as _, Window, div, prelude::FluentBuilder as _, px,
 };
 
+use crate::active_session::ActiveConnection;
 use crate::age::format_age;
 use crate::app_shell::AppShell;
 use crate::cell_truncation::cell_tooltip;
@@ -919,19 +920,61 @@ pub(crate) fn open_link(
     shell.follow_link(target, window, cx);
 }
 
-/// A mono value that opens `target` on its own screen.
+/// A mono value that opens `target` on its own screen. When the open session's scope covers more
+/// than one namespace, a namespaced target reads `namespace/text`, so two objects of the same name
+/// are told apart (UX round 3, P33).
 pub(crate) fn link_text(
     id: usize,
     text: &SharedString,
     target: ResourceKey,
     cx: &Context<AppShell>,
 ) -> AnyElement {
-    link_style(div().id(("link", id)), text, cx)
+    let text = if scope_has_many_namespaces(cx) {
+        qualified_link_text(text, &target)
+    } else {
+        text.clone()
+    };
+    link_style(div().id(("link", id)), &text, cx)
         .on_click(cx.listener(move |shell, _, window, cx| {
             open_link(shell, target.clone(), window, cx);
         }))
-        .child(text.clone())
+        .child(text)
         .into_any_element()
+}
+
+/// Whether the open session lists more than one namespace: All, or several picked. A drawer link
+/// is built while the shell renders, so the scope comes from the session entity, not the shell.
+fn scope_has_many_namespaces(cx: &App) -> bool {
+    cx.try_global::<ActiveConnection>()
+        .and_then(|active| active.session.upgrade())
+        .and_then(|session| {
+            session
+                .read(cx)
+                .live()
+                .map(|live| scope_shows_namespace(&live.scope))
+        })
+        .unwrap_or(false)
+}
+
+/// Whether links name their namespace under `scope`: every scope but a single namespace. Pure.
+fn scope_shows_namespace(scope: &NamespaceScope) -> bool {
+    !matches!(scope, NamespaceScope::Named(_))
+}
+
+/// `text` with the namespace of `target` in front, unless the target has none or `text` already
+/// starts with it. Pure.
+fn qualified_link_text(text: &SharedString, target: &ResourceKey) -> SharedString {
+    let namespace = match target {
+        ResourceKey::Pod { namespace, .. } => Some(namespace),
+        ResourceKey::Kind { namespace, .. } => namespace.as_ref(),
+        ResourceKey::Node { .. } => None,
+    };
+    match namespace {
+        Some(namespace) if !text.starts_with(&format!("{namespace}/")) => {
+            format!("{namespace}/{text}").into()
+        }
+        _ => text.clone(),
+    }
 }
 
 /// A list row's object name: link-styled text inside a row whose own click opens the object.
@@ -1087,6 +1130,53 @@ pub(crate) fn port_row(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn links_name_their_namespace_unless_the_scope_is_one_namespace() {
+        assert!(!scope_shows_namespace(&NamespaceScope::Named(
+            "a".to_owned()
+        )));
+        assert!(scope_shows_namespace(&NamespaceScope::All));
+        assert!(scope_shows_namespace(&NamespaceScope::of_namespaces([
+            "a".to_owned(),
+            "b".to_owned()
+        ])));
+    }
+
+    #[test]
+    fn a_namespaced_link_reads_namespace_slash_text_once() {
+        let deployment = ResourceKey::Kind {
+            kind: ResourceKind::Deployments,
+            namespace: Some("lab-shop-stg".to_owned()),
+            name: "web".to_owned(),
+        };
+        let text = SharedString::from("deployment/web");
+        let qualified = qualified_link_text(&text, &deployment);
+        assert_eq!(qualified, "lab-shop-stg/deployment/web");
+        assert_eq!(qualified_link_text(&qualified, &deployment), qualified);
+        let pod = ResourceKey::Pod {
+            namespace: "lab-shop".to_owned(),
+            name: "web-0".to_owned(),
+        };
+        assert_eq!(qualified_link_text(&"web-0".into(), &pod), "lab-shop/web-0");
+    }
+
+    #[test]
+    fn a_cluster_scoped_link_keeps_its_text() {
+        let node = ResourceKey::Node {
+            name: "node-1".to_owned(),
+        };
+        let namespaces = ResourceKey::Kind {
+            kind: ResourceKind::Namespaces,
+            namespace: None,
+            name: "lab-shop".to_owned(),
+        };
+        assert_eq!(qualified_link_text(&"node-1".into(), &node), "node-1");
+        assert_eq!(
+            qualified_link_text(&"lab-shop".into(), &namespaces),
+            "lab-shop"
+        );
+    }
 
     #[test]
     fn a_crd_drawer_captions_the_kind_as_crd() {
