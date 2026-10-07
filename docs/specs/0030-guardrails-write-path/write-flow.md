@@ -87,7 +87,7 @@ W10 small modal, kit `Dialog`, width 480:
 | Warnings | one warn-toned line per `GuardedIntent.warnings` entry (theme warning token), under Changes |
 | Dry-run line | `Server dry-run…` · `Server dry-run passed · {ms} ms` (success) · `Dry-run failed: {reason}` (danger) · `Dry-run not supported for this action` (muted) |
 | Typed name | TypeName only: muted `Type the cluster name to confirm` (or `…node name…`), an `Input`, then `matches` (success) when `TypedMatch::Matches` |
-| Note | checkbox `Add a note to the audit log` + an `Input` (≤ 500 chars) shown when checked |
+| Note | checkbox `Add a note to the audit log`; ticking it focuses an `Input` (≤ 500 chars) shown below the button row, so the buttons do not move (N6) |
 | Buttons | `Back` (cancel), primary = the label (`Cordon`); danger variant for `Destructive` |
 
 - **Focus**: `DialogConfirm::Click` focuses the primary button when the dialog opens; `TypeName` focuses the input.

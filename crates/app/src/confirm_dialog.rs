@@ -241,6 +241,8 @@ pub(crate) struct ConfirmDialog {
     local_port: Option<Entity<InputState>>,
     local_port_error: Option<&'static str>,
     is_note_shown: bool,
+    /// The note box was just ticked: the next render focuses the field.
+    needs_note_focus: bool,
     is_committing: bool,
     /// The Stop button of a running batch was pressed; the commit loop reads it between items.
     stop_requested: Rc<Cell<bool>>,
@@ -319,6 +321,7 @@ impl ConfirmDialog {
             local_port,
             local_port_error: None,
             is_note_shown: false,
+            needs_note_focus: false,
             is_committing: false,
             stop_requested: Rc::new(Cell::new(false)),
             outcome: None,
@@ -1341,28 +1344,28 @@ impl ConfirmDialog {
         )
     }
 
-    /// The note field once the checkbox is ticked, and where the line goes when it is not saved.
-    fn render_note_input(&self, cx: &App) -> Option<AnyElement> {
+    /// Where the line goes when it is not saved.
+    fn render_unlogged_note(&self, cx: &App) -> Option<AnyElement> {
         if self.outcome.is_some() || matches!(self.kind, DialogKind::Unlock { .. }) {
             return None;
         }
-        let muted = cx.theme().muted_foreground;
-        let no_folder = AppSettings::config_dir(cx).is_none();
-        if !self.is_note_shown && !no_folder {
+        AppSettings::config_dir(cx).is_none().then(|| {
+            div()
+                .text_xs()
+                .text_color(cx.theme().muted_foreground)
+                .child(self.unlogged_note())
+                .into_any_element()
+        })
+    }
+
+    /// The note field once the checkbox is ticked. It sits below the button row so ticking the
+    /// box does not move the buttons.
+    fn render_note_input(&self) -> Option<AnyElement> {
+        if self.outcome.is_some() || matches!(self.kind, DialogKind::Unlock { .. }) {
             return None;
         }
-        Some(
-            v_flex()
-                .gap_1()
-                .children(self.is_note_shown.then(|| Input::new(&self.note)))
-                .children(no_folder.then(|| {
-                    div()
-                        .text_xs()
-                        .text_color(muted)
-                        .child(self.unlogged_note())
-                }))
-                .into_any_element(),
-        )
+        self.is_note_shown
+            .then(|| Input::new(&self.note).into_any_element())
     }
 
     /// The button row: the audit note checkbox on the left (a change only), Retry, Back, and the
@@ -1442,6 +1445,7 @@ impl ConfirmDialog {
                 .checked(self.is_note_shown)
                 .on_click(cx.listener(|dialog, checked: &bool, _, cx| {
                     dialog.is_note_shown = *checked;
+                    dialog.needs_note_focus = *checked;
                     cx.notify();
                 }))
         });
@@ -1458,6 +1462,10 @@ impl ConfirmDialog {
 
 impl Render for ConfirmDialog {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.needs_note_focus {
+            self.needs_note_focus = false;
+            self.note.update(cx, |input, cx| input.focus(window, cx));
+        }
         if self.needs_focus {
             self.needs_focus = false;
             match self.live_tier(cx) {
@@ -1496,7 +1504,7 @@ impl Render for ConfirmDialog {
             .children(unlock_note)
             .children(self.render_dry_run(cx))
             .children(self.render_typed(cx))
-            .children(self.render_note_input(cx))
+            .children(self.render_unlogged_note(cx))
             .children(block_text.map(|text| {
                 div()
                     .text_xs()
@@ -1504,6 +1512,7 @@ impl Render for ConfirmDialog {
                     .child(with_next_step(&text))
             }))
             .child(self.render_buttons(block.is_some(), cx))
+            .children(self.render_note_input())
     }
 }
 
