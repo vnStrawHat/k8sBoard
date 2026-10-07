@@ -1037,10 +1037,20 @@ pub(crate) fn is_shared_filesystem(usage: &PvcUsage, claim_capacity: Option<&str
 }
 
 fn join_claims(rows: &mut [KindRow], inputs: &JoinInputs) {
+    let classes = inputs
+        .companion
+        .and_then(CompanionLists::storage_classes)
+        .and_then(LiveList::ready_items);
     for row in rows {
         let KindObject::PersistentVolumeClaim(claim) = &row.object else {
             continue;
         };
+        // A claim whose class is not listed keeps what it had: the dry-run is the backstop.
+        let allows_expansion = classes.and_then(|classes| {
+            let class = claim.storage_class.as_deref()?;
+            let known = classes.iter().find(|known| known.name == class)?;
+            Some(known.allows_expansion)
+        });
         // Each pass starts from the builder's status, so a claim that emptied again recovers it.
         let mut status = claim_status(claim);
         let usage = inputs
@@ -1069,6 +1079,11 @@ fn join_claims(rows: &mut [KindRow], inputs: &JoinInputs) {
         row.status = status;
         if let Some(slot) = row.cells.get_mut(CLAIM_USED) {
             *slot = cell;
+        }
+        if let (Some(allows), KindObject::PersistentVolumeClaim(claim)) =
+            (allows_expansion, &mut row.object)
+        {
+            claim.class_allows_expansion = Some(allows);
         }
     }
 }

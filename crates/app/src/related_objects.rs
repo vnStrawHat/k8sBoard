@@ -298,6 +298,7 @@ mod tests {
                 storage_class: None,
                 volume_mode: None,
                 conditions: Vec::new(),
+                class_allows_expansion: None,
             },
         );
         assert_eq!(

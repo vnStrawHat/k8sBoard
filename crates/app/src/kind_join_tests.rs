@@ -1025,6 +1025,7 @@ fn claim(phase: &str) -> cluster::PersistentVolumeClaimSummary {
         storage_class: None,
         volume_mode: None,
         conditions: Vec::new(),
+        class_allows_expansion: None,
     }
 }
 
@@ -1077,6 +1078,67 @@ fn joined_claim(phase: &str, history: Option<&KubeletHistory>) -> KindRow {
     };
     join_rows(ResourceKind::PersistentVolumeClaims, &mut rows, &inputs);
     rows.remove(0)
+}
+
+fn joined_claim_with_classes(
+    claim: cluster::PersistentVolumeClaimSummary,
+    classes: LiveList<cluster::StorageClassSummary>,
+) -> cluster::PersistentVolumeClaimSummary {
+    let mut rows = vec![crate::storage_rows::persistent_volume_claim_row(&claim)];
+    let pods = LiveList::Loading;
+    let companion = CompanionLists::StorageClasses(classes);
+    let inputs = JoinInputs {
+        custom_counts: None,
+        pods: &pods,
+        companion: Some(&companion),
+        kubelet: None,
+        scope: &NamespaceScope::All,
+    };
+    join_rows(ResourceKind::PersistentVolumeClaims, &mut rows, &inputs);
+    match rows.remove(0).object {
+        KindObject::PersistentVolumeClaim(claim) => claim,
+        other => panic!("a claim, not {other:?}"),
+    }
+}
+
+#[test]
+fn a_claim_learns_from_the_classes_whether_it_expands() {
+    let classed = |name: &str| {
+        let mut claim = claim("Bound");
+        claim.storage_class = Some(name.to_owned());
+        claim
+    };
+    let ready = |classes: Vec<cluster::StorageClassSummary>| LiveList::Ready {
+        items: classes,
+        interruption: None,
+    };
+    let classes = || {
+        ready(vec![
+            crate::resource_edits::resource_edits_tests::class("standard", true, false),
+            crate::resource_edits::resource_edits_tests::class("gp3", false, true),
+        ])
+    };
+    assert_eq!(
+        joined_claim_with_classes(classed("standard"), classes()).class_allows_expansion,
+        Some(false)
+    );
+    assert_eq!(
+        joined_claim_with_classes(classed("gp3"), classes()).class_allows_expansion,
+        Some(true)
+    );
+    // A class the list lacks, a claim with no class, and a list that has not loaded say nothing.
+    assert_eq!(
+        joined_claim_with_classes(classed("gone"), classes()).class_allows_expansion,
+        None
+    );
+    assert_eq!(
+        joined_claim_with_classes(claim("Bound"), classes()).class_allows_expansion,
+        None
+    );
+    assert_eq!(
+        joined_claim_with_classes(classed("standard"), LiveList::Loading).class_allows_expansion,
+        None
+    );
 }
 
 fn used_cell(row: &KindRow) -> &KindCell {

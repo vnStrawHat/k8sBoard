@@ -818,3 +818,31 @@ fn a_scale_toast_offers_the_old_count_unless_nothing_changed() {
     );
     assert_eq!(scale_back_of(&pause), None);
 }
+
+#[test]
+fn a_dry_run_the_server_refuses_for_good_has_no_retry_but_a_transient_one_has() {
+    let refused = |error: WriteError| dry_run_state_of(Err(CheckedWriteError::Write(error)));
+    for error in [
+        WriteError::Invalid {
+            message: "only dynamically provisioned pvc can be resized".to_owned(),
+            fields: Vec::new(),
+        },
+        WriteError::Denied {
+            message: "cannot patch".to_owned(),
+        },
+        WriteError::NotFound,
+    ] {
+        assert!(matches!(refused(error), DryRunState::Refused(_)));
+    }
+    for error in [
+        WriteError::TooManyRequests {
+            message: "slow down".to_owned(),
+            retry_after: None,
+        },
+        WriteError::OutcomeUnknown,
+    ] {
+        assert!(matches!(refused(error), DryRunState::Failed(_)));
+    }
+    let blocked = dry_run_state_of(Err(CheckedWriteError::Blocked("locked".into())));
+    assert_eq!(blocked, DryRunState::Failed("locked".into()));
+}

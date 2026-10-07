@@ -320,6 +320,15 @@ fn denial_of_volumes(decision: AccessDecision) -> AccessState {
     })
 }
 
+fn denial_of_classes(decision: AccessDecision) -> AccessState {
+    AccessState::Known(AccessReport {
+        reviews: vec![AccessReview {
+            check: AccessCheck::ListStorageClasses,
+            decision,
+        }],
+    })
+}
+
 fn denial_of_slices(decision: AccessDecision) -> AccessState {
     AccessState::Known(AccessReport {
         reviews: vec![AccessReview {
@@ -357,10 +366,24 @@ fn companion_plan_per_kind() {
         ),
         CompanionPlan::Start(CompanionKind::Ingresses)
     );
-    // Only Services, StorageClasses, and Secrets join with a second list.
+    // The claims join with the classes, to know which ones expand.
+    assert_eq!(
+        companion_plan(
+            ResourceKind::PersistentVolumeClaims,
+            &denial_of_classes(AccessDecision::Allowed)
+        ),
+        CompanionPlan::Start(CompanionKind::StorageClasses)
+    );
+    assert_eq!(
+        companion_plan(
+            ResourceKind::PersistentVolumeClaims,
+            &denial_of_classes(AccessDecision::Denied { reason: None })
+        ),
+        CompanionPlan::Denied(AccessCheck::ListStorageClasses)
+    );
+    // Only Services, StorageClasses, Secrets, and PVCs join with a second list.
     for kind in [
         ResourceKind::PersistentVolumes,
-        ResourceKind::PersistentVolumeClaims,
         ResourceKind::Deployments,
         ResourceKind::ConfigMaps,
         ResourceKind::Namespaces,

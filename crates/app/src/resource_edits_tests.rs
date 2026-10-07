@@ -242,6 +242,7 @@ pub(crate) fn claim(name: &str, requested: &str, capacity: &str) -> PersistentVo
         storage_class: Some("gp3".to_owned()),
         volume_mode: Some("Filesystem".to_owned()),
         conditions: Vec::new(),
+        class_allows_expansion: None,
     }
 }
 
@@ -418,38 +419,38 @@ fn expand_warnings_follow_the_claim_state() {
 
 #[test]
 fn claim_block_table() {
-    let gp3_no = class("gp3", false, false);
-    let other = class("io2", false, true);
     let mut pending = claim("data", "100Gi", "100Gi");
     pending.phase = "Pending".to_owned();
     assert_eq!(
-        claim_block(&pending, &[]).as_deref(),
+        claim_block(&pending).as_deref(),
         Some("Only a bound claim can be expanded")
     );
     let mut lost = claim("data", "100Gi", "100Gi");
     lost.phase = "Lost".to_owned();
     assert_eq!(
-        claim_block(&lost, &[]).as_deref(),
+        claim_block(&lost).as_deref(),
         Some("Only a bound claim can be expanded")
     );
     let mut terminating = claim("data", "100Gi", "100Gi");
     terminating.is_terminating = true;
     assert_eq!(
-        claim_block(&terminating, &[]).as_deref(),
+        claim_block(&terminating).as_deref(),
         Some("The claim is being deleted")
     );
-    let bound = claim("data", "100Gi", "100Gi");
-    // The class is checked only when the list is loaded.
-    assert_eq!(claim_block(&bound, &[]), None);
+    let mut bound = claim("data", "100Gi", "100Gi");
+    // The class is checked only once the PVCs screen has joined the classes.
+    assert_eq!(claim_block(&bound), None);
+    bound.class_allows_expansion = Some(true);
+    assert_eq!(claim_block(&bound), None);
+    bound.class_allows_expansion = Some(false);
     assert_eq!(
-        claim_block(&bound, &[&gp3_no]).as_deref(),
-        Some("Storage class gp3 does not allow expansion")
+        claim_block(&bound).as_deref(),
+        Some("class gp3 does not allow expansion")
     );
-    assert_eq!(claim_block(&bound, &[&other]), None);
-    assert_eq!(claim_block(&bound, &[&class("gp3", false, true)]), None);
     let mut classless = claim("data", "100Gi", "100Gi");
     classless.storage_class = None;
-    assert_eq!(claim_block(&classless, &[&gp3_no]), None);
+    classless.class_allows_expansion = Some(false);
+    assert_eq!(claim_block(&classless), None);
 }
 
 fn claims(specs: &[(&str, &str, &str)]) -> Vec<KindObject> {
@@ -461,11 +462,10 @@ fn claims(specs: &[(&str, &str, &str)]) -> Vec<KindObject> {
         .collect()
 }
 
-fn bulk_expand_over(
+fn bulk_expand(
     objects: &[KindObject],
     cluster: &ClusterRef,
     storage: &str,
-    classes: &[&StorageClassSummary],
 ) -> Result<BatchIntent, SharedString> {
     let rows: Vec<CheckedRow<'_>> = objects
         .iter()
@@ -477,15 +477,7 @@ fn bulk_expand_over(
         now: jiff::Timestamp::now(),
         hpas: &[],
     };
-    bulk_expand_intent(&inputs, storage, classes)
-}
-
-fn bulk_expand(
-    objects: &[KindObject],
-    cluster: &ClusterRef,
-    storage: &str,
-) -> Result<BatchIntent, SharedString> {
-    bulk_expand_over(objects, cluster, storage, &[])
+    bulk_expand_intent(&inputs, storage)
 }
 
 #[test]
@@ -561,14 +553,15 @@ fn bulk_expand_skips_claims_the_state_refuses() {
 }
 
 #[test]
-fn bulk_expand_checks_the_class_when_the_list_is_loaded() {
+fn bulk_expand_skips_a_claim_whose_class_does_not_expand() {
     let cluster = test_cluster();
-    let rows = claims(&[("a", "100Gi", "100Gi")]);
-    let gp3 = class("gp3", false, false);
-    let Err(reason) = bulk_expand_over(&rows, &cluster, "200Gi", &[&gp3]) else {
+    let mut refused = claim("a", "100Gi", "100Gi");
+    refused.class_allows_expansion = Some(false);
+    let rows = [KindObject::PersistentVolumeClaim(refused)];
+    let Err(reason) = bulk_expand(&rows, &cluster, "200Gi") else {
         panic!("the only claim is refused, so there is no batch");
     };
-    assert_eq!(reason, "Storage class gp3 does not allow expansion");
+    assert_eq!(reason, "class gp3 does not allow expansion");
 }
 
 #[test]

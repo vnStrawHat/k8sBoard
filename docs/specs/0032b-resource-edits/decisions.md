@@ -13,7 +13,7 @@
 | 7 | The 0032 popover (`ValuePopover`, named so from the start) gains forms; each form owns its inputs | one input surface for number and quantity edits; no mixed homes for input state |
 | 8 | No rename commit: 0032 already ships `ValuePopover` / `ValueForm::Replicas` | the generalization costs nothing later |
 | 9 | The new PVC size must exceed `max(requested, capacity)` | the API forbids less than the previous value; equal is a no-op |
-| 10 | The class-expansion check reads the StorageClasses list only when loaded; the dry-run is the backstop | no new list call for a hint (open item 1); the admission plugin's 403 names the cause |
+| 10 | The class-expansion check reads the classes the PVCs screen joins in (round 3: a StorageClasses companion list); the dry-run is the backstop for a claim read elsewhere | the admission plugin's 403 names the cause |
 | 11 | Warnings: HPA range moves current replicas; expand is irreversible, resize in progress, file-system resize pending; set default changes new claims only | non-blocking context the dry-run cannot give |
 | 12 | Bulk HPA and Expand apply one value to every ticked row; rows already there are skipped | W7 top buttons act on selected rows (W7 note 1); 0032 `Batch` |
 | 13 | Set default is one `Batch` with `BatchFailure::Stop`: set the new default first, then unset the others | never zero defaults; two at once is allowed since 1.26 (the newest by `creationTimestamp` wins); a failed set must not unset the old default |

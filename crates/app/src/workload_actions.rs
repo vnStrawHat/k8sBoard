@@ -436,7 +436,7 @@ pub(crate) fn row_block(
         }
         (ResourceAction::EditValues(_), object) => values_edit_block(object),
         (ResourceAction::ExpandClaim, KindObject::PersistentVolumeClaim(claim)) => {
-            claim_block(claim, &[])
+            claim_block(claim)
         }
         (ResourceAction::SetDefaultStorageClass, KindObject::StorageClass(class)) => {
             class_block(class)

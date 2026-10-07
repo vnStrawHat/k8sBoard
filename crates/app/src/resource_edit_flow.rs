@@ -189,7 +189,7 @@ impl AppShell {
             notify(window, cx, text);
             return;
         };
-        if let Some(reason) = self.claim_refusal(subject, &claim, cx) {
+        if let Some(reason) = Self::claim_refusal(&claim) {
             notify(window, cx, unavailable_text(label, &reason));
             return;
         }
@@ -200,17 +200,10 @@ impl AppShell {
 
     /// Why `claim` cannot be expanded now: its state, and its class when the StorageClasses list is
     /// loaded in the claim's cluster.
-    // ponytail: the class list is loaded only on the StorageClasses screen, never beside PVC rows,
-    // so this class check rarely fires; the dry-run (the admission refusal) is the backstop. Add a
-    // one-shot class GET if it must be exact.
-    fn claim_refusal(
-        &self,
-        subject: &ClusterObject,
-        claim: &PersistentVolumeClaimSummary,
-        cx: &App,
-    ) -> Option<SharedString> {
-        let live = self.live_of(&subject.cluster, cx)?;
-        claim_block(claim, &live.loaded_storage_classes())
+    // A claim read from a list other than the PVCs screen does not know its class yet: the dry-run
+    // (the admission refusal) is the backstop.
+    fn claim_refusal(claim: &PersistentVolumeClaimSummary) -> Option<SharedString> {
+        claim_block(claim)
     }
 
     /// The Expand popover for the ticked claims, empty: one size for all of them.
@@ -249,7 +242,7 @@ impl AppShell {
             notify(window, cx, text);
             return;
         };
-        if let Some(reason) = self.claim_refusal(subject, &claim, cx) {
+        if let Some(reason) = Self::claim_refusal(&claim) {
             notify(window, cx, unavailable_text(label, &reason));
             return;
         }
@@ -472,6 +465,7 @@ mod fixtures {
             storage_class: Some("gp3".to_owned()),
             volume_mode: Some("Filesystem".to_owned()),
             conditions: Vec::new(),
+            class_allows_expansion: None,
         }
     }
 

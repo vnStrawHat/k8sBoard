@@ -29,6 +29,9 @@ pub struct PersistentVolumeClaimSummary {
     pub storage_class: Option<String>,
     pub volume_mode: Option<String>,
     pub conditions: Vec<WorkloadCondition>,
+    /// Whether the claim's StorageClass allows expansion. The API object has no such field: the app
+    /// sets it from the loaded classes (`None` until they are, and for a claim with no class).
+    pub class_allows_expansion: Option<bool>,
 }
 
 impl ClusterConnection {
@@ -95,6 +98,7 @@ pub(crate) fn persistent_volume_claim_summary(
                 )
             })
             .collect(),
+        class_allows_expansion: None,
     }
 }
 

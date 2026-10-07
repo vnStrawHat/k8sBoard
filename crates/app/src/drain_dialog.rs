@@ -1309,7 +1309,9 @@ impl DrainDialog {
         let color = match state {
             DryRunState::Passed { .. } if is_stalled => tone_color(StatusTone::Warn, cx),
             DryRunState::Passed { .. } => tone_color(StatusTone::Ok, cx),
-            DryRunState::Failed(_) | DryRunState::Rejected(_) => tone_color(StatusTone::Bad, cx),
+            DryRunState::Failed(_) | DryRunState::Refused(_) | DryRunState::Rejected(_) => {
+                tone_color(StatusTone::Bad, cx)
+            }
             DryRunState::Running | DryRunState::NotSupported => cx.theme().muted_foreground,
         };
         div()

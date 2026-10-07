@@ -590,6 +590,7 @@ fn type_storage(t: &Clusters, popover: &Entity<ValuePopover>, text: &str, cx: &m
     t.fixture.with_window(cx, |window, cx| {
         popover.update(cx, |popover, cx| popover.type_storage(text, window, cx));
     });
+    cx.run_until_parked();
 }
 
 #[gpui_kit::test]
@@ -598,15 +599,12 @@ fn expand_opens_the_popover_then_the_confirm_dialog(cx: &mut TestAppContext) {
     on_stg_claim(&t, cx);
     let popover = open_expand_popover(&t, cx);
     assert!(!t.has_dialog(cx));
-    // It opens on the size the claim has, which is no growth.
+    // It opens on the size the claim has, which is no growth; nothing is said before the user types.
     popover.read_with(cx, |popover, cx| {
         assert_eq!(popover.typed_text(cx), "100Gi");
         assert_eq!(popover.state_line(cx), "Now 100Gi \u{b7} class gp3");
         assert!(!popover.can_submit(cx));
-        assert_eq!(
-            popover.error_line(cx).as_deref(),
-            Some("Must be larger than 100Gi")
-        );
+        assert_eq!(popover.error_line(cx), None);
     });
     type_storage(&t, &popover, " 150Gi ", cx);
     popover.read_with(cx, |popover, cx| {
@@ -654,9 +652,11 @@ fn expand_form_validates_the_size(cx: &mut TestAppContext) {
     let t = edit_clusters("expand-validate", cx);
     on_stg_claim(&t, cx);
     let popover = open_expand_popover(&t, cx);
+    // The popover opens on 100Gi, so no rule complains until a different text is typed.
+    popover.read_with(cx, |popover, cx| assert_eq!(popover.error_line(cx), None));
     let cases = [
-        ("100Gi", Some("Must be larger than 100Gi"), false),
         ("99Gi", Some("Must be larger than 100Gi"), false),
+        ("100Gi", Some("Must be larger than 100Gi"), false),
         ("abc", Some("Enter a size such as 150Gi"), false),
         ("0", Some("Enter a size such as 150Gi"), false),
         ("-5Gi", Some("Enter a size such as 150Gi"), false),
@@ -778,13 +778,16 @@ fn the_dry_run_reports_the_admission_refusal_and_blocks_the_commit(cx: &mut Test
     let state = t
         .dialog(cx)
         .read_with(cx, |dialog, _| dialog.dry_run_state());
-    let Some(DryRunState::Failed(text)) = state else {
-        panic!("the dry-run should fail: {state:?}");
+    let Some(DryRunState::Refused(text)) = state else {
+        panic!("the dry-run should be refused: {state:?}");
     };
     assert!(text.contains("the change is invalid"), "{text}");
     assert!(text.contains("only dynamically provisioned pvc"), "{text}");
     assert!(!text.contains("not permitted"), "{text}");
     assert!(t.block(cx).is_some());
+    // The server said no to the change itself: a second check cannot pass, so there is no Retry.
+    t.fixture.draw_twice(cx);
+    assert!(!t.fixture.is_drawn("write-retry", cx));
     t.confirm(cx);
     cx.run_until_parked();
     assert_eq!(writes(&t.stg_api).len(), 1, "only the dry-run was sent");

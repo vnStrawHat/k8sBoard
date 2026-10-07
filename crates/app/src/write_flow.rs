@@ -316,6 +316,9 @@ pub(crate) enum DryRunState {
         elapsed: Duration,
     },
     Failed(SharedString),
+    /// The server judged the change itself invalid or forbidden (a 422, or a refusal of the
+    /// object): a second check of the same change gets the same answer, so there is no Retry.
+    Refused(SharedString),
     /// An admission webhook does not support dry-run: the commit stays blocked.
     Rejected(SharedString),
 }
@@ -379,7 +382,7 @@ pub(crate) fn commit_block(
     match dry_run {
         DryRunState::NotSupported | DryRunState::Passed { .. } => {}
         DryRunState::Running => return Some("Waiting for the dry-run…".into()),
-        DryRunState::Failed(text) => return Some(text.clone()),
+        DryRunState::Failed(text) | DryRunState::Refused(text) => return Some(text.clone()),
         DryRunState::Rejected(reason) => {
             return Some(
                 format!(
@@ -603,7 +606,13 @@ pub(crate) fn dry_run_state_of(result: Result<WriteOutcome, CheckedWriteError>) 
             DryRunState::Rejected(reason.into())
         }
         Err(CheckedWriteError::Write(error)) => {
-            DryRunState::Failed(format!("Dry-run failed: {}", write_error_text(&error)).into())
+            let text = format!("Dry-run failed: {}", write_error_text(&error)).into();
+            match error {
+                WriteError::Invalid { .. } | WriteError::Denied { .. } | WriteError::NotFound => {
+                    DryRunState::Refused(text)
+                }
+                _ => DryRunState::Failed(text),
+            }
         }
     }
 }

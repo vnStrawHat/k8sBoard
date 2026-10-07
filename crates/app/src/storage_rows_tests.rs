@@ -18,6 +18,7 @@ fn claim() -> PersistentVolumeClaimSummary {
         storage_class: Some("gp3".to_owned()),
         volume_mode: Some("Filesystem".to_owned()),
         conditions: Vec::new(),
+        class_allows_expansion: None,
     }
 }
 

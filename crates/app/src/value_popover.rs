@@ -92,6 +92,9 @@ pub(crate) struct ValuePopover {
     shell: WeakEntity<AppShell>,
     form: ValueForm,
     targets: ValueTargets,
+    /// Whether the user changed a field since the popover opened: a form opens prefilled with the
+    /// value the object has now, which no rule should complain about before it is touched.
+    is_edited: bool,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -238,6 +241,7 @@ impl ValuePopover {
                 object,
                 target: Box::new(target),
             },
+            is_edited: false,
             _subscriptions: subscriptions,
         };
         popover.show_image(&initial, window, cx);
@@ -286,6 +290,7 @@ impl ValuePopover {
             shell,
             form: ValueForm::Replicas { input },
             targets,
+            is_edited: false,
             _subscriptions: subscriptions,
         }
     }
@@ -308,6 +313,7 @@ impl ValuePopover {
             shell,
             form: ValueForm::ReplicaRange { min, max },
             targets,
+            is_edited: false,
             _subscriptions: subscriptions,
         }
     }
@@ -330,6 +336,7 @@ impl ValuePopover {
             shell,
             form: ValueForm::Storage { input },
             targets,
+            is_edited: false,
             _subscriptions: subscriptions,
         }
     }
@@ -348,7 +355,10 @@ impl ValuePopover {
                     window,
                     |popover, input, event, window, cx| match event {
                         InputEvent::PressEnter { .. } => popover.submit(window, cx),
-                        InputEvent::Change => cx.notify(),
+                        InputEvent::Change => {
+                            popover.is_edited = true;
+                            cx.notify();
+                        }
                         // Tab into a number field selects its value, like the field that opens focused.
                         InputEvent::Focus
                             if matches!(
@@ -664,7 +674,8 @@ impl ValuePopover {
                 RangeInput::Incomplete | RangeInput::Unchanged | RangeInput::Set { .. } => None,
             },
             ValueForm::Storage { .. } => match self.storage_choice(cx) {
-                StorageInput::Refused(reason) => Some(reason),
+                StorageInput::Refused(reason) if self.is_edited => Some(reason),
+                StorageInput::Refused(_) => None,
                 StorageInput::Incomplete | StorageInput::Set(_) => None,
             },
         }
@@ -865,6 +876,8 @@ impl ValuePopover {
         let ValueForm::Storage { input } = &self.form else {
             return;
         };
+        // `set_value` is silent; a user typing sends `Change`, which sets this.
+        self.is_edited = true;
         input.update(cx, |input, cx| input.set_value(text.to_owned(), window, cx));
     }
 

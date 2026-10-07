@@ -724,6 +724,7 @@ fn claim_row() -> KindRow {
         storage_class: None,
         volume_mode: None,
         conditions: Vec::new(),
+        class_allows_expansion: None,
     })
 }
 

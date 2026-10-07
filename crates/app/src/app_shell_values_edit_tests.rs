@@ -895,8 +895,8 @@ fn a_failed_dry_run_blocks_apply_and_does_not_quote_the_value(cx: &mut TestAppCo
     let state = t
         .dialog(cx)
         .read_with(cx, |dialog, _| dialog.dry_run_state());
-    let Some(DryRunState::Failed(text)) = state else {
-        panic!("the dry-run failed: {state:?}");
+    let Some(DryRunState::Refused(text)) = state else {
+        panic!("the dry-run was refused: {state:?}");
     };
     assert!(!text.contains(SECRET_VALUE), "{text}");
     assert!(text.contains("data[DB_PASSWORD]"), "{text}");

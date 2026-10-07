@@ -180,6 +180,7 @@ fn claim(phase: &str) -> cluster::PersistentVolumeClaimSummary {
         storage_class: None,
         volume_mode: None,
         conditions: Vec::new(),
+        class_allows_expansion: None,
     }
 }
 

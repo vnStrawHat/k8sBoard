@@ -263,6 +263,7 @@ fn claim_object(name: &str, capacity: &str) -> KindObject {
         storage_class: None,
         volume_mode: None,
         conditions: Vec::new(),
+        class_allows_expansion: None,
     })
 }
 

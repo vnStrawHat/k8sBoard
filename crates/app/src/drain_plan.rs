@@ -930,7 +930,7 @@ pub(crate) fn dry_run_text(
                 cordons.len() + pods.len()
             )
         }
-        DryRunState::Failed(text) => text.to_string(),
+        DryRunState::Failed(text) | DryRunState::Refused(text) => text.to_string(),
         DryRunState::Rejected(reason) => {
             format!("An admission webhook does not support dry-run: {reason}")
         }

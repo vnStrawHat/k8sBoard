@@ -296,6 +296,8 @@ struct Companion {
 pub(crate) enum CompanionLists {
     EndpointSlices(LiveList<EndpointSliceSummary>),
     PersistentVolumes(LiveList<PersistentVolumeSummary>),
+    /// The StorageClasses of the PVCs screen: whether the class of a claim allows expansion.
+    StorageClasses(LiveList<StorageClassSummary>),
     /// The Ingresses of the Secrets screen: the TLS users of a secret.
     Ingresses(LiveList<IngressSummary>),
     /// The TLS secrets of the Ingresses screen: the certificates its TLS column reads.
@@ -312,6 +314,7 @@ pub(crate) enum CompanionLists {
 enum CompanionUpdate {
     EndpointSlices(WatchUpdate<EndpointSliceSummary>),
     PersistentVolumes(WatchUpdate<PersistentVolumeSummary>),
+    StorageClasses(WatchUpdate<StorageClassSummary>),
     Ingresses(WatchUpdate<IngressSummary>),
     TlsSecrets(WatchUpdate<SecretSummary>),
     RoleBindings(WatchUpdate<BindingSummary>),
@@ -323,6 +326,7 @@ enum CompanionUpdate {
 pub(crate) enum CompanionKind {
     EndpointSlices,
     PersistentVolumes,
+    StorageClasses,
     Ingresses,
     TlsSecrets,
     Bindings { with_cluster_role_bindings: bool },
@@ -350,6 +354,10 @@ pub(crate) fn companion_plan(kind: ResourceKind, access: &AccessState) -> Compan
         ResourceKind::StorageClasses => (
             CompanionKind::PersistentVolumes,
             AccessCheck::ListPersistentVolumes,
+        ),
+        ResourceKind::PersistentVolumeClaims => (
+            CompanionKind::StorageClasses,
+            AccessCheck::ListStorageClasses,
         ),
         ResourceKind::Secrets => (CompanionKind::Ingresses, AccessCheck::ListIngresses),
         ResourceKind::Ingresses => (CompanionKind::TlsSecrets, AccessCheck::ListSecrets),
@@ -421,6 +429,7 @@ impl CompanionLists {
         match kind {
             CompanionKind::EndpointSlices => Self::EndpointSlices(LiveList::Loading),
             CompanionKind::PersistentVolumes => Self::PersistentVolumes(LiveList::Loading),
+            CompanionKind::StorageClasses => Self::StorageClasses(LiveList::Loading),
             CompanionKind::Ingresses => Self::Ingresses(LiveList::Loading),
             CompanionKind::TlsSecrets => Self::TlsSecrets(LiveList::Loading),
             CompanionKind::Bindings {
@@ -439,6 +448,9 @@ impl CompanionLists {
                 list.apply(update);
             }
             (Self::PersistentVolumes(list), CompanionUpdate::PersistentVolumes(update)) => {
+                list.apply(update);
+            }
+            (Self::StorageClasses(list), CompanionUpdate::StorageClasses(update)) => {
                 list.apply(update);
             }
             (Self::Ingresses(list), CompanionUpdate::Ingresses(update)) => list.apply(update),
@@ -462,6 +474,7 @@ impl CompanionLists {
         match self {
             Self::EndpointSlices(list) => list.mark_stopped(),
             Self::PersistentVolumes(list) => list.mark_stopped(),
+            Self::StorageClasses(list) => list.mark_stopped(),
             Self::Ingresses(list) => list.mark_stopped(),
             Self::TlsSecrets(list) => list.mark_stopped(),
             Self::Bindings {
@@ -481,6 +494,7 @@ impl CompanionLists {
         match self {
             Self::EndpointSlices(list) => Some(list),
             Self::PersistentVolumes(_)
+            | Self::StorageClasses(_)
             | Self::Ingresses(_)
             | Self::TlsSecrets(_)
             | Self::Bindings { .. } => None,
@@ -492,6 +506,19 @@ impl CompanionLists {
         match self {
             Self::PersistentVolumes(list) => Some(list),
             Self::EndpointSlices(_)
+            | Self::StorageClasses(_)
+            | Self::Ingresses(_)
+            | Self::TlsSecrets(_)
+            | Self::Bindings { .. } => None,
+        }
+    }
+
+    /// The storage classes, when this companion lists them.
+    pub(crate) fn storage_classes(&self) -> Option<&LiveList<StorageClassSummary>> {
+        match self {
+            Self::StorageClasses(list) => Some(list),
+            Self::EndpointSlices(_)
+            | Self::PersistentVolumes(_)
             | Self::Ingresses(_)
             | Self::TlsSecrets(_)
             | Self::Bindings { .. } => None,
@@ -504,6 +531,7 @@ impl CompanionLists {
             Self::Ingresses(list) => Some(list),
             Self::EndpointSlices(_)
             | Self::PersistentVolumes(_)
+            | Self::StorageClasses(_)
             | Self::TlsSecrets(_)
             | Self::Bindings { .. } => None,
         }
@@ -515,6 +543,7 @@ impl CompanionLists {
             Self::TlsSecrets(list) => Some(list),
             Self::EndpointSlices(_)
             | Self::PersistentVolumes(_)
+            | Self::StorageClasses(_)
             | Self::Ingresses(_)
             | Self::Bindings { .. } => None,
         }
@@ -526,6 +555,7 @@ impl CompanionLists {
         match self {
             Self::EndpointSlices(list) => list.is_loading(),
             Self::PersistentVolumes(list) => list.is_loading(),
+            Self::StorageClasses(list) => list.is_loading(),
             Self::Ingresses(list) => list.is_loading(),
             Self::TlsSecrets(list) => list.is_loading(),
             Self::Bindings {
@@ -546,6 +576,7 @@ impl CompanionLists {
         match self {
             Self::EndpointSlices(_) => vec![("EndpointSlices", namespaces)],
             Self::PersistentVolumes(_) => vec![(ResourceKind::PersistentVolumes.label(), 1)],
+            Self::StorageClasses(_) => vec![(ResourceKind::StorageClasses.label(), 1)],
             Self::Ingresses(_) => vec![(ResourceKind::Ingresses.label(), namespaces)],
             Self::TlsSecrets(_) => vec![(ResourceKind::Secrets.label(), namespaces)],
             Self::Bindings {
@@ -566,7 +597,7 @@ impl CompanionLists {
     fn watches(&self, namespaces: usize) -> usize {
         match self {
             Self::EndpointSlices(_) => namespaces,
-            Self::PersistentVolumes(_) => 1,
+            Self::PersistentVolumes(_) | Self::StorageClasses(_) => 1,
             Self::Ingresses(_) | Self::TlsSecrets(_) => namespaces,
             Self::Bindings {
                 cluster_role_bindings,
@@ -3919,6 +3950,10 @@ impl Companion {
             CompanionKind::PersistentVolumes => connection
                 .watch_persistent_volumes()
                 .map(CompanionUpdate::PersistentVolumes)
+                .boxed(),
+            CompanionKind::StorageClasses => connection
+                .watch_storage_classes()
+                .map(CompanionUpdate::StorageClasses)
                 .boxed(),
             CompanionKind::Ingresses => connection
                 .watch_ingresses(scope)

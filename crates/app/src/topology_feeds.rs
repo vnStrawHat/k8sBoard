@@ -251,6 +251,7 @@ impl TopologyFeeds {
         match companion {
             CompanionKind::EndpointSlices => CompanionLists::EndpointSlices(not_watched()),
             CompanionKind::PersistentVolumes => CompanionLists::PersistentVolumes(not_watched()),
+            CompanionKind::StorageClasses => CompanionLists::StorageClasses(not_watched()),
             CompanionKind::Ingresses => {
                 CompanionLists::Ingresses(self.feed_list(ResourceKind::Ingresses, |object| {
                     match object {

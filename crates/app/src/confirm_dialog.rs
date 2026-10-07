@@ -402,8 +402,8 @@ impl ConfirmDialog {
             .items_center()
             .child(environment_badge(&self.environment, cx))
             // The label names the object, which can be long: it wraps instead of running out of the
-            // dialog.
-            .child(div().flex_1().min_w_0().child(text))
+            // dialog, and it stops short of the close button in the corner.
+            .child(div().flex_1().min_w_0().pr_6().child(text))
             .into_any_element()
     }
 
@@ -1268,7 +1268,9 @@ impl ConfirmDialog {
                 ),
                 tone_color(StatusTone::Ok, cx),
             ),
-            DryRunState::Failed(text) => (text.to_string(), tone_color(StatusTone::Bad, cx)),
+            DryRunState::Failed(text) | DryRunState::Refused(text) => {
+                (text.to_string(), tone_color(StatusTone::Bad, cx))
+            }
             DryRunState::Rejected(reason) => (
                 format!("An admission webhook does not support dry-run: {reason}"),
                 tone_color(StatusTone::Bad, cx),

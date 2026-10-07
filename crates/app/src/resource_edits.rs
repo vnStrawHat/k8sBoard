@@ -274,13 +274,10 @@ pub(crate) fn claim_state_text(claim: &PersistentVolumeClaimSummary) -> String {
     format!("Now {size} \u{b7} class {class}")
 }
 
-/// Why the claim cannot be expanded now, `None` when it can. `classes` is the StorageClasses list
-/// when it is loaded, else empty: then the class is not checked and the dry-run is the backstop
-/// (the admission plugin refuses a class without expansion).
-pub(crate) fn claim_block(
-    claim: &PersistentVolumeClaimSummary,
-    classes: &[&StorageClassSummary],
-) -> Option<SharedString> {
+/// Why the claim cannot be expanded now, `None` when it can. The class is checked when the PVCs
+/// screen has loaded the StorageClasses (`class_allows_expansion`); until then the dry-run is the
+/// backstop (the admission plugin refuses a class without expansion).
+pub(crate) fn claim_block(claim: &PersistentVolumeClaimSummary) -> Option<SharedString> {
     if claim.phase != "Bound" {
         return Some(ONLY_BOUND.into());
     }
@@ -288,9 +285,8 @@ pub(crate) fn claim_block(
         return Some(BEING_DELETED.into());
     }
     let class = claim.storage_class.as_deref()?;
-    let known = classes.iter().find(|known| known.name == class)?;
-    (!known.allows_expansion)
-        .then(|| format!("Storage class {class} does not allow expansion").into())
+    (claim.class_allows_expansion == Some(false))
+        .then(|| format!("class {class} does not allow expansion").into())
 }
 
 /// A resize to a size above the capacity that is already requested.
@@ -368,12 +364,9 @@ pub(crate) fn expand_intent(
 
 /// The batch of one size over the ticked claims. A claim the state refuses, or that has that size
 /// or more already, becomes a skipped line. `Err` is the reason the batch cannot open.
-// ponytail: `classes` is empty in practice (the list loads only on the StorageClasses screen), so the
-// dry-run is the backstop for a class without expansion; see `claim_refusal`.
 pub(crate) fn bulk_expand_intent(
     inputs: &BulkInputs<'_>,
     storage: &str,
-    classes: &[&StorageClassSummary],
 ) -> Result<BatchIntent, SharedString> {
     let storage = match storage_input(storage, None) {
         StorageInput::Set(storage) => storage,
@@ -386,7 +379,7 @@ pub(crate) fn bulk_expand_intent(
             return Err(skipped("object".into(), "is not a claim"));
         };
         let object = namespaced_text(&claim.namespace, &claim.name);
-        if let Some(reason) = claim_block(claim, classes) {
+        if let Some(reason) = claim_block(claim) {
             return Err(skipped(object, reason));
         }
         let scope = WorkloadScope {

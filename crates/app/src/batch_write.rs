@@ -1067,7 +1067,7 @@ impl AppShell {
             }
             (ResourceAction::EditHpaRange, _) => Err("Enter the min and max first".into()),
             (ResourceAction::ExpandClaim, BulkValue::Storage(storage)) => {
-                bulk_expand_intent(&inputs, &storage, &live.loaded_storage_classes())
+                bulk_expand_intent(&inputs, &storage)
             }
             (ResourceAction::ExpandClaim, _) => Err("Enter the size first".into()),
             (ResourceAction::SetDefaultStorageClass, _) => {
