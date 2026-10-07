@@ -11,8 +11,8 @@ use cluster::{
     DeploymentSummary, EndpointSliceSummary, EventFilter, EventSummary, HelmRevision,
     IngressSummary, InvolvedObject, JobSummary, Kubeconfig, KubeletTargets, LimitRangeSummary,
     LogRequest, LogSource, LogUpdate, MetricsError, MetricsSource, MetricsSourceError,
-    NamespaceAccess, NamespaceScope, NamespaceSummary, NodeSummary, ObjectKind,
-    PersistentVolumeSummary, PodSummary, ProxyChoice, ProxyUrlError, RbacSnapshot,
+    NamespaceAccess, NamespaceScope, NamespaceSummary, NetworkPolicySummary, NodeSummary,
+    ObjectKind, PersistentVolumeSummary, PodSummary, ProxyChoice, ProxyUrlError, RbacSnapshot,
     ReplicaSetSummary, ResourceQuotaSummary, SecretSummary, ServerVersion, ServiceSummary,
     SourceCheck, StorageClassSummary, TrafficCounter, TrafficMetricSource, WatchUpdate,
 };
@@ -732,8 +732,11 @@ pub(crate) enum RelatedList {
     HelmHistory(LiveList<HelmRevision>),
     /// The masked, flattened spec and status of one custom object (0 or 1 item).
     CustomFields(LiveList<CustomObjectFields>),
-    /// The Services of one namespace, for a Pod drawer.
-    Services(LiveList<ServiceSummary>),
+    /// The Services and the NetworkPolicies of one namespace, for a Pod drawer.
+    PodNetwork {
+        services: LiveList<ServiceSummary>,
+        policies: LiveList<NetworkPolicySummary>,
+    },
     /// The Ingresses of one namespace, for a Service drawer.
     Ingresses(LiveList<IngressSummary>),
     /// Every StorageClass, for a claim drawer.
@@ -751,6 +754,7 @@ enum RelatedUpdate {
     HelmHistory(WatchUpdate<HelmRevision>),
     CustomFields(WatchUpdate<CustomObjectFields>),
     Services(WatchUpdate<ServiceSummary>),
+    NetworkPolicies(WatchUpdate<NetworkPolicySummary>),
     Ingresses(WatchUpdate<IngressSummary>),
     StorageClasses(WatchUpdate<StorageClassSummary>),
 }
@@ -770,7 +774,10 @@ impl RelatedList {
             },
             RelatedSubject::HelmHistory { .. } => Self::HelmHistory(LiveList::Loading),
             RelatedSubject::CustomFields { .. } => Self::CustomFields(LiveList::Loading),
-            RelatedSubject::PodServices { .. } => Self::Services(LiveList::Loading),
+            RelatedSubject::PodServices { .. } => Self::PodNetwork {
+                services: LiveList::Loading,
+                policies: LiveList::Loading,
+            },
             RelatedSubject::ServiceIngresses { .. } => Self::Ingresses(LiveList::Loading),
             RelatedSubject::ClaimClasses => Self::StorageClasses(LiveList::Loading),
         }
@@ -793,7 +800,12 @@ impl RelatedList {
             }
             (Self::HelmHistory(list), RelatedUpdate::HelmHistory(update)) => list.apply(update),
             (Self::CustomFields(list), RelatedUpdate::CustomFields(update)) => list.apply(update),
-            (Self::Services(list), RelatedUpdate::Services(update)) => list.apply(update),
+            (Self::PodNetwork { services, .. }, RelatedUpdate::Services(update)) => {
+                services.apply(update);
+            }
+            (Self::PodNetwork { policies, .. }, RelatedUpdate::NetworkPolicies(update)) => {
+                policies.apply(update);
+            }
             (Self::Ingresses(list), RelatedUpdate::Ingresses(update)) => list.apply(update),
             (Self::StorageClasses(list), RelatedUpdate::StorageClasses(update)) => {
                 list.apply(update);
@@ -818,7 +830,10 @@ impl RelatedList {
             }
             Self::HelmHistory(list) => list.mark_stopped(),
             Self::CustomFields(list) => list.mark_stopped(),
-            Self::Services(list) => list.mark_stopped(),
+            Self::PodNetwork { services, policies } => {
+                services.mark_stopped();
+                policies.mark_stopped();
+            }
             Self::Ingresses(list) => list.mark_stopped(),
             Self::StorageClasses(list) => list.mark_stopped(),
         }
@@ -835,7 +850,15 @@ impl RelatedList {
     /// The Services of a Pod drawer's namespace, when this list holds them.
     pub(crate) fn services(&self) -> Option<&LiveList<ServiceSummary>> {
         match self {
-            Self::Services(list) => Some(list),
+            Self::PodNetwork { services, .. } => Some(services),
+            _ => None,
+        }
+    }
+
+    /// The NetworkPolicies of a Pod drawer's namespace, when this list holds them.
+    pub(crate) fn network_policies(&self) -> Option<&LiveList<NetworkPolicySummary>> {
+        match self {
+            Self::PodNetwork { policies, .. } => Some(policies),
             _ => None,
         }
     }
@@ -902,7 +925,9 @@ impl RelatedList {
             } => quotas.is_loading() || limit_ranges.is_loading(),
             Self::HelmHistory(list) => list.is_loading(),
             Self::CustomFields(list) => list.is_loading(),
-            Self::Services(list) => list.is_loading(),
+            Self::PodNetwork { services, policies } => {
+                services.is_loading() || policies.is_loading()
+            }
             Self::Ingresses(list) => list.is_loading(),
             Self::StorageClasses(list) => list.is_loading(),
         }
@@ -4136,10 +4161,18 @@ impl RelatedObjects {
                 // A row always fits its kind's scope; an end of stream reads as a failed list.
                 None => futures::stream::empty().boxed(),
             },
-            RelatedSubject::PodServices { namespace } => connection
-                .watch_services(NamespaceScope::Named(namespace.clone()))
-                .map(RelatedUpdate::Services)
-                .boxed(),
+            // ponytail: the policies watch is not gated by its own access check, so a session
+            // that may not list them retries with the watcher's backoff while the drawer is open;
+            // gate it like the Namespace drawer's lists if that shows up.
+            RelatedSubject::PodServices { namespace } => futures::stream::select(
+                connection
+                    .watch_services(NamespaceScope::Named(namespace.clone()))
+                    .map(RelatedUpdate::Services),
+                connection
+                    .watch_network_policies(NamespaceScope::Named(namespace.clone()))
+                    .map(RelatedUpdate::NetworkPolicies),
+            )
+            .boxed(),
             RelatedSubject::ServiceIngresses { namespace } => connection
                 .watch_ingresses(NamespaceScope::Named(namespace.clone()))
                 .map(RelatedUpdate::Ingresses)

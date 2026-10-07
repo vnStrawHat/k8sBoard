@@ -18,6 +18,7 @@
 2. **Pod** rows: Node → `link_text` to `ResourceKey::Node` ("—" when unscheduled); Pod IP; QoS class; Service account (plain text; the ServiceAccounts screen is 0015); Controlled by → `link_text` to `of_object(kind, Some(ns), name)`, plain `{kind}/{name}` when `None`.
 3. **Conditions** chips as today; a chip that is not true gets a tooltip `{reason}: {message}` (either part may be missing; no tooltip when both are).
 4. **Containers** summary unchanged. Since 0007 the Containers arm must wrap its content in `DrawerBody::Scrolling(..)`. UX fix: each container row also shows "N restarts" in the warning tone (hidden at 0) and, once it ran before, a muted "Last exit: {last state text}" line; the Pods Restarts cell is warning-toned above 0.
+5. **Network line** (round 3, P11): under the Services rows, `Network: isolated by deny-ingress (ingress)`. The drawer's related watch holds the namespace's NetworkPolicies beside its Services (`RelatedList::PodNetwork`); a policy counts when its podSelector matches the pod's labels and it isolates a direction, and each is named with the directions it isolates (`web-egress (ingress, egress)`; three at most, then `and 2 more`). With none: `Network: not isolated, no NetworkPolicy selects this pod`. While the policies load, or when the list fails, the line is not drawn.
 
 ## Containers tab
 

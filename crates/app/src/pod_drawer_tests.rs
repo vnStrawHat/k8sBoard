@@ -369,3 +369,82 @@ fn container_list_fits_the_longest_name_within_its_limits() {
     );
     assert_eq!(container_list_width(&[named(&"x".repeat(80))]), px(360.));
 }
+
+fn policy(
+    name: &str,
+    selector: &[&str],
+    ingress: bool,
+    egress: bool,
+) -> cluster::NetworkPolicySummary {
+    let terms: Vec<String> = selector.iter().map(|term| (*term).to_owned()).collect();
+    let direction = |isolated: bool| {
+        if isolated {
+            cluster::PolicyDirection::Allowed(Vec::new())
+        } else {
+            cluster::PolicyDirection::NotIsolated
+        }
+    };
+    cluster::NetworkPolicySummary {
+        namespace: "shop".to_owned(),
+        name: name.to_owned(),
+        created_at: None,
+        labels: Vec::new(),
+        pod_selector: cluster::Selector::of_labels(&terms)
+            .unwrap_or_else(cluster::Selector::everything),
+        ingress: direction(ingress),
+        egress: direction(egress),
+    }
+}
+
+fn pod_labelled(labels: &[&str]) -> PodSummary {
+    let mut pod = crate::log_fixtures::fixture_pod("web-0", Vec::new());
+    pod.labels = labels.iter().map(|term| (*term).to_owned()).collect();
+    pod
+}
+
+#[test]
+fn the_network_line_names_the_policies_that_isolate_the_pod_and_their_directions() {
+    let pod = pod_labelled(&["app=web"]);
+    let policies = [
+        policy("deny-ingress", &[], true, false),
+        policy("web-egress", &["app=web"], true, true),
+        policy("db-only", &["app=db"], true, false),
+    ];
+    assert_eq!(
+        network_text(&pod, &policies),
+        "isolated by deny-ingress (ingress), web-egress (ingress, egress)"
+    );
+}
+
+#[test]
+fn a_pod_no_policy_isolates_reads_not_isolated() {
+    let pod = pod_labelled(&["app=web"]);
+    // A policy of another pod, one of another namespace, and one that sets no policy type.
+    let mut elsewhere = policy("deny-all", &[], true, true);
+    elsewhere.namespace = "billing".to_owned();
+    let policies = [
+        policy("db-only", &["app=db"], true, false),
+        elsewhere,
+        policy("no-type", &["app=web"], false, false),
+    ];
+    assert_eq!(
+        network_text(&pod, &policies),
+        "not isolated, no NetworkPolicy selects this pod"
+    );
+    assert_eq!(
+        network_text(&pod, &[]),
+        "not isolated, no NetworkPolicy selects this pod"
+    );
+}
+
+#[test]
+fn the_network_line_caps_the_policies_it_names() {
+    let pod = pod_labelled(&[]);
+    let policies: Vec<_> = (1..=5)
+        .map(|index| policy(&format!("p{index}"), &[], true, false))
+        .collect();
+    assert_eq!(
+        network_text(&pod, &policies),
+        "isolated by p1 (ingress), p2 (ingress), p3 (ingress) and 2 more"
+    );
+}

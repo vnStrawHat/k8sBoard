@@ -2,7 +2,8 @@ use std::rc::Rc;
 
 use cluster::{
     ByteAmount, ContainerKind, ContainerResource, ContainerState, ContainerSummary, CpuAmount,
-    EventSummary, PodCondition, PodSummary, ResourceUsage, ServiceSummary, VolumeSource,
+    EventSummary, NetworkPolicySummary, PodCondition, PodSummary, PolicyDirection, ResourceUsage,
+    ServiceSummary, VolumeSource,
 };
 use gpui_kit::assets::IconName;
 use gpui_kit::component::alert::Alert;
@@ -554,12 +555,12 @@ fn services_section(
             .into_any_element()
     };
     let subject = key_related_subject(&ResourceKey::of_pod(pod));
-    let body = match (live, subject) {
+    let body = match (live, subject.as_ref()) {
         (Some(live), Some(subject)) => {
-            if let Some(check) = denied_related_check(&subject, &live.access) {
+            if let Some(check) = denied_related_check(subject, &live.access) {
                 vec![note(&format!("Not permitted: {check}"))]
             } else {
-                match live.related_of(&subject).and_then(RelatedList::services) {
+                match live.related_of(subject).and_then(RelatedList::services) {
                     None | Some(LiveList::Loading) => vec![note("Loading services…")],
                     Some(LiveList::Failed { message }) => vec![
                         note("Services are unavailable"),
@@ -576,9 +577,68 @@ fn services_section(
         }
         _ => vec![note("Loading services…")],
     };
+    let network = live
+        .zip(subject.as_ref())
+        .and_then(|(live, subject)| live.related_of(subject))
+        .and_then(RelatedList::network_policies)
+        .and_then(LiveList::ready_items)
+        .map(|policies| network_line(&network_text(pod, policies), cx));
     std::iter::once(section_title("Services", cx).into_any_element())
         .chain(body)
+        .chain(network)
         .collect()
+}
+
+/// How many NetworkPolicies the Network line names before `and N more`.
+const MAX_LISTED_POLICIES: usize = 3;
+
+/// `Network: isolated by deny-ingress (ingress)`, one line under the services.
+fn network_line(text: &str, cx: &Context<AppShell>) -> AnyElement {
+    h_flex()
+        .gap_2()
+        .py_1()
+        .text_sm()
+        .child(
+            div()
+                .text_color(cx.theme().muted_foreground)
+                .child("Network:"),
+        )
+        .child(div().child(text.to_owned()))
+        .into_any_element()
+}
+
+/// How the NetworkPolicies of the pod's namespace treat it: the ones whose podSelector matches it and
+/// isolate a direction, each with the directions it isolates, or that none does. A policy that sets
+/// neither policy type isolates nothing and is left out.
+fn network_text(pod: &PodSummary, policies: &[NetworkPolicySummary]) -> String {
+    let isolating: Vec<String> = policies
+        .iter()
+        .filter(|policy| policy.namespace == pod.namespace)
+        .filter(|policy| policy.pod_selector.matches(&pod.labels))
+        .filter_map(|policy| {
+            let directions: Vec<&str> = [
+                (policy.ingress != PolicyDirection::NotIsolated).then_some("ingress"),
+                (policy.egress != PolicyDirection::NotIsolated).then_some("egress"),
+            ]
+            .into_iter()
+            .flatten()
+            .collect();
+            (!directions.is_empty()).then(|| format!("{} ({})", policy.name, directions.join(", ")))
+        })
+        .collect();
+    if isolating.is_empty() {
+        return "not isolated, no NetworkPolicy selects this pod".to_owned();
+    }
+    let shown = isolating
+        .iter()
+        .take(MAX_LISTED_POLICIES)
+        .map(String::as_str)
+        .collect::<Vec<_>>()
+        .join(", ");
+    match isolating.len().saturating_sub(MAX_LISTED_POLICIES) {
+        0 => format!("isolated by {shown}"),
+        hidden => format!("isolated by {shown} and {hidden} more"),
+    }
 }
 
 /// One row per service that selects the pod, capped; `None` when no service does.
