@@ -68,11 +68,15 @@ fn cluster() -> Vec<NodeSummary> {
 
 #[test]
 fn a_pod_no_other_node_takes_says_which_taint_stops_it() {
+    let note = placement_note(&plans(&[pod("catalog-db-0")]), &cluster()).expect("a note");
     assert_eq!(
-        placement_note(&plans(&[pod("catalog-db-0")]), &cluster()).as_deref(),
-        Some(
-            "No other node fits catalog-db-0 (taints on worker2: workload=data): its replacement will stay Pending."
-        )
+        note.text,
+        "No other node fits catalog-db-0 (taints on worker2): its replacement stays Pending."
+    );
+    assert_eq!(
+        note.detail,
+        "shop/catalog-db-0
+worker2: taints workload=data"
     );
 }
 
@@ -99,11 +103,15 @@ fn several_stranded_pods_share_one_line_and_a_cordoned_node_is_no_candidate() {
         node("worker", NodeScheduling::Enabled, &[]),
         node("worker2", NodeScheduling::Disabled, &[]),
     ];
+    let note = placement_note(&plans(&[pod("a-0"), pod("a-1")]), &nodes).expect("a note");
     assert_eq!(
-        placement_note(&plans(&[pod("a-0"), pod("a-1")]), &nodes).as_deref(),
-        Some(
-            "No other node fits a-0 and 1 more (no other node is schedulable): their replacements will stay Pending."
-        )
+        note.text,
+        "No other node fits 2 pods (no other node is schedulable): their replacements stay Pending."
+    );
+    assert_eq!(
+        note.detail,
+        "shop/a-0
+shop/a-1"
     );
 }
 
@@ -165,10 +173,31 @@ fn two_tainted_nodes_are_named_in_one_list_of_taints() {
         ),
         node("worker2", NodeScheduling::Enabled, &[("workload", "data")]),
     ];
+    let note = placement_note(&plans(&[pod("web-1")]), &nodes).expect("a note");
     assert_eq!(
-        placement_note(&plans(&[pod("web-1")]), &nodes).as_deref(),
-        Some(
-            "No other node fits web-1 (taints on control-plane: node-role.kubernetes.io/control-plane, worker2: workload=data): its replacement will stay Pending."
-        )
+        note.text,
+        "No other node fits web-1 (taints on control-plane, worker2): its replacement stays Pending."
     );
+    // The taint keys are one hover away, per node.
+    assert_eq!(
+        note.detail,
+        "shop/web-1
+control-plane: taints node-role.kubernetes.io/control-plane
+worker2: taints workload=data"
+    );
+}
+
+#[test]
+fn many_stranded_pods_are_counted_in_the_line_and_listed_in_the_tooltip() {
+    let pods: Vec<DrainPod> = (0..14).map(|index| pod(&format!("p-{index}"))).collect();
+    let note = placement_note(&plans(&pods), &cluster()).expect("a note");
+    assert_eq!(
+        note.text,
+        "No other node fits 14 pods (taints on worker2): their replacements stay Pending."
+    );
+    let lines: Vec<&str> = note.detail.lines().collect();
+    assert_eq!(lines.first(), Some(&"shop/p-0"));
+    assert_eq!(lines.get(11), Some(&"shop/p-11"));
+    assert_eq!(lines.get(12), Some(&"and 2 more"));
+    assert_eq!(lines.last(), Some(&"worker2: taints workload=data"));
 }

@@ -39,6 +39,7 @@ use super::write_flow::{
     CommitMode, Confirmed, DryRunState, TypedMatch, WriteIntent, WriteStep, checked_write,
     commit_block, confirmed, notify, notify_with, typed_match,
 };
+use crate::cell_truncation::cell_tooltip;
 use crate::cluster_registry::ClusterRef;
 use crate::cluster_runtime::ClusterRuntime;
 use crate::confirm_dialog::{typed_prompt, typed_prompt_text};
@@ -65,11 +66,31 @@ const DIALOG_WIDTH: f32 = 600.;
 /// Every preview row is this tall, so the scroll area cuts between rows, never through one.
 const PREVIEW_ROW_HEIGHT: f32 = 24.;
 const PREVIEW_VISIBLE_ROWS: f32 = 8.;
+/// With a HEADS UP box under it the list is shorter, so the box and the dry-run line below it grow
+/// to their text inside `BODY_MAX_HEIGHT` instead of being cut.
+const PREVIEW_VISIBLE_ROWS_WITH_HEADS_UP: f32 = 5.;
 /// The result column of the preview is cut with an ellipsis past this width.
 const RESULT_MAX_WIDTH: f32 = 300.;
 /// The body above the typed name and the buttons scrolls past this height, so a small window
 /// still reaches them.
-const BODY_MAX_HEIGHT: f32 = 590.;
+const BODY_MAX_HEIGHT: f32 = 630.;
+
+/// One line of the HEADS UP box; `detail` is the tooltip of a line whose text is a short form.
+struct HeadsUpLine {
+    text: String,
+    color: gpui_kit::Hsla,
+    detail: Option<String>,
+}
+
+impl HeadsUpLine {
+    fn plain(text: String, color: gpui_kit::Hsla) -> Self {
+        Self {
+            text,
+            color,
+            detail: None,
+        }
+    }
+}
 
 /// What the dialog reads when it opens: every budget of the cluster and the pods of each node, in
 /// the order of the nodes.
@@ -1148,9 +1169,14 @@ impl DrainDialog {
             .into_any_element()
     }
 
-    fn render_preview(&self, cx: &App) -> AnyElement {
+    fn render_preview(&self, has_heads_up: bool, cx: &App) -> AnyElement {
         let theme = cx.theme();
         let (muted, mono) = (theme.muted_foreground, theme.mono_font_family.clone());
+        let visible_rows = if has_heads_up {
+            PREVIEW_VISIBLE_ROWS_WITH_HEADS_UP
+        } else {
+            PREVIEW_VISIBLE_ROWS
+        };
         let mut rows: Vec<AnyElement> = Vec::new();
         // Outside the scroll area, so what the drain leaves alone is always in sight.
         let mut skipped: Vec<AnyElement> = Vec::new();
@@ -1258,7 +1284,7 @@ impl DrainDialog {
             .child(
                 v_flex()
                     .id("drain-preview")
-                    .max_h(px(PREVIEW_ROW_HEIGHT * PREVIEW_VISIBLE_ROWS))
+                    .max_h(px(PREVIEW_ROW_HEIGHT * visible_rows))
                     .overflow_y_scroll()
                     // Rows keep their height, or the flex column squeezes them under the cap.
                     .children(rows.into_iter().map(|row| div().flex_none().child(row))),
@@ -1272,31 +1298,49 @@ impl DrainDialog {
         // cannot move are the neutral ones.
         let theme = cx.theme();
         let danger = tone_color(StatusTone::Bad, cx);
-        let mut lines: Vec<(String, gpui_kit::Hsla)> = Vec::new();
+        let mut lines: Vec<HeadsUpLine> = Vec::new();
         match self.options.budgets {
             BudgetPolicy::Respect => {
                 let budgets = heads_up(&self.plans, self.options.timeout);
-                lines.extend(budgets.into_iter().map(|text| (text, theme.foreground)));
+                lines.extend(
+                    budgets
+                        .into_iter()
+                        .map(|text| HeadsUpLine::plain(text, theme.foreground)),
+                );
             }
-            BudgetPolicy::Skip => lines.extend(bypass_note(&self.plans).map(|text| (text, danger))),
+            BudgetPolicy::Skip => {
+                lines.extend(bypass_note(&self.plans).map(|text| HeadsUpLine::plain(text, danger)))
+            }
         }
         lines.extend(
-            placement_note(&self.plans, &self.cluster_nodes).map(|text| (text, theme.foreground)),
+            placement_note(&self.plans, &self.cluster_nodes).map(|note| HeadsUpLine {
+                text: note.text,
+                color: theme.foreground,
+                detail: Some(note.detail),
+            }),
         );
         lines.extend(
-            pinned_note(&self.plans, &self.cluster_nodes).map(|text| (text, theme.foreground)),
+            pinned_note(&self.plans, &self.cluster_nodes)
+                .map(|text| HeadsUpLine::plain(text, theme.foreground)),
         );
         if lines.is_empty() {
             return None;
         }
-        let border = if lines.iter().any(|(_, color)| *color == danger) {
+        let border = if lines.iter().any(|line| line.color == danger) {
             theme.danger
         } else {
             theme.border
         };
-        let rows = lines
-            .into_iter()
-            .map(|(text, color)| div().text_color(color).child(format!("· {text}")));
+        let rows = lines.into_iter().enumerate().map(|(index, line)| {
+            let row = div()
+                .id(("drain-heads-up", index))
+                .text_color(line.color)
+                .child(format!("· {}", line.text));
+            match line.detail {
+                Some(detail) => row.tooltip(cell_tooltip(detail.into())).into_any_element(),
+                None => row.into_any_element(),
+            }
+        });
         Some(
             h_flex()
                 .gap_1()
@@ -1495,6 +1539,7 @@ impl Render for DrainDialog {
             .clone()
             .filter(|reason| reason.as_ref() != typed_reason)
             .filter(|_| self.preview_reason.is_some() || !self.is_loading());
+        let heads_up = self.render_heads_up(cx);
         let body = v_flex()
             .id("drain-body")
             .gap_2()
@@ -1503,8 +1548,8 @@ impl Render for DrainDialog {
             .child(self.render_steps(cx))
             .child(self.render_options(cx))
             .child(self.render_timing(cx))
-            .child(self.render_preview(cx))
-            .children(self.render_heads_up(cx))
+            .child(self.render_preview(heads_up.is_some(), cx))
+            .children(heads_up)
             .child(self.render_dry_run(cx));
         // Outside the scroll area, so the name to type, the note, and the reason Drain is off are
         // never out of sight (ticking Skip makes the name appear below a full list).

@@ -10,10 +10,21 @@ use crate::drain_plan::{NodePlan, PlannedPod};
 /// How many nodes the reason names before it says `and 2 more nodes`.
 const NAMED_NODES: usize = 2;
 
-/// `No other node fits catalog-db-0 (taints on worker2: workload=data): its replacement will stay
-/// Pending.` for the evicted pods that have a controller and no other node to go to. `None` when
+/// How many pods the tooltip lists before it says `and 12 more`.
+const LISTED_PODS: usize = 12;
+
+/// The HEADS UP line of the pods no other node takes, and the tooltip behind it.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct PlacementNote {
+    /// `No other node fits 14 pods (taints on worker, worker2): replacements stay Pending.`
+    pub(crate) text: String,
+    /// The pods, then the taint or selector each candidate node stops them with.
+    pub(crate) detail: String,
+}
+
+/// The note for the evicted pods that have a controller and no other node to go to. `None` when
 /// every such pod fits somewhere, or when the cluster's nodes could not be read (`nodes` empty).
-pub(crate) fn placement_note(plans: &[NodePlan], nodes: &[NodeSummary]) -> Option<String> {
+pub(crate) fn placement_note(plans: &[NodePlan], nodes: &[NodeSummary]) -> Option<PlacementNote> {
     if nodes.is_empty() {
         return None;
     }
@@ -23,23 +34,35 @@ pub(crate) fn placement_note(plans: &[NodePlan], nodes: &[NodeSummary]) -> Optio
         .filter(|node| node.status.scheduling == NodeScheduling::Enabled)
         .filter(|node| node.status.readiness == NodeReadiness::Ready)
         .collect();
-    let stranded: Vec<(&PlannedPod, String)> = plans
+    let stranded: Vec<(&PlannedPod, Stranded)> = plans
         .iter()
         .flat_map(|plan| plan.evictions())
         .filter(|planned| has_replacement(&planned.pod) && planned.pinned_volume().is_none())
         .filter_map(|planned| Some((planned, stranded_reason(&planned.pod, &candidates)?)))
         .collect();
-    Some(match stranded.as_slice() {
-        [] => return None,
-        [(planned, reason)] => format!(
-            "No other node fits {} ({reason}): its replacement will stay Pending.",
-            planned.pod.name
+    let (first, reason) = stranded.first()?;
+    let text = match stranded.len() {
+        1 => format!(
+            "No other node fits {} ({}): its replacement stays Pending.",
+            first.pod.name, reason.summary
         ),
-        [(first, reason), more @ ..] => format!(
-            "No other node fits {} and {} more ({reason}): their replacements will stay Pending.",
-            first.pod.name,
-            more.len()
+        count => format!(
+            "No other node fits {count} pods ({}): their replacements stay Pending.",
+            reason.summary
         ),
+    };
+    let mut detail: Vec<String> = stranded
+        .iter()
+        .take(LISTED_PODS)
+        .map(|(planned, _)| format!("{}/{}", planned.pod.namespace, planned.pod.name))
+        .collect();
+    if stranded.len() > LISTED_PODS {
+        detail.push(format!("and {} more", stranded.len() - LISTED_PODS));
+    }
+    detail.extend(reason.nodes.iter().cloned());
+    Some(PlacementNote {
+        text,
+        detail: detail.join("\n"),
     })
 }
 
@@ -60,26 +83,43 @@ fn has_replacement(pod: &DrainPod) -> bool {
     pod.controller.is_some() && !pod.is_finished
 }
 
+/// Why no candidate node takes a pod: the short form for the line, and one line per node for the
+/// tooltip.
+struct Stranded {
+    summary: String,
+    nodes: Vec<String>,
+}
+
 /// Why no candidate takes `pod`, `None` when one does.
-fn stranded_reason(pod: &DrainPod, candidates: &[&NodeSummary]) -> Option<String> {
+fn stranded_reason(pod: &DrainPod, candidates: &[&NodeSummary]) -> Option<Stranded> {
     if candidates.is_empty() {
-        return Some("no other node is schedulable".to_owned());
+        return Some(Stranded {
+            summary: "no other node is schedulable".to_owned(),
+            nodes: Vec::new(),
+        });
     }
     let mut misfits = Vec::new();
     for node in candidates {
         misfits.push((node.name.as_str(), pod.placement.misfit(node)?));
     }
+    let nodes = misfits
+        .iter()
+        .map(|(node, misfit)| match misfit {
+            Misfit::Taints(taints) => format!("{node}: taints {}", taints.join(", ")),
+            Misfit::Selector => format!("{node}: selector does not match"),
+        })
+        .collect();
     let hidden = misfits.len().saturating_sub(NAMED_NODES);
     misfits.truncate(NAMED_NODES);
-    // `taints on a: x, b: y` when taints are all there is; else each node names its own cause.
+    // `taints on a, b` when taints are all there is; else each node names its own cause.
     let is_all_taints = misfits
         .iter()
         .all(|(_, misfit)| matches!(misfit, Misfit::Taints(_)));
     let mut parts: Vec<String> = misfits
         .iter()
         .map(|(node, misfit)| match misfit {
-            Misfit::Taints(taints) if is_all_taints => format!("{node}: {}", taints.join(", ")),
-            Misfit::Taints(taints) => format!("taints on {node}: {}", taints.join(", ")),
+            Misfit::Taints(_) if is_all_taints => (*node).to_owned(),
+            Misfit::Taints(_) => format!("taints on {node}"),
             Misfit::Selector => format!("selector on {node}"),
         })
         .collect();
@@ -87,10 +127,11 @@ fn stranded_reason(pod: &DrainPod, candidates: &[&NodeSummary]) -> Option<String
         parts.push(format!("and {hidden} more nodes"));
     }
     let lead = if is_all_taints { "taints on " } else { "" };
-    Some(format!(
+    let summary = format!(
         "{lead}{}",
         parts.join(if is_all_taints { ", " } else { "; " })
-    ))
+    );
+    Some(Stranded { summary, nodes })
 }
 
 #[cfg(test)]
