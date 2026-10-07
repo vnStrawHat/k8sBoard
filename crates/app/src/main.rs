@@ -140,6 +140,7 @@ mod revision_history;
 mod row_context;
 mod row_selection;
 mod scale_effects;
+mod scheduler_summary;
 mod screenshot;
 #[cfg(any(test, feature = "screenshot"))]
 mod screenshot_script;

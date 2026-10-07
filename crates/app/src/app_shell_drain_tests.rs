@@ -2138,11 +2138,8 @@ fn an_evicted_pod_recreated_pending_is_not_reported_gone(cx: &mut TestAppContext
             .iter()
             .map(|row| (row.pod.as_ref(), row.text.as_ref()))
             .collect();
-        let expected = format!("recreated · Pending: {NO_NODE_FITS}");
-        assert!(
-            texts.contains(&("payments/api-1", expected.as_str())),
-            "{texts:?}"
-        );
+        let expected = "recreated · Pending: 0/3 nodes: 1 volume";
+        assert!(texts.contains(&("payments/api-1", expected)), "{texts:?}");
         assert!(texts.contains(&("payments/api-2", "Gone")), "{texts:?}");
         assert_eq!(
             tab.run().status_text(tab.now()),

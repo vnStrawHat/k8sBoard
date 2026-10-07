@@ -887,6 +887,7 @@ fn replacement(name: &str, reason: Option<&str>) -> PendingPod {
 const EARLIER: &str = " · cordoned: wk-04 (was cordoned before this drain)";
 
 const NO_NODE_FITS: &str = "0/3 nodes are available: 1 node(s) had volume node affinity conflict";
+const NO_NODE_FITS_SUMMARY: &str = "0/3 nodes: 1 volume";
 
 /// A run that evicted `pods`, saw them go, ended drained at 4 s, and began to follow.
 fn followed(pods: &[&str]) -> DrainRun {
@@ -908,7 +909,7 @@ fn a_pending_replacement_reads_recreated_instead_of_gone() {
     let rows = run.pod_rows(secs(5));
     assert_eq!(
         rows[0].text.as_ref(),
-        format!("recreated · Pending: {NO_NODE_FITS}")
+        format!("recreated · Pending: {NO_NODE_FITS_SUMMARY}")
     );
     assert_eq!(rows[0].tone, StatusTone::Warn);
     assert_eq!(run.pending_replacements(), 1);
@@ -1169,6 +1170,42 @@ fn the_tab_lists_refusals_and_active_pods_first_and_the_ones_it_leaves_alone_las
             "payments/api-4",
             "payments/api-1",
             "payments/agent-1",
+        ]
+    );
+}
+
+#[test]
+fn a_blocked_pod_sorts_above_the_replacements_that_stay_pending() {
+    let (mut run, _) = run_over(&["api-1", "api-2", "api-3"]);
+    run.on_write(&NextStep::Evict(key("api-1")), ok(), secs(0));
+    run.on_write(&NextStep::Evict(key("api-2")), ok(), secs(0));
+    run.on_write(
+        &NextStep::Evict(key("api-3")),
+        refused_by_budget("api-pdb"),
+        secs(0),
+    );
+    run.on_poll(Ok(vec![pod("api-3")]), secs(3));
+    let NextStep::NodeDone(outcome) = run.next_step(secs(300)) else {
+        panic!("the node timed out");
+    };
+    run.on_node_done(outcome);
+    run.start_follow(secs(301));
+    let message = "0/3 nodes are available: 1 node(s) had untolerated taint {workload: data}, 2 node(s) didn't match Pod's node affinity/selector. preemption: 0/3 nodes are available: 3 Preemption is not helpful for scheduling.";
+    run.on_follow(
+        Ok(vec![
+            replacement("api-8", Some(message)),
+            replacement("api-9", Some(message)),
+        ]),
+        secs(302),
+    );
+    let rows = run.pod_rows(secs(302));
+    let texts: Vec<&str> = rows.iter().map(|row| row.text.as_ref()).collect();
+    assert_eq!(
+        texts,
+        [
+            "Blocked by PDB api-pdb",
+            "recreated · Pending: 0/3 nodes: 1 taint, 2 selector",
+            "recreated · Pending: 0/3 nodes: 1 taint, 2 selector",
         ]
     );
 }

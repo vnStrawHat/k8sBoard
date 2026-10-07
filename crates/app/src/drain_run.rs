@@ -15,6 +15,7 @@ use crate::drain_plan::{
     BudgetPolicy, BudgetRefusal, DrainOptions, PodKey, PodVerdict, SkipReason, pod_count,
     run_verdict, timeout_text,
 };
+use crate::scheduler_summary::scheduler_summary;
 use crate::status_tone::StatusTone;
 
 /// How often the node's pods are listed while evicted pods are being deleted.
@@ -666,8 +667,7 @@ impl DrainRun {
                         reason: replacement
                             .reason
                             .as_deref()
-                            .unwrap_or(NOT_SCHEDULED_YET)
-                            .to_owned()
+                            .map_or_else(|| NOT_SCHEDULED_YET.to_owned(), scheduler_summary)
                             .into(),
                     }
                 }
@@ -1115,9 +1115,12 @@ impl NodeRun {
     }
 }
 
-/// Where a pod's line sorts in the tab: what needs attention first, what the drain left alone last.
+/// Where a pod's line sorts in the tab: what needs attention first (a pod that was refused or
+/// blocked above the replacements that stay Pending, which are many and alike), what the drain left
+/// alone last.
 fn row_rank(progress: &PodProgress, tone: StatusTone) -> u8 {
     match progress {
+        PodProgress::Refused { .. } => 0,
         PodProgress::Skipped(_) => 4,
         PodProgress::Gone => 3,
         _ => match tone {
