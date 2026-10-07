@@ -20,7 +20,7 @@ use crate::access_bindings::{
     BindingIndex, BroadAdmin, broad_admin, is_cluster_admin, service_account_text,
 };
 use crate::age::format_age;
-use crate::batch_rows::{CronState, cron_state_at};
+use crate::batch_rows::{CronState, cron_state_at, skipped_run};
 use crate::certificate_expiry::{ExpiryState, date_text, expiry_state};
 use crate::custom_rows::is_failing;
 use crate::event_rows::message_line;
@@ -939,6 +939,9 @@ fn job_diagnosis(job: &JobSummary, inputs: &DiagnosisInputs) -> Option<KindDiagn
 /// reads only the CronJob and the clock, so it shows while the lists load; the failed run is read
 /// from Recent jobs below, because the CronJob names no finished Job.
 fn cron_job_diagnosis(cron_job: &CronJobSummary, now: Timestamp) -> Option<KindDiagnosis> {
+    if let Some(expected_at) = skipped_run(cron_job, now) {
+        return Some(skipping_runs(cron_job, expected_at, now));
+    }
     let (tone, title, text) = match cron_state_at(cron_job, now) {
         CronState::Suspended => (
             StatusTone::Warn,
@@ -984,6 +987,36 @@ fn cron_job_diagnosis(cron_job: &CronJobSummary, now: Timestamp) -> Option<KindD
         text,
         link: None,
     })
+}
+
+/// SKIPPING RUNS: the active Job holds the CronJob, so the run due `expected_at` and every later one
+/// is skipped until it ends. The job started at the last schedule time.
+fn skipping_runs(
+    cron_job: &CronJobSummary,
+    expected_at: Timestamp,
+    now: Timestamp,
+) -> KindDiagnosis {
+    let job = cron_job.active_jobs.first().map_or("A job", String::as_str);
+    let more = match cron_job.active_jobs.len() {
+        0 | 1 => String::new(),
+        others => format!(" and {} more", others - 1),
+    };
+    KindDiagnosis {
+        tone: StatusTone::Warn,
+        title: "SKIPPING RUNS".to_owned(),
+        text: format!(
+            concat!(
+                "{}{} still active since {} ago, concurrencyPolicy Forbid: the run due {} ago ",
+                "was skipped, and so is every run until it ends. Delete the job to let the ",
+                "schedule run again."
+            ),
+            job,
+            more,
+            format_age(cron_job.last_schedule_at, now),
+            format_age(Some(expected_at), now)
+        ),
+        link: None,
+    }
 }
 
 fn failed_job_diagnosis(job: &JobSummary, inputs: &DiagnosisInputs) -> Option<KindDiagnosis> {

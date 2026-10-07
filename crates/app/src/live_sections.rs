@@ -30,7 +30,7 @@ use crate::access_bindings::{
 };
 use crate::age::format_age;
 use crate::app_shell::AppShell;
-use crate::batch_rows::job_status_label;
+use crate::batch_rows::{job_status_label, skipped_run};
 use crate::cluster_metrics::FeedStatus;
 use crate::cluster_session::{
     CompanionPlan, CompanionSource, LiveCluster, LiveList, RbacState, RelatedList, companion_plan,
@@ -558,11 +558,13 @@ fn next_runs_content(
         };
         return NextRunsContent::Note(text.to_owned());
     }
+    // Every run is held back while the active Job lives, and it has outlived a run already.
+    let hint = skipped_run(cron_job, now).map_or("", |_| " (skipped if still running)");
     NextRunsContent::Runs(
         runs.iter()
             .map(|run| {
                 let label = run_label(&run.timestamp().to_zoned(zone.clone()), now);
-                let away = format!("in {}", format_age(Some(now), run.timestamp()));
+                let away = format!("in {}{hint}", format_age(Some(now), run.timestamp()));
                 (label, away)
             })
             .collect(),

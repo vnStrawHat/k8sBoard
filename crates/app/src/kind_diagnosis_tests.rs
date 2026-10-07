@@ -2553,3 +2553,29 @@ fn an_ingress_names_the_rule_whose_backend_has_no_such_port() {
     // The lists have not loaded: no claim is made.
     assert_eq!(with(None), None);
 }
+
+#[test]
+fn cron_job_forbid_with_a_long_active_job_says_it_is_skipping_runs() {
+    let mut cron = cron_job_ran_at_ten();
+    cron.active_jobs = vec!["reconcile-2894".to_owned()];
+    let now = "2024-10-04T10:22:00Z".parse().expect("timestamp");
+    let diagnosis = cron_job_diagnosis(&cron, now).expect("a box");
+    assert_eq!(diagnosis.tone, StatusTone::Warn);
+    assert_eq!(diagnosis.title, "SKIPPING RUNS");
+    assert_eq!(
+        diagnosis.text,
+        "reconcile-2894 still active since 22m ago, concurrencyPolicy Forbid: the run due 17m ago \
+         was skipped, and so is every run until it ends. Delete the job to let the schedule run again."
+    );
+    // Within its interval the job is just running.
+    let soon = "2024-10-04T10:03:00Z".parse().expect("timestamp");
+    assert!(cron_job_diagnosis(&cron, soon).is_none());
+    // Two active jobs name the first and count the rest.
+    cron.active_jobs.push("reconcile-2895".to_owned());
+    assert!(
+        cron_job_diagnosis(&cron, now)
+            .expect("a box")
+            .text
+            .starts_with("reconcile-2894 and 1 more still active")
+    );
+}

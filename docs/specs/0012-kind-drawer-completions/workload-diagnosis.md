@@ -65,6 +65,7 @@ The Status column is `KindCell::CronStatus`, read at paint time: Suspended, Runn
 | C1 | Suspended | Warn · SUSPENDED | Resume, or Trigger now for one run |
 | C2 | Missed | Warn · SCHEDULE MISSED | The overdue run, the deadline, Trigger now |
 | C3 | Last run failed | Warn · LAST RUN FAILED | Open the job under Recent jobs, or Trigger now |
+| C0 | `concurrencyPolicy: Forbid`, a job in `status.active`, and a run came due after `lastScheduleTime` (round 3, O11) | Warn · SKIPPING RUNS | `{job} still active since {age} ago, concurrencyPolicy Forbid: the run due {age} ago was skipped, and so is every run until it ends.` (`skipped_run`, first in `cron_job_diagnosis`; the Next runs rows then read `in 11m (skipped if still running)`) |
 
 ## Services (step 4a)
 

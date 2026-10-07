@@ -1952,3 +1952,22 @@ fn restart_all_counts_only_the_workloads_that_read_the_value_through_env() {
         "one consumer shows no button"
     );
 }
+
+#[test]
+fn next_runs_say_they_are_skipped_while_a_forbid_job_outlives_a_run() {
+    let mut cron = cron_job("45 10 * * *", false);
+    cron.concurrency_policy = "Forbid".to_owned();
+    cron.active_jobs = vec!["nightly-1".to_owned()];
+    // The job started two days ago, so the run of yesterday 10:45 came due and passed beside it.
+    cron.last_schedule_at = Some(at("2024-10-02T10:45:00Z"));
+    let NextRunsContent::Runs(runs) = next_runs_content(&cron, at(NOW), &TimeZone::UTC) else {
+        panic!("a daily schedule has runs");
+    };
+    assert_eq!(runs[0].1, "in 1m (skipped if still running)");
+    // A job that is merely busy within its interval, or another policy, adds nothing.
+    cron.last_schedule_at = Some(at("2024-10-04T10:00:00Z"));
+    let NextRunsContent::Runs(busy) = next_runs_content(&cron, at(NOW), &TimeZone::UTC) else {
+        panic!("a daily schedule has runs");
+    };
+    assert_eq!(busy[0].1, "in 1m");
+}

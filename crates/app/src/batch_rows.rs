@@ -259,6 +259,29 @@ pub(crate) fn cron_state_at(cron_job: &CronJobSummary, now: jiff::Timestamp) -> 
     CronState::Missed { expected_at }
 }
 
+/// The first run due after the active Job started, once it is past: a CronJob with `concurrencyPolicy:
+/// Forbid` skips it while that Job still runs. `None` unless a Forbid CronJob has an active Job and a
+/// run came due since its schedule time, so a Job that is simply busy within its interval says nothing.
+pub(crate) fn skipped_run(
+    cron_job: &CronJobSummary,
+    now: jiff::Timestamp,
+) -> Option<jiff::Timestamp> {
+    if cron_job.is_suspended
+        || cron_job.concurrency_policy != FORBID
+        || cron_job.active_jobs.is_empty()
+    {
+        return None;
+    }
+    let timetable = cron_job.timetable.as_ref().ok()?;
+    let expected_at = timetable
+        .next_after(cron_job.last_schedule_at?)?
+        .timestamp();
+    (expected_at <= now).then_some(expected_at)
+}
+
+/// The concurrency policy that skips a run while the last one is still active.
+const FORBID: &str = "Forbid";
+
 fn last_run_tone(cron_job: &CronJobSummary) -> Option<StatusTone> {
     match last_run(cron_job) {
         CronState::Suspended | CronState::NeverRun | CronState::Missed { .. } => None,

@@ -473,3 +473,23 @@ fn cron_status_cell_is_painted_from_the_whole_cron_job() {
         Some(&KindCell::CronStatus(Box::new(cron)))
     );
 }
+
+#[test]
+fn a_forbid_cron_job_skips_the_run_due_while_its_job_is_active() {
+    let mut cron = cron_job();
+    cron.active_jobs = vec!["reconcile-1".to_owned()];
+    cron.last_schedule_at = Some(at(1_700_000_000));
+    // `*/5`: the next run after the schedule time is five minutes (or less) later.
+    let due = skipped_run(&cron, at(1_700_000_400)).expect("a skipped run");
+    assert!(due.as_second() > 1_700_000_000 && due.as_second() <= 1_700_000_300);
+    // Not yet due, no active job, another policy, or suspended: nothing is skipped.
+    assert_eq!(skipped_run(&cron, at(1_700_000_001)), None);
+    let mut idle = cron.clone();
+    idle.active_jobs.clear();
+    assert_eq!(skipped_run(&idle, at(1_700_000_400)), None);
+    let mut allowing = cron.clone();
+    allowing.concurrency_policy = "Allow".to_owned();
+    assert_eq!(skipped_run(&allowing, at(1_700_000_400)), None);
+    cron.is_suspended = true;
+    assert_eq!(skipped_run(&cron, at(1_700_000_400)), None);
+}
