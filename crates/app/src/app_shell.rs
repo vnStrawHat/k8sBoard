@@ -61,6 +61,7 @@ use crate::kind_row::{KindObject, PodOwner};
 use crate::kind_table::KindTableDelegate;
 use crate::kubeconfig_folder::FileStamp;
 use crate::kubelet_metrics::{KubeletDemand, KubeletSubject};
+use crate::last_log::{LastLogKey, last_log_key};
 use crate::launch_options::{LaunchOptions, LaunchScreen};
 use crate::live_sections::loaded_replica_sets;
 use crate::log_target::{LogTarget, NoLogTarget, check_logs_access};
@@ -3075,6 +3076,7 @@ impl AppShell {
             if let Some(open) = self.active_cluster() {
                 self.set_event_subject(&open, None, cx);
                 self.set_related_subject(&open, None, cx);
+                self.set_last_log(&open, None, cx);
             }
             return;
         };
@@ -3082,6 +3084,10 @@ impl AppShell {
             .drawer_subject()
             .and_then(|object| event_subject(&object.key));
         let next_related = self.selected_related_subject(cx);
+        // The previous log line of a crash-looping pod is one cheap request, so it starts at once and
+        // is cached per restart count: no timer is needed to keep arrowing cheap.
+        let next_last_log = self.selected_last_log_key(cx);
+        self.set_last_log(&cluster, next_last_log, cx);
         let (running_events, running_related) =
             self.subject_live(cx).map_or((None, None), |live| {
                 (
@@ -3134,6 +3140,25 @@ impl AppShell {
             });
         }));
         self.pending_subjects = Some(pending);
+    }
+
+    /// The crash-looping container of the open Pod drawer whose previous log line the WHY box quotes.
+    fn selected_last_log_key(&self, cx: &App) -> Option<LastLogKey> {
+        let key = &self.drawer_subject()?.key;
+        let live = self.subject_live(cx)?;
+        let pod = live.pods.items().iter().find(|pod| key.is_pod(pod))?;
+        last_log_key(pod)
+    }
+
+    fn set_last_log(
+        &mut self,
+        cluster: &ClusterRef,
+        key: Option<LastLogKey>,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(session) = self.session_of(cluster).cloned() {
+            session.update(cx, |session, cx| session.set_last_log(key, cx));
+        }
     }
 
     /// What the selected row needs watched besides its events; `None` while its list has not

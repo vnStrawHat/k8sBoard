@@ -32,6 +32,7 @@ use crate::drawer::{
 };
 use crate::kind_join::services_selecting;
 use crate::kind_row::deployment_of_pod;
+use crate::last_log::last_log_key;
 use crate::monitor_tab::{MonitorView, monitor_tab};
 use crate::object_events::{event_subject, recent_events};
 use crate::pod_diagnosis::{PodDiagnosis, PullSecret, pod_diagnosis, pull_secrets};
@@ -278,10 +279,16 @@ fn overview(
     let existing = secret_names_in(live, &pod.namespace);
     let pull = pull_secrets(pod, existing.as_deref());
     let nodes = live.map_or(&[][..], |live| live.nodes.items());
+    let last_log = last_log_key(pod)
+        .and_then(|key| Some((live?.last_log_of(&key)?.to_owned(), key.container)));
     let diagnosis = pod_diagnosis(pod, events, now).map(|found| {
-        found
+        let found = found
             .with_pull_secrets(&pull)
-            .with_scheduling_hints(pod, nodes)
+            .with_scheduling_hints(pod, nodes);
+        match &last_log {
+            Some((line, container)) => found.with_last_log(container, Some(line)),
+            None => found,
+        }
     });
     let pull_row = (!pull.is_empty()).then(|| {
         detail_row(

@@ -196,6 +196,17 @@ impl PodDiagnosis {
         self
     }
 
+    /// Adds the last line the crashed container logged, so the exit code comes with its cause.
+    /// `container` is the one the line belongs to; any other diagnosis is left as it is.
+    pub(crate) fn with_last_log(mut self, container: &str, line: Option<&str>) -> Self {
+        let is_crash_loop = matches!(self.cause, DiagnosisCause::CrashLoop);
+        let is_that_container = self.container.as_deref() == Some(container);
+        if let Some(line) = line.filter(|_| is_crash_loop && is_that_container) {
+            self.text = format!("{}\nlast log: {line}", self.text);
+        }
+        self
+    }
+
     /// Adds the secrets the kubelet tried to a failed pull, so a missing one is seen at once.
     pub(crate) fn with_pull_secrets(mut self, secrets: &[PullSecret]) -> Self {
         if self.is_pull_failure() && !secrets.is_empty() {

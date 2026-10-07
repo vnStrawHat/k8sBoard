@@ -10,11 +10,11 @@ use cluster::{
     ClusterError, ConfigMapValues, ContextSummary, CrdSummary, CustomObjectFields,
     DeploymentSummary, EndpointSliceSummary, EventFilter, EventSummary, HelmRevision,
     IngressSummary, InvolvedObject, JobSummary, Kubeconfig, KubeletTargets, LimitRangeSummary,
-    MetricsError, MetricsSource, MetricsSourceError, NamespaceAccess, NamespaceScope,
-    NamespaceSummary, NodeSummary, ObjectKind, PersistentVolumeSummary, PodSummary, ProxyChoice,
-    ProxyUrlError, RbacSnapshot, ReplicaSetSummary, ResourceQuotaSummary, SecretSummary,
-    ServerVersion, ServiceSummary, SourceCheck, StorageClassSummary, TrafficCounter,
-    TrafficMetricSource, WatchUpdate,
+    LogRequest, LogSource, LogUpdate, MetricsError, MetricsSource, MetricsSourceError,
+    NamespaceAccess, NamespaceScope, NamespaceSummary, NodeSummary, ObjectKind,
+    PersistentVolumeSummary, PodSummary, ProxyChoice, ProxyUrlError, RbacSnapshot,
+    ReplicaSetSummary, ResourceQuotaSummary, SecretSummary, ServerVersion, ServiceSummary,
+    SourceCheck, StorageClassSummary, TrafficCounter, TrafficMetricSource, WatchUpdate,
 };
 use futures::StreamExt as _;
 use gpui_kit::{App, Context, Task};
@@ -35,6 +35,7 @@ use crate::kind_access::{KindAccess, KindAccessMap, lazy_checks};
 use crate::kind_join::{JoinInputs, join_rows};
 use crate::kind_row::{KindObject, KindRow};
 use crate::kubelet_metrics::KubeletDemand;
+use crate::last_log::{LastLog, LastLogKey, LastLogs, last_line};
 use crate::live_sections::CanDoCell;
 use crate::name_index::{NameIndex, NameListResult, name_index_plan};
 use crate::related_objects::RelatedSubject;
@@ -151,6 +152,8 @@ pub(crate) struct LiveCluster {
     /// The objects related to the open drawer (a Deployment's ReplicaSets); `None` while no
     /// drawer needs them.
     related: Option<RelatedObjects>,
+    /// The last log lines of crash-looping containers the open Pod drawer quotes.
+    last_logs: LastLogs,
     /// The sidebar numbers of kinds without a running watch.
     kind_counts: KindCounts,
     /// The names of the palette-only kinds (spec 0056), listed while the user types in the palette.
@@ -2144,6 +2147,65 @@ impl ClusterSession {
         cx.notify();
     }
 
+    /// Asks for the previous log line of `key` (one request, then cached for its restart count), or
+    /// stops asking with `None`. The stream runs on tokio; the line arrives through `subscribe`.
+    pub(crate) fn set_last_log(&mut self, key: Option<LastLogKey>, cx: &mut Context<Self>) {
+        let runtime = cx.global::<ClusterRuntime>().clone();
+        let Some(live) = self.live_mut() else {
+            return;
+        };
+        let Some(key) = key else {
+            live.last_logs.stop();
+            return;
+        };
+        if live.last_logs.is_running(&key) {
+            return;
+        }
+        live.last_logs.stop();
+        if live.last_logs.has(&key) {
+            return;
+        }
+        let request = LogRequest {
+            namespace: key.namespace.clone(),
+            pod: key.pod.clone(),
+            container: key.container.clone(),
+            source: LogSource::Previous,
+            tail_lines: 1,
+            since_seconds: None,
+        };
+        let updates = live.connection.pod_logs(request);
+        let applied = key.clone();
+        let closed = key.clone();
+        let subscription = runtime.subscribe(
+            updates,
+            cx,
+            move |session: &mut ClusterSession, update, _| {
+                let Some(live) = session.live_mut() else {
+                    return;
+                };
+                match update {
+                    LogUpdate::Started => {}
+                    LogUpdate::Lines(lines) => {
+                        live.last_logs
+                            .set(&applied, LastLog::Line(last_line(&lines)));
+                    }
+                    LogUpdate::Failed(_) => live.last_logs.set(&applied, LastLog::Unavailable),
+                }
+            },
+            move |session, _| {
+                let Some(live) = session.live_mut() else {
+                    return;
+                };
+                // A stream that ended with no line means the container logged nothing.
+                if live.last_logs.get(&closed) == Some(&LastLog::Loading) {
+                    live.last_logs.set(&closed, LastLog::Line(None));
+                }
+            },
+        );
+        live.last_logs.start(key, subscription);
+        cx.notify();
+    }
+
     /// The kubelet demand of the open drawer. It runs from `render`, so it never notifies: the
     /// targets move through a watch channel and the poll's own updates notify.
     pub(crate) fn set_kubelet_demand(&mut self, demand: KubeletDemand) {
@@ -3013,6 +3075,14 @@ impl LiveCluster {
         namespace_list_gates(&self.access, running)
     }
 
+    /// The last line the previous container of a crash-looping pod logged, once it has arrived.
+    pub(crate) fn last_log_of(&self, key: &LastLogKey) -> Option<&str> {
+        match self.last_logs.get(key)? {
+            LastLog::Line(Some(line)) => Some(line),
+            LastLog::Line(None) | LastLog::Loading | LastLog::Unavailable => None,
+        }
+    }
+
     /// The related list of `subject`, or `None` while another subject (or none) is watched.
     pub(crate) fn related_of(&self, subject: &RelatedSubject) -> Option<&RelatedList> {
         self.related
@@ -3290,6 +3360,7 @@ impl LiveCluster {
             explorer: None,
             object_events: None,
             related: None,
+            last_logs: LastLogs::default(),
             kind_counts: KindCounts::default(),
             name_index: NameIndex::default(),
             issue_feeds,

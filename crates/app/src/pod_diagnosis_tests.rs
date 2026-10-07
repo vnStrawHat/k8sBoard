@@ -1019,3 +1019,29 @@ fn an_exec_probe_failure_names_the_command() {
          Probe: exec `test -f /tmp/ready` · every 5s"
     );
 }
+
+#[test]
+fn the_last_log_line_joins_a_crash_loop_of_that_container_only() {
+    let mut crashing = main_container("api", waiting(StatusReason::CrashLoopBackOff, None));
+    crashing.restart_count = 3;
+    crashing.last_termination = Some(termination(None, 1, Some(0), Some(2)));
+    let pod = running_pod(vec![crashing]);
+    let plain = diagnose(&pod).expect("a diagnosis");
+    let quoted = plain
+        .clone()
+        .with_last_log("api", Some("panic: config.yaml missing"));
+    assert_eq!(
+        quoted.text,
+        format!("{}\nlast log: panic: config.yaml missing", plain.text)
+    );
+    // No line yet, or another container's line: the text stays.
+    assert_eq!(plain.clone().with_last_log("api", None), plain);
+    assert_eq!(plain.clone().with_last_log("sidecar", Some("x")), plain);
+    // Another cause never quotes a log.
+    let pulling = running_pod(vec![main_container(
+        "api",
+        waiting(StatusReason::ErrImagePull, Some("x")),
+    )]);
+    let other = diagnose(&pulling).expect("a diagnosis");
+    assert_eq!(other.clone().with_last_log("api", Some("x")), other);
+}

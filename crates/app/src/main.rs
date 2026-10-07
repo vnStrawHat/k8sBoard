@@ -68,6 +68,7 @@ mod kubeconfig_folder;
 mod kubeconfig_import;
 mod kubelet_history;
 mod kubelet_metrics;
+mod last_log;
 mod launch_options;
 mod line_matcher;
 #[cfg(feature = "hotpath-profiling-alloc")]
