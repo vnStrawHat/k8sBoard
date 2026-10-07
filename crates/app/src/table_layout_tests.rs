@@ -79,7 +79,7 @@ fn spare_width_is_shared_by_weight() {
     let name = column("Name", 100., Align::Left).grows(3);
     let message = column("Message", 100., Align::Left).grows(1);
     let status = column("Status", 80., Align::Left);
-    let widths = distribute_spare_width(&[&name, &status, &message], 580.);
+    let widths = distribute_spare_width(&[&name, &status, &message], Some(0), 580.);
     // 300 spare: 225 for Name, 75 for Message, none for the fixed Status.
     assert_eq!(widths, [325., 80., 175.]);
 }
@@ -88,18 +88,64 @@ fn spare_width_is_shared_by_weight() {
 fn a_capped_column_hands_its_share_to_the_others() {
     let name = column("Name", 100., Align::Left).grows(1).up_to(150.);
     let message = column("Message", 100., Align::Left).grows(1);
-    let widths = distribute_spare_width(&[&name, &message], 500.);
+    let widths = distribute_spare_width(&[&name, &message], Some(0), 500.);
     assert_eq!(widths, [150., 350.]);
 }
 
 #[test]
-fn spare_width_nobody_can_take_stays_unused() {
+fn spare_width_nobody_can_take_goes_to_the_flexible_column() {
     let name = column("Name", 100., Align::Left).grows(1).up_to(150.);
     let age = column("Age", 70., Align::Right);
-    assert_eq!(distribute_spare_width(&[&name, &age], 1000.), [150., 70.]);
-    let narrow = distribute_spare_width(&[&name, &age], 100.);
+    assert_eq!(
+        distribute_spare_width(&[&name, &age], Some(0), 1000.),
+        [930., 70.]
+    );
+    let narrow = distribute_spare_width(&[&name, &age], Some(0), 100.);
     assert_eq!(narrow, [100., 70.]);
 }
+
+fn jobs_like() -> Vec<KindColumn> {
+    vec![
+        column("Name", 200., Align::Left).grows(3).up_to(640.),
+        column("Status", 120., Align::Left),
+        column("Completions", 110., Align::Left),
+        column("Duration", 90., Align::Right),
+        column("Image", 220., Align::Left).sheds(1),
+        column("Age", 70., Align::Right),
+    ]
+}
+
+fn nodes_like() -> Vec<KindColumn> {
+    vec![
+        column("Name", 190., Align::Left).grows(2).up_to(300.),
+        column("Status", 84., Align::Left),
+        column("Taints", 100., Align::Left).grows(6).up_to(150.),
+        column("Internal IP", 140., Align::Left),
+        column("CPU", 80., Align::Left),
+        column("Age", 56., Align::Right),
+        column("Labels", 200., Align::Left).grows(2).up_to(420.),
+    ]
+}
+
+#[test]
+fn capped_tables_fill_the_width_so_the_last_column_ends_at_the_edge() {
+    for specs in [jobs_like(), nodes_like()] {
+        for table_width in [1320., 1920.] {
+            let layout = layout_columns(&specs, 0, px(table_width), &BTreeSet::new());
+            let total: f32 = layout
+                .columns
+                .iter()
+                .map(|column| f32::from(column.width))
+                .sum();
+            assert_eq!(
+                total,
+                table_width - f32::from(TABLE_GUTTER),
+                "at {table_width} px"
+            );
+        }
+    }
+}
+
 #[test]
 fn table_layout_reports_only_real_changes() {
     let plan = ColumnPlan {

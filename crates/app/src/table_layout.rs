@@ -123,7 +123,8 @@ pub(crate) fn layout_columns(
     let available = f32::from(table_width - TABLE_GUTTER - SELECT_WIDTH);
     shed_columns(&mut visible, flexible, available);
     let shown: Vec<&KindColumn> = visible.iter().map(|(_, spec)| *spec).collect();
-    let widths = distribute_spare_width(&shown, available);
+    let flexible_position = visible.iter().position(|(index, _)| *index == flexible);
+    let widths = distribute_spare_width(&shown, flexible_position, available);
     let select = Column::new("select", "")
         .width(SELECT_WIDTH)
         .resizable(false);
@@ -175,9 +176,14 @@ fn shed_columns(visible: &mut Vec<(usize, &KindColumn)>, flexible: usize, availa
 
 /// The width of each column when `available` pixels are to be filled: its own width, plus a share
 /// of what the widths leave over in proportion to its weight. A column stops at its `max_width`
-/// and the share it cannot take goes to the others; width nobody can take stays unused, so short
-/// columns never pad out a wide table.
-fn distribute_spare_width(columns: &[&KindColumn], available: f32) -> Vec<f32> {
+/// and the share it cannot take goes to the others. When every growing column is capped and width
+/// is still left, the `flexible` column takes it beyond its cap, so the last column always ends at
+/// the table's right edge (the screens whose Name or Message column has no cap already do).
+fn distribute_spare_width(
+    columns: &[&KindColumn],
+    flexible: Option<usize>,
+    available: f32,
+) -> Vec<f32> {
     let mut widths: Vec<f32> = columns.iter().map(|column| column.width).collect();
     let mut spare = available - widths.iter().sum::<f32>();
     // Each round spends all the spare width or caps at least one more column.
@@ -208,6 +214,9 @@ fn distribute_spare_width(columns: &[&KindColumn], available: f32) -> Vec<f32> {
             widths[index] = grown;
         }
         spare -= spent;
+    }
+    if let (Some(position), true) = (flexible, spare >= 1.) {
+        widths[position] += spare;
     }
     widths
 }
