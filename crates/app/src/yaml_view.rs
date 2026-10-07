@@ -257,8 +257,11 @@ impl YamlView {
             .items_center()
             .border_b_1()
             .border_color(theme.border)
+            // The note of a copy or a save can be long: it gives way, so the buttons stay in view.
             .child(
                 div()
+                    .min_w_0()
+                    .truncate()
                     .text_xs()
                     .text_color(theme.muted_foreground)
                     .child(status),
@@ -292,6 +295,7 @@ impl YamlView {
                     .ghost()
                     .small()
                     .icon(Icon::new(IconName::ClipboardCheck))
+                    .label("Copy clean YAML")
                     .disabled(self.fetched_at.is_none())
                     .tooltip(CLEAN_TOOLTIP)
                     .on_click(cx.listener(|view, _, _, cx| view.copy_clean(cx))),
@@ -301,6 +305,7 @@ impl YamlView {
                     .ghost()
                     .small()
                     .icon(Icon::new(IconName::Download))
+                    .label("Save as…")
                     .disabled(self.fetched_at.is_none() || self.export.is_busy())
                     .tooltip("Save as… (clean YAML)")
                     .on_click(cx.listener(|view, _, _, cx| view.save_clean(cx))),
