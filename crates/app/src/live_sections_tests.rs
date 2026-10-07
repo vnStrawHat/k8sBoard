@@ -698,6 +698,8 @@ fn labelled_pod(namespace: &str, name: &str, label: &str, is_ready: bool) -> Pod
         labels: vec![label.to_owned()],
         host_network: false,
         image_pull_secrets: Vec::new(),
+        node_selector: Vec::new(),
+        node_affinity: Vec::new(),
         containers: Vec::new(),
     }
 }
@@ -897,6 +899,8 @@ fn mounting_pod(namespace: &str, name: &str, claim: &str, paths: &[&str]) -> Pod
         labels: Vec::new(),
         host_network: false,
         image_pull_secrets: Vec::new(),
+        node_selector: Vec::new(),
+        node_affinity: Vec::new(),
         containers: paths
             .iter()
             .enumerate()
@@ -1205,6 +1209,8 @@ fn pod_running_as(namespace: &str, name: &str, account: Option<&str>) -> PodSumm
         labels: Vec::new(),
         host_network: false,
         image_pull_secrets: Vec::new(),
+        node_selector: Vec::new(),
+        node_affinity: Vec::new(),
         containers: Vec::new(),
     }
 }

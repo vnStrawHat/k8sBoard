@@ -739,3 +739,44 @@ fn pod_is_finished_reads_the_phase() {
     assert!(!with_phase("Running", Some("OOMKilled")).is_finished);
     assert!(!with_phase("Pending", None).is_finished);
 }
+
+#[test]
+fn pod_summary_reads_node_selector_and_required_affinity() {
+    use k8s_openapi::api::core::v1::{
+        Affinity, NodeAffinity, NodeSelector, NodeSelectorRequirement, NodeSelectorTerm,
+    };
+
+    let mut pod = pod_with_containers(Vec::new(), vec![container("main", None)]);
+    assert!(pod_summary(&pod).node_selector.is_empty());
+    assert!(pod_summary(&pod).node_affinity.is_empty());
+
+    let requirement = |key: &str, operator: &str, values: &[&str]| NodeSelectorRequirement {
+        key: key.to_owned(),
+        operator: operator.to_owned(),
+        values: (!values.is_empty()).then(|| values.iter().map(|v| (*v).to_owned()).collect()),
+    };
+    if let Some(spec) = pod.spec.as_mut() {
+        spec.node_selector = Some(BTreeMap::from([
+            ("pool".to_owned(), "gpu".to_owned()),
+            ("arch".to_owned(), "arm64".to_owned()),
+        ]));
+        spec.affinity = Some(Affinity {
+            node_affinity: Some(NodeAffinity {
+                required_during_scheduling_ignored_during_execution: Some(NodeSelector {
+                    node_selector_terms: vec![NodeSelectorTerm {
+                        match_expressions: Some(vec![
+                            requirement("disk", "In", &["ssd", "nvme"]),
+                            requirement("gpu", "Exists", &[]),
+                        ]),
+                        match_fields: None,
+                    }],
+                }),
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+    }
+    let summary = pod_summary(&pod);
+    assert_eq!(summary.node_selector, ["arch=arm64", "pool=gpu"]);
+    assert_eq!(summary.node_affinity, ["disk In (ssd, nvme), gpu Exists"]);
+}

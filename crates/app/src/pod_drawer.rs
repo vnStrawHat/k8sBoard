@@ -277,7 +277,12 @@ fn overview(
     let labels: Vec<SharedString> = pod.labels.iter().cloned().map(SharedString::from).collect();
     let existing = secret_names_in(live, &pod.namespace);
     let pull = pull_secrets(pod, existing.as_deref());
-    let diagnosis = pod_diagnosis(pod, events, now).map(|found| found.with_pull_secrets(&pull));
+    let nodes = live.map_or(&[][..], |live| live.nodes.items());
+    let diagnosis = pod_diagnosis(pod, events, now).map(|found| {
+        found
+            .with_pull_secrets(&pull)
+            .with_scheduling_hints(pod, nodes)
+    });
     let pull_row = (!pull.is_empty()).then(|| {
         detail_row(
             "Image pull secrets",
@@ -319,6 +324,18 @@ fn overview(
             cx,
         ))
         .children(deployment)
+        .children(placement_section(
+            "Node selector",
+            "pod-node-selector",
+            &pod.node_selector,
+            cx,
+        ))
+        .children(placement_section(
+            "Node affinity",
+            "pod-node-affinity",
+            &pod.node_affinity,
+            cx,
+        ))
         .child(section_title("Conditions", cx))
         .child(conditions(pod, cx))
         .child(section_title(
@@ -591,6 +608,23 @@ fn volume_source_text(source: &VolumeSource) -> String {
         VolumeSource::DownwardApi => "downwardAPI".to_owned(),
         VolumeSource::Other => "volume".to_owned(),
     }
+}
+
+/// The pod's scheduling constraints as chips: nothing at all when it has none.
+fn placement_section(
+    title: &'static str,
+    id: &'static str,
+    terms: &[String],
+    cx: &Context<AppShell>,
+) -> Vec<AnyElement> {
+    if terms.is_empty() {
+        return Vec::new();
+    }
+    let terms: Vec<SharedString> = terms.iter().cloned().map(SharedString::from).collect();
+    vec![
+        section_title(title, cx).into_any_element(),
+        chips(id, &terms, cx),
+    ]
 }
 
 /// The `Volumes` section: one row per mounted volume, its source a link when it has a screen.

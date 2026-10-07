@@ -1380,6 +1380,8 @@ pub(super) fn logs_pod() -> cluster::PodSummary {
         labels: Vec::new(),
         host_network: false,
         image_pull_secrets: Vec::new(),
+        node_selector: Vec::new(),
+        node_affinity: Vec::new(),
         containers: vec![
             container("app", cluster::ContainerKind::Main),
             container("proxy", cluster::ContainerKind::Sidecar),

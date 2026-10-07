@@ -48,6 +48,8 @@ fn pod(namespace: &str, name: &str, labels: &[&str]) -> PodSummary {
         labels: labels.iter().map(|term| (*term).to_owned()).collect(),
         host_network: false,
         image_pull_secrets: Vec::new(),
+        node_selector: Vec::new(),
+        node_affinity: Vec::new(),
         containers: Vec::new(),
     }
 }

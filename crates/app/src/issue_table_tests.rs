@@ -223,6 +223,8 @@ fn view_logs_needs_the_subject_pod_in_the_list() {
         labels: Vec::new(),
         host_network: false,
         image_pull_secrets: Vec::new(),
+        node_selector: Vec::new(),
+        node_affinity: Vec::new(),
     };
     let pods = [pod("api-7d9f8c-a"), pod("api-7d9f8c-b")];
     // A group reads the logs of its representative pod, not of the Deployment it shows.
@@ -260,6 +262,8 @@ fn view_logs_of_a_job_reads_its_newest_pod() {
         labels: Vec::new(),
         host_network: false,
         image_pull_secrets: Vec::new(),
+        node_selector: Vec::new(),
+        node_affinity: Vec::new(),
     };
     let pods = [
         pod("report-a", "report", 100),

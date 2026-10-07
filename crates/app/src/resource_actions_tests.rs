@@ -499,6 +499,8 @@ fn pod_on(node: Option<&str>) -> PodSummary {
         labels: Vec::new(),
         host_network: false,
         image_pull_secrets: Vec::new(),
+        node_selector: Vec::new(),
+        node_affinity: Vec::new(),
     }
 }
 
@@ -1287,6 +1289,8 @@ fn pod_with(containers: Vec<cluster::ContainerSummary>) -> PodSummary {
         labels: Vec::new(),
         host_network: false,
         image_pull_secrets: Vec::new(),
+        node_selector: Vec::new(),
+        node_affinity: Vec::new(),
         containers,
     }
 }

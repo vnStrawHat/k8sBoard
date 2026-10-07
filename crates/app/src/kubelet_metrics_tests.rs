@@ -52,6 +52,8 @@ fn pod(name: &str, node: Option<&str>, reason: StatusReason) -> PodSummary {
         labels: Vec::new(),
         host_network: false,
         image_pull_secrets: Vec::new(),
+        node_selector: Vec::new(),
+        node_affinity: Vec::new(),
         containers: Vec::new(),
     }
 }

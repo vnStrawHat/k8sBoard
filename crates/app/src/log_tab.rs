@@ -2143,6 +2143,8 @@ mod tests {
             labels: Vec::new(),
             host_network: false,
             image_pull_secrets: Vec::new(),
+            node_selector: Vec::new(),
+            node_affinity: Vec::new(),
             containers,
         }
     }

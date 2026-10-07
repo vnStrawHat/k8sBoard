@@ -4,7 +4,7 @@ use futures::Stream;
 use futures::future::try_join_all;
 use k8s_openapi::api::core::v1::{
     Container, ContainerState as ApiContainerState, ContainerStateTerminated,
-    ContainerStatus as ApiContainerStatus, Pod, Volume,
+    ContainerStatus as ApiContainerStatus, Pod, PodSpec, Volume,
 };
 use kube::Api;
 
@@ -19,7 +19,8 @@ use crate::namespace::NamespaceScope;
 use crate::pod_status::{PodStatus, StatusReason, is_sidecar, non_negative, pod_display};
 use crate::resource_watch::{WatchUpdate, summary_watch};
 use crate::workload::{
-    ContainerPort, ControllerRef, container_ports, controller_ref, label_terms, non_empty,
+    ContainerPort, ControllerRef, container_ports, controller_ref, key_value_terms, label_terms,
+    non_empty,
 };
 
 /// Set on the mirror pod the kubelet creates for a static pod.
@@ -55,6 +56,11 @@ pub struct PodSummary {
     pub host_network: bool,
     /// `spec.imagePullSecrets[].name`; empty names are dropped.
     pub image_pull_secrets: Vec<String>,
+    /// `spec.nodeSelector` as `key=value` terms in key order.
+    pub node_selector: Vec<String>,
+    /// The required node affinity, one entry per term (the terms are alternatives) with its
+    /// expressions joined by `, `: `disk In (ssd, nvme), gpu Exists`.
+    pub node_affinity: Vec<String>,
     /// Phase `Succeeded` or `Failed`, like `DrainPod::is_finished`. The phase, not the status
     /// reason: the reason reads `Error`, `Completed`, or `OOMKilled` on running pods too.
     pub is_finished: bool,
@@ -293,6 +299,12 @@ pub(crate) fn pod_summary(pod: &Pod) -> PodSummary {
             .flat_map(|spec| spec.image_pull_secrets.iter().flatten())
             .filter_map(|reference| non_empty(Some(reference.name.as_str())))
             .collect(),
+        node_selector: key_value_terms(
+            pod.spec
+                .as_ref()
+                .and_then(|spec| spec.node_selector.as_ref()),
+        ),
+        node_affinity: required_affinity_terms(pod.spec.as_ref()),
         is_finished: matches!(
             pod.status
                 .as_ref()
@@ -300,6 +312,41 @@ pub(crate) fn pod_summary(pod: &Pod) -> PodSummary {
             Some("Succeeded" | "Failed")
         ),
     }
+}
+
+/// The required node affinity terms as text, so the drawer can show what the scheduler matches.
+fn required_affinity_terms(spec: Option<&PodSpec>) -> Vec<String> {
+    let terms = spec
+        .and_then(|spec| spec.affinity.as_ref())
+        .and_then(|affinity| affinity.node_affinity.as_ref())
+        .and_then(|affinity| {
+            affinity
+                .required_during_scheduling_ignored_during_execution
+                .as_ref()
+        })
+        .map(|selector| selector.node_selector_terms.as_slice())
+        .unwrap_or_default();
+    terms
+        .iter()
+        .map(|term| {
+            term.match_expressions
+                .iter()
+                .chain(&term.match_fields)
+                .flatten()
+                .map(|requirement| match requirement.values.as_deref() {
+                    Some(values) if !values.is_empty() => format!(
+                        "{} {} ({})",
+                        requirement.key,
+                        requirement.operator,
+                        values.join(", ")
+                    ),
+                    _ => format!("{} {}", requirement.key, requirement.operator),
+                })
+                .collect::<Vec<_>>()
+                .join(", ")
+        })
+        .filter(|term| !term.is_empty())
+        .collect()
 }
 
 pub(crate) fn drain_pod(pod: &Pod) -> DrainPod {

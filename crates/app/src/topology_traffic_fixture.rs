@@ -241,6 +241,8 @@ fn pod(name: &str, owner: (&str, &str), app: &str, is_host_network: bool) -> Pod
         labels: vec![format!("app={app}")],
         host_network: is_host_network,
         image_pull_secrets: Vec::new(),
+        node_selector: Vec::new(),
+        node_affinity: Vec::new(),
     }
 }
 

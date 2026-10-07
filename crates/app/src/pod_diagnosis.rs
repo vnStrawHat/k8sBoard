@@ -3,14 +3,15 @@
 //! here logs them.
 
 use cluster::{
-    ContainerKind, ContainerState, ContainerSummary, EventSummary, EventType, PodStatus,
-    PodSummary, ProbeSummary, StatusReason, Termination,
+    ContainerKind, ContainerState, ContainerSummary, EventSummary, EventType, NodeSummary,
+    PodStatus, PodSummary, ProbeSummary, StatusReason, Termination,
 };
 use jiff::{SignedDuration, Timestamp};
 
 use crate::age::format_age;
 use crate::container_detail::probe_summary_text;
 use crate::event_rows::message_line;
+use crate::pod_scheduling::scheduling_hints;
 use crate::status_tone::{StatusTone, is_bad_reason};
 
 /// The text of the WHY box.
@@ -166,7 +167,11 @@ impl PodDiagnosis {
     /// read `text`, which stays one sentence.
     pub(crate) fn display_text(&self) -> String {
         match self.cause {
-            DiagnosisCause::Unschedulable { .. } => scheduler_bullets(&self.text),
+            DiagnosisCause::Unschedulable { .. } => match self.text.split_once('\n') {
+                // The lines after the first are the hints of `with_scheduling_hints`.
+                Some((message, hints)) => format!("{}\n{hints}", scheduler_bullets(message)),
+                None => scheduler_bullets(&self.text),
+            },
             _ => self.text.clone(),
         }
     }
@@ -177,6 +182,18 @@ impl PodDiagnosis {
             self.cause,
             DiagnosisCause::ImagePull(StatusReason::ImagePullBackOff | StatusReason::ErrImagePull)
         )
+    }
+
+    /// Adds what the scheduler message leaves out: the selector value no node carries, and the
+    /// request no node is big enough for.
+    pub(crate) fn with_scheduling_hints(mut self, pod: &PodSummary, nodes: &[NodeSummary]) -> Self {
+        if matches!(self.cause, DiagnosisCause::Unschedulable { .. }) {
+            for hint in scheduling_hints(pod, nodes, &self.text) {
+                self.text.push('\n');
+                self.text.push_str(&hint);
+            }
+        }
+        self
     }
 
     /// Adds the secrets the kubelet tried to a failed pull, so a missing one is seen at once.

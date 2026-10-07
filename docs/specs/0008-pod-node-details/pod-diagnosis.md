@@ -81,3 +81,7 @@ The kubelet's CrashLoopBackOff waiting message is `back-off %s restarting failed
 ## Pull secrets (walk H11)
 
 For a failed pull (ImagePullBackOff or ErrImagePull) the drawer appends `Pull secrets: x (missing), y` to the WHY text (`PodDiagnosis::with_pull_secrets`) and links each existing secret under the box. A name is `(missing)` only when the Secrets screen has the namespace's list loaded and lacks it; otherwise nothing is called missing. The Overview Pod section lists `Image pull secrets` as links when the pod has any. The Issues and kind diagnoses keep the short text.
+
+## Scheduling hints (round 3, N12)
+
+For an Unschedulable pod the drawer appends lines under the scheduler's bullets (`PodDiagnosis::with_scheduling_hints`, module `pod_scheduling.rs`): `nodeSelector k8sboard.io/pool=gpu — no node has it (nodes have k8sboard.io/pool: data, web)` (or `no node carries the key {key}`, or `no single node has all of them`) when the message says `node affinity/selector` and no node carries the pod's selector; `required node affinity {term}` for each required affinity term (quoted, not evaluated); and `requests cpu 64 cores — the largest node allocates 4 cores` (same for memory) for an `Insufficient cpu|memory` message when the pod's request exceeds every node's allocatable. Issues keep the plain one-line text. `PodSummary` carries `node_selector` and `node_affinity`; the Overview shows `Node selector` and `Node affinity` chips for any pod that has them.

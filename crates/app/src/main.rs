@@ -117,6 +117,7 @@ mod permission_table;
 mod permissions_view;
 mod pod_diagnosis;
 mod pod_drawer;
+mod pod_scheduling;
 mod pod_table;
 mod policy_rows;
 mod port_forward_menu;

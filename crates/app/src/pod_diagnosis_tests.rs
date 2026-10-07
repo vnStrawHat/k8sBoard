@@ -72,6 +72,8 @@ fn pod(status: PodStatus, containers: Vec<ContainerSummary>) -> PodSummary {
         labels: Vec::new(),
         host_network: false,
         image_pull_secrets: Vec::new(),
+        node_selector: Vec::new(),
+        node_affinity: Vec::new(),
     }
 }
 
@@ -969,4 +971,30 @@ fn a_scheduler_message_lists_one_reason_per_line() {
     )]);
     let other = diagnose(&crashing).expect("a diagnosis");
     assert_eq!(other.display_text(), other.text);
+}
+
+#[test]
+fn scheduling_hints_follow_the_bullets_and_leave_the_issue_text_alone() {
+    let mut pod = pod(PodStatus::Reason(StatusReason::Pending), Vec::new());
+    pod.node_selector = vec!["k8sboard.io/pool=gpu".to_owned()];
+    pod.conditions = vec![PodCondition {
+        name: "PodScheduled".to_owned(),
+        is_true: false,
+        reason: Some("Unschedulable".to_owned()),
+        message: Some(
+            "0/1 nodes are available: 1 node(s) didn't match Pod's node affinity/selector."
+                .to_owned(),
+        ),
+        changed_at: None,
+    }];
+    let plain = diagnose(&pod).expect("a diagnosis");
+    let hinted = plain.clone().with_scheduling_hints(&pod, &[]);
+    assert_eq!(
+        hinted.display_text(),
+        "Cannot be scheduled: 0/1 nodes are available:\n\
+         • 1 node(s) didn't match Pod's node affinity/selector.\n\
+         nodeSelector k8sboard.io/pool=gpu — no node carries the key k8sboard.io/pool"
+    );
+    // Only the drawer asks for hints; the issue rules read the plain one-line text.
+    assert!(!plain.text.contains('\n'));
 }
