@@ -97,18 +97,29 @@ pub(crate) fn deployment_row(deployment: &DeploymentSummary) -> KindRow {
 /// `3/3`, and `3/3 · Paused` while the rollout is paused: a paused Deployment is not green, because
 /// its new pods wait for Resume. A shortfall keeps its own tone.
 fn ready_label(deployment: &DeploymentSummary) -> StatusLabel {
-    let tone = replica_tone(deployment.ready, deployment.desired);
-    let counts = format!("{}/{}", deployment.ready, deployment.desired);
+    let label = ready_count_label(deployment.ready, deployment.desired);
     if !deployment.is_paused {
+        return label;
+    }
+    let is_ok = label.tone == StatusTone::Ok;
+    StatusLabel {
+        text: format!("{} · Paused", label.text).into(),
+        tone: if is_ok { StatusTone::Info } else { label.tone },
+    }
+}
+
+/// `{ready}/{desired}` toned by `replica_tone`. More ready than desired is a scale-down in
+/// progress, not a healthy surplus: it reads `2/1 · scaling down` in the info tone.
+fn ready_count_label(ready: u32, desired: u32) -> StatusLabel {
+    if ready > desired {
         return StatusLabel {
-            text: counts.into(),
-            tone,
+            text: format!("{ready}/{desired} · scaling down").into(),
+            tone: StatusTone::Info,
         };
     }
-    let is_ok = tone == StatusTone::Ok;
     StatusLabel {
-        text: format!("{counts} · Paused").into(),
-        tone: if is_ok { StatusTone::Info } else { tone },
+        text: format!("{ready}/{desired}").into(),
+        tone: replica_tone(ready, desired),
     }
 }
 
@@ -542,9 +553,9 @@ pub(crate) fn controller_owner(
     })
 }
 
-/// `{ready}/{desired}` toned by `replica_tone`.
+/// The Ready cell of `ready_count_label`.
 fn ready_cell(ready: u32, desired: u32) -> KindCell {
-    toned(format!("{ready}/{desired}"), replica_tone(ready, desired))
+    KindCell::Toned(ready_count_label(ready, desired))
 }
 
 pub(crate) fn toned_number(count: u32, tone: StatusTone) -> KindCell {

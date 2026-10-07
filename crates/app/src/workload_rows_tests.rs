@@ -136,6 +136,44 @@ fn deployment_ready_cell_is_toned_by_replicas() {
 }
 
 #[test]
+fn deployment_ready_cell_says_scaling_down_while_surplus_pods_run() {
+    let mut shrinking = deployment();
+    shrinking.desired = 1;
+    shrinking.ready = 2;
+    let row = deployment_row(&shrinking);
+    assert_eq!(
+        row.cells.first(),
+        Some(&KindCell::Toned(StatusLabel {
+            text: "2/1 · scaling down".into(),
+            tone: StatusTone::Info,
+        }))
+    );
+    shrinking.ready = 1;
+    let settled = deployment_row(&shrinking);
+    assert_eq!(
+        settled.cells.first(),
+        Some(&KindCell::Toned(StatusLabel {
+            text: "1/1".into(),
+            tone: StatusTone::Ok,
+        }))
+    );
+}
+
+#[test]
+fn stateful_set_ready_cell_says_scaling_down_while_surplus_pods_run() {
+    let mut shrinking = stateful_set();
+    shrinking.desired = 1;
+    shrinking.ready = 2;
+    assert_eq!(
+        stateful_set_row(&shrinking).cells.first(),
+        Some(&KindCell::Toned(StatusLabel {
+            text: "2/1 · scaling down".into(),
+            tone: StatusTone::Info,
+        }))
+    );
+}
+
+#[test]
 fn deployment_strategy_reads_surge_and_unavailable() {
     assert_eq!(
         strategy_text(&deployment()).as_deref(),
