@@ -70,8 +70,8 @@ fn config_maps_and_secrets_also_ask_patch() {
             AccessCheck::Create(ObjectKind::Secret)
         ]
     );
-    // Only the kinds with a merge patch ask for it: the values of these two, and the labels and
-    // annotations of pods and workloads.
+    // Only the kinds with a merge patch ask for it: the values of these two, the labels and
+    // annotations of pods and workloads, and the reclaim policy of a volume.
     for kind in ObjectKind::ALL {
         if !matches!(
             kind,
@@ -84,6 +84,7 @@ fn config_maps_and_secrets_also_ask_patch() {
                 | ObjectKind::ReplicaSet
                 | ObjectKind::Job
                 | ObjectKind::CronJob
+                | ObjectKind::PersistentVolume
         ) {
             assert!(
                 !lazy_checks(kind).contains(&AccessCheck::Patch(kind)),
@@ -113,11 +114,23 @@ fn lazy_checks_ask_create_for_creatable_kinds() {
             AccessCheck::Create(ObjectKind::Namespace)
         ]
     );
+    // A claim is not a `New` kind, but Recreate with class creates one.
     for kind in ObjectKind::ALL {
         assert_eq!(
             lazy_checks(kind).contains(&AccessCheck::Create(kind)),
-            kind.is_creatable(),
+            kind.is_creatable() || kind == ObjectKind::PersistentVolumeClaim,
             "{kind:?}"
         );
     }
+}
+
+#[test]
+fn a_volume_asks_patch_for_its_reclaim_policy() {
+    assert_eq!(
+        lazy_checks(ObjectKind::PersistentVolume),
+        [
+            AccessCheck::Patch(ObjectKind::PersistentVolume),
+            AccessCheck::Delete(ObjectKind::PersistentVolume)
+        ]
+    );
 }

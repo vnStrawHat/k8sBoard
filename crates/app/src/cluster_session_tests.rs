@@ -1715,6 +1715,27 @@ impl ClusterSession {
         }
         cx.notify();
     }
+
+    /// The StorageClasses companion of the PVCs screen becomes this loaded snapshot, as if its
+    /// watch had sent it. Nothing happens while the explorer runs no such companion.
+    pub(crate) fn set_companion_classes_for_test(
+        &mut self,
+        classes: Vec<cluster::StorageClassSummary>,
+        cx: &mut Context<Self>,
+    ) {
+        let companion = self
+            .live_mut()
+            .and_then(|live| live.explorer.as_mut())
+            .and_then(|explorer| explorer.companion.as_mut());
+        if let Some(companion) = companion {
+            companion
+                .lists
+                .apply(CompanionUpdate::StorageClasses(WatchUpdate::Snapshot(
+                    classes,
+                )));
+        }
+        cx.notify();
+    }
 }
 
 fn subject_with(namespace: &str, kinds: &[KindFilter]) -> TopologySubject {

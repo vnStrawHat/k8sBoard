@@ -2187,6 +2187,11 @@ fn edit_yaml_is_offered_only_on_editable_kinds() {
         offered(&kind_key(ResourceKind::ClusterRoles)),
         Some(ResourceAction::EditYaml(ObjectKind::ClusterRole))
     );
+    // A claim's labels and size are edited here; the API refuses the rest of its spec.
+    assert_eq!(
+        offered(&kind_key(ResourceKind::PersistentVolumeClaims)),
+        Some(ResourceAction::EditYaml(ObjectKind::PersistentVolumeClaim))
+    );
     // A node, a read-only kind, and a Helm release (a Secret by storage) are not edited here.
     assert_eq!(offered(&node_key()), None);
     assert_eq!(offered(&kind_key(ResourceKind::Namespaces)), None);

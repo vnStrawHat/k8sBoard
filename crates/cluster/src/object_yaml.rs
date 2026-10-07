@@ -161,6 +161,7 @@ impl ObjectKind {
                 | Self::HorizontalPodAutoscaler
                 | Self::ResourceQuota
                 | Self::PodDisruptionBudget
+                | Self::PersistentVolumeClaim
                 | Self::Secret
                 | Self::Role
                 | Self::ClusterRole

@@ -29,9 +29,9 @@ use crate::drawer::DrawerTab;
 use crate::keymap::{
     Attach, CopyName, Cordon, DebugContainer, Delete, Drain, EditHpaRange, EditLabels,
     EditMetadata, EditTaints, EditValues, EditYaml, EvictPod, ExpandClaim, OpenShell, PauseRollout,
-    PortForward, RenewCertificate, ReplaceCertificate, RerunJob, RerunJobWithChanges, RestartPod,
-    RestartRollout, RollBack, Scale, SetDefaultStorageClass, SetImage, SuspendCronJob,
-    TriggerCronJob, ViewLogs, ViewYaml,
+    PortForward, RecreateClaim, RenewCertificate, ReplaceCertificate, RerunJob,
+    RerunJobWithChanges, RestartPod, RestartRollout, RollBack, Scale, SetDefaultStorageClass,
+    SetImage, SetReclaimPolicy, SuspendCronJob, TriggerCronJob, ViewLogs, ViewYaml,
 };
 use crate::kind_access::{KindAccess, KindAccessMap};
 use crate::kind_join::last_job_owner;
@@ -112,6 +112,10 @@ pub(crate) enum ResourceAction {
     ExpandClaim,
     /// Makes a StorageClass the default and unsets the old default (spec 0032b).
     SetDefaultStorageClass,
+    /// Deletes a Pending claim and creates it again with another class (spec 0032b).
+    RecreateClaim,
+    /// Sets Retain or Delete as the reclaim policy of a volume (spec 0032b).
+    SetReclaimPolicy,
     /// Adds `Issuing=True` to a cert-manager Certificate's status, which makes cert-manager issue
     /// a new certificate now (spec 0018 step 6).
     RenewCertificate,
@@ -157,6 +161,8 @@ pub(crate) enum RowAction {
     EditHpaRange,
     ExpandClaim,
     SetDefaultStorageClass,
+    RecreateClaim,
+    SetReclaimPolicy,
     RenewCertificate,
 }
 
@@ -393,6 +399,18 @@ impl ResourceAction {
                 checks: vec![AccessCheck::PatchStorageClasses],
                 is_shipped: true,
             },
+            // Deletes the claim and creates it again: both rights, asked lazily for the kind.
+            Self::RecreateClaim => ActionGate::Mutating {
+                checks: vec![
+                    AccessCheck::Delete(ObjectKind::PersistentVolumeClaim),
+                    AccessCheck::Create(ObjectKind::PersistentVolumeClaim),
+                ],
+                is_shipped: true,
+            },
+            Self::SetReclaimPolicy => ActionGate::Mutating {
+                checks: vec![AccessCheck::Patch(ObjectKind::PersistentVolume)],
+                is_shipped: true,
+            },
             // A custom kind has no lazy per-kind check: this one is in the session report (0018).
             Self::RenewCertificate => ActionGate::Mutating {
                 checks: vec![AccessCheck::UpdateCertificateStatus],
@@ -440,6 +458,8 @@ impl ResourceAction {
             Self::EditHpaRange => RowAction::EditHpaRange,
             Self::ExpandClaim => RowAction::ExpandClaim,
             Self::SetDefaultStorageClass => RowAction::SetDefaultStorageClass,
+            Self::RecreateClaim => RowAction::RecreateClaim,
+            Self::SetReclaimPolicy => RowAction::SetReclaimPolicy,
             Self::RenewCertificate => RowAction::RenewCertificate,
             Self::CreateObject(_) => return None,
         };
@@ -482,6 +502,8 @@ impl RowAction {
             Self::EditHpaRange => Box::new(EditHpaRange),
             Self::ExpandClaim => Box::new(ExpandClaim),
             Self::SetDefaultStorageClass => Box::new(SetDefaultStorageClass),
+            Self::RecreateClaim => Box::new(RecreateClaim),
+            Self::SetReclaimPolicy => Box::new(SetReclaimPolicy),
             Self::RenewCertificate => Box::new(RenewCertificate),
         }
     }
@@ -515,6 +537,8 @@ impl RowAction {
             Self::RerunJobWithChanges => IconName::FilePenLine,
             Self::ExpandClaim => IconName::HardDriveUpload,
             Self::SetDefaultStorageClass => IconName::Star,
+            Self::RecreateClaim => IconName::RotateCw,
+            Self::SetReclaimPolicy => IconName::HardDrive,
         }
     }
 }
@@ -544,6 +568,7 @@ pub(crate) fn action_risk(action: ResourceAction) -> ActionRisk {
         ResourceAction::Delete(_)
         | ResourceAction::Drain
         | ResourceAction::RestartPod
+        | ResourceAction::RecreateClaim
         | ResourceAction::EvictPod => ActionRisk::Destructive,
         // A root shell on the node: the strongest tier, typed in every environment.
         ResourceAction::OpenNodeShell => ActionRisk::Privileged,
@@ -575,6 +600,7 @@ pub(crate) fn action_risk(action: ResourceAction) -> ActionRisk {
         | ResourceAction::EditHpaRange
         | ResourceAction::ExpandClaim
         | ResourceAction::SetDefaultStorageClass
+        | ResourceAction::SetReclaimPolicy
         | ResourceAction::RenewCertificate => ActionRisk::Change,
     }
 }
@@ -615,6 +641,8 @@ pub(crate) fn action_label(action: ResourceAction) -> &'static str {
         ResourceAction::EditHpaRange => "Edit min / max",
         ResourceAction::ExpandClaim => "Expand",
         ResourceAction::SetDefaultStorageClass => "Set as default",
+        ResourceAction::RecreateClaim => "Recreate with class",
+        ResourceAction::SetReclaimPolicy => "Set reclaim policy",
         ResourceAction::RenewCertificate => "Renew now",
     }
 }
@@ -744,6 +772,8 @@ pub(crate) fn subject_action(row: RowAction, subject: &ResourceKey) -> Option<Re
         | RowAction::RerunJobWithChanges
         | RowAction::EditHpaRange
         | RowAction::ExpandClaim
+        | RowAction::RecreateClaim
+        | RowAction::SetReclaimPolicy
         | RowAction::SetDefaultStorageClass
         | RowAction::RenewCertificate => match subject {
             ResourceKey::Kind { kind, .. } => kind.read_only_actions().iter().find_map(|item| {

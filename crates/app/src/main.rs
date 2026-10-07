@@ -192,6 +192,7 @@ mod usage_chart;
 mod usage_format;
 mod value_popover;
 mod values_edit;
+mod volume_edits;
 mod watched_kinds;
 mod who_can_view;
 mod workload_actions;

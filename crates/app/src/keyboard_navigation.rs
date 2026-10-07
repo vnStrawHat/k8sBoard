@@ -22,12 +22,13 @@ use crate::keymap::{
     Attach, CloseDockTab, CopyName, Cordon, Delete, Dismiss, Drain, EditHpaRange, EditLabels,
     EditMetadata, EditTaints, EditValues, EditYaml, EvictPod, ExpandClaim, ExtendTickDown,
     ExtendTickUp, GoBack, GoForward, LeaveInput, NextContainer, NextDockTab, OpenDrawer, OpenShell,
-    PauseRollout, PortForward, PreviousContainer, PreviousDockTab, RenewCertificate,
+    PauseRollout, PortForward, PreviousContainer, PreviousDockTab, RecreateClaim, RenewCertificate,
     ReplaceCertificate, RerunJob, RerunJobWithChanges, RestartPod, RestartRollout, RollBack, Scale,
     SelectDrawerTab1, SelectDrawerTab2, SelectDrawerTab3, SelectDrawerTab4, SelectDrawerTab5,
     SelectFirstRow, SelectLastRow, SelectNextPage, SelectNextRow, SelectPreviousPage,
-    SelectPreviousRow, SetDefaultStorageClass, SetImage, SuspendCronJob, ToggleAllTicks,
-    ToggleDock, ToggleDockZoom, ToggleReadOnly, ToggleRowTick, TriggerCronJob, ViewLogs, ViewYaml,
+    SelectPreviousRow, SetDefaultStorageClass, SetImage, SetReclaimPolicy, SuspendCronJob,
+    ToggleAllTicks, ToggleDock, ToggleDockZoom, ToggleReadOnly, ToggleRowTick, TriggerCronJob,
+    ViewLogs, ViewYaml,
 };
 use crate::kind_drawer::REVISIONS_TITLE;
 use crate::live_sections::loaded_replica_sets;
@@ -257,6 +258,8 @@ pub(super) fn register_key_handlers(root: Div, cx: &Context<AppShell>) -> Div {
     let root = on_row_key::<RerunJobWithChanges>(root, RowAction::RerunJobWithChanges, cx);
     let root = on_row_key::<EditHpaRange>(root, RowAction::EditHpaRange, cx);
     let root = on_row_key::<ExpandClaim>(root, RowAction::ExpandClaim, cx);
+    let root = on_row_key::<RecreateClaim>(root, RowAction::RecreateClaim, cx);
+    let root = on_row_key::<SetReclaimPolicy>(root, RowAction::SetReclaimPolicy, cx);
     let root = on_row_key::<SetDefaultStorageClass>(root, RowAction::SetDefaultStorageClass, cx);
     let root = on_row_key::<RenewCertificate>(root, RowAction::RenewCertificate, cx);
     on_row_key::<Delete>(root, RowAction::Delete, cx)
@@ -809,6 +812,8 @@ impl AppShell {
             }
             ResourceAction::EditHpaRange => self.open_hpa_range_popover(&subject, window, cx),
             ResourceAction::ExpandClaim => self.open_expand_popover(&subject, window, cx),
+            ResourceAction::RecreateClaim => self.open_recreate_popover(&subject, window, cx),
+            ResourceAction::SetReclaimPolicy => self.open_reclaim_popover(&subject, window, cx),
             ResourceAction::SetDefaultStorageClass => {
                 self.start_set_default(&subject, RowCheck::Enforced, window, cx);
             }

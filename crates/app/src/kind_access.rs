@@ -23,9 +23,12 @@ pub(crate) fn lazy_checks(kind: ObjectKind) -> Vec<AccessCheck> {
             | ObjectKind::ReplicaSet
             | ObjectKind::Job
             | ObjectKind::CronJob
+            | ObjectKind::PersistentVolume
     )
     .then_some(AccessCheck::Patch(kind));
-    let create = kind.is_creatable().then_some(AccessCheck::Create(kind));
+    // A claim is not a `New` kind, but Recreate with class creates one.
+    let create = (kind.is_creatable() || kind == ObjectKind::PersistentVolumeClaim)
+        .then_some(AccessCheck::Create(kind));
     update
         .into_iter()
         .chain(patch)

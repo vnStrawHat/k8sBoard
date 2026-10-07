@@ -26,6 +26,7 @@ use crate::quota_room::quota_scale_warnings;
 use crate::resource_actions::{ResourceAction, action_risk, values_edit_block};
 use crate::resource_edits::{claim_block, class_block};
 use crate::scale_effects::ScaleEffects;
+use crate::volume_edits::{reclaim_block, recreate_block};
 use crate::write_guard::ActionRisk;
 
 /// Why a paused Deployment cannot restart or roll back: kubectl refuses both.
@@ -440,6 +441,12 @@ pub(crate) fn row_block(
         }
         (ResourceAction::SetDefaultStorageClass, KindObject::StorageClass(class)) => {
             class_block(class)
+        }
+        (ResourceAction::RecreateClaim, KindObject::PersistentVolumeClaim(claim)) => {
+            recreate_block(claim)
+        }
+        (ResourceAction::SetReclaimPolicy, KindObject::PersistentVolume(volume)) => {
+            reclaim_block(volume)
         }
         (ResourceAction::RollBack, KindObject::Deployment(deployment)) => {
             match roll_back_choice(deployment, replica_sets) {

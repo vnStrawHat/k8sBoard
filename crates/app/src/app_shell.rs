@@ -196,6 +196,8 @@ pub(crate) mod secret_form;
 pub(crate) mod shell_open;
 #[path = "values_edit_flow.rs"]
 mod values_edit_flow;
+#[path = "volume_edit_flow.rs"]
+mod volume_edit_flow;
 #[path = "write_flow.rs"]
 pub(crate) mod write_flow;
 #[path = "write_lock.rs"]

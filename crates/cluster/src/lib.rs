@@ -90,6 +90,7 @@ mod stateful_set;
 mod storage_class;
 mod traffic;
 mod traffic_metrics;
+mod volume_write_bodies;
 mod workload;
 mod workload_write_bodies;
 
@@ -232,6 +233,7 @@ pub use traffic::TrafficCounter;
 pub use traffic_metrics::{
     TrafficEnd, TrafficMetricSource, TrafficRate, TrafficReading, TrafficSourceKind,
 };
+pub use volume_write_bodies::ReclaimPolicy;
 pub use workload::{
     AnnotationTerms, ContainerPort, ControllerRef, TemplateContainer, WorkloadCondition,
 };

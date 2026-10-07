@@ -29,6 +29,8 @@ All three are JSON merge patches with `fieldManager=k8sboard` (dry-run adds `dry
 | `ExpandClaim` | PATCH | `/api/v1/namespaces/{ns}/persistentvolumeclaims/{name}` | `{"spec":{"resources":{"requests":{"storage":"150Gi"}}}}` |
 | `SetDefaultStorageClass { true }` | PATCH | `/apis/storage.k8s.io/v1/storageclasses/{name}` | `{"metadata":{"annotations":{"storageclass.kubernetes.io/is-default-class":"true"}}}` |
 | `SetDefaultStorageClass { false }` | PATCH | same | `{"metadata":{"annotations":{"storageclass.kubernetes.io/is-default-class":"false","storageclass.beta.kubernetes.io/is-default-class":null}}}` |
+| `SetReclaimPolicy` (UX round 3) | PATCH | `/api/v1/persistentvolumes/{name}` | `{"spec":{"persistentVolumeReclaimPolicy":"Retain"}}` (`Retain` or `Delete`; check `patch persistentvolumes`) |
+| `RecreateClaim` (UX round 3) | GET, DELETE, GET, POST | `/api/v1/namespaces/{ns}/persistentvolumeclaims/{name}` and the collection | delete pinned to the uid read when the dialog opened; the new claim from the fresh one, with `storageClassName` replaced; refused unless the claim is Pending, unbound, and not terminating (checks `delete` and `create persistentvolumeclaims`) |
 
 - The HPA patch uses `autoscaling/v2`, the version 0013 watches.
 - `new` stores `storage.trim()` and that exact text is sent (`150Gi`), not re-formatted.

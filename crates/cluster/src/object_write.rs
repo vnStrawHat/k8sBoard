@@ -39,6 +39,9 @@ use crate::object_edit::{ObjectEdit, is_helm_release};
 use crate::object_metadata::{are_valid_metadata_changes, metadata_patch};
 use crate::object_yaml::{ObjectKind, ObjectRef};
 use crate::quantity::ByteAmount;
+use crate::volume_write_bodies::{
+    ReclaimPolicy, RecreateRefusal, reclaim_policy_patch, recreated_claim_body,
+};
 use crate::workload_write_bodies::{
     RERUN_BASE_CHARS, RERUN_SUFFIX, RollBackRefusal, TRIGGER_BASE_CHARS, TRIGGER_SUFFIX,
     generate_name, is_valid_change_cause, rerun_job_body, rollback_operations, set_image_patch,
@@ -69,6 +72,9 @@ const MAX_UID_LENGTH: usize = 64;
 /// either key, so an unset clears both.
 const DEFAULT_CLASS_ANNOTATION: &str = "storageclass.kubernetes.io/is-default-class";
 const DEFAULT_CLASS_BETA_ANNOTATION: &str = "storageclass.beta.kubernetes.io/is-default-class";
+/// How long a recreate waits for the old claim to go: 20 polls, half a second apart.
+const GONE_POLLS: u32 = 20;
+const GONE_POLL: Duration = Duration::from_millis(500);
 const UNUSABLE_EVICTION_ANSWER: &str = "the eviction answer was not a success";
 
 /// One allow-listed mutation. Adding a variant is the only way to add a write (C3).
@@ -144,6 +150,22 @@ pub enum WriteOperation {
     ExpandClaim { storage: String },
     /// Merge patch of a StorageClass's default-class annotation (0032b).
     SetDefaultStorageClass { is_default: bool },
+    /// Merge patch of a PersistentVolume's `spec.persistentVolumeReclaimPolicy` (0032b, UX round 3).
+    /// `previous` is never sent: it lets the summary and the audit line name the old policy.
+    SetReclaimPolicy {
+        policy: ReclaimPolicy,
+        previous: ReclaimPolicy,
+    },
+    /// Deletes a Pending, unbound PersistentVolumeClaim pinned to `uid`, waits until it is gone,
+    /// and creates it again with `storage_class` and the same size, access modes, volume mode,
+    /// selector, and labels (0032b, UX round 3). The dry-run checks the claim and dry-runs the
+    /// delete; the create cannot be dry-run while the old claim exists. `previous_class` is never
+    /// sent: it lets the summary and the audit line name the old class.
+    RecreateClaim {
+        uid: String,
+        storage_class: String,
+        previous_class: Option<String>,
+    },
     /// `POST` of a `policy/v1` Eviction to a pod, pinned to `uid` so a recreated pod of the same
     /// name is never evicted. The API server checks the pod's PodDisruptionBudget (0034).
     EvictPod { uid: String, grace: GracePeriod },
@@ -196,6 +218,8 @@ impl WriteOperation {
             Self::SetHpaReplicaRange { .. } => "SetHpaReplicaRange",
             Self::ExpandClaim { .. } => "ExpandClaim",
             Self::SetDefaultStorageClass { .. } => "SetDefaultStorageClass",
+            Self::SetReclaimPolicy { .. } => "SetReclaimPolicy",
+            Self::RecreateClaim { .. } => "RecreateClaim",
             Self::EvictPod { .. } => "EvictPod",
             Self::SetNodeTaints { .. } => "SetNodeTaints",
             Self::SetNodeLabels { .. } => "SetNodeLabels",
@@ -534,6 +558,20 @@ impl WriteRequest {
                     from: None,
                 },
             ],
+            WriteOperation::SetReclaimPolicy { policy, previous } => vec![ChangedField {
+                path: Cow::Borrowed("spec.persistentVolumeReclaimPolicy"),
+                value: Some(policy.to_string()),
+                from: Some(previous.to_string()),
+            }],
+            WriteOperation::RecreateClaim {
+                storage_class,
+                previous_class,
+                ..
+            } => vec![ChangedField {
+                path: Cow::Borrowed("spec.storageClassName"),
+                value: Some(storage_class.clone()),
+                from: previous_class.clone(),
+            }],
             WriteOperation::EvictPod { grace, .. } => vec![field(
                 "pods/eviction",
                 match grace {
@@ -626,6 +664,8 @@ impl WriteRequest {
             | WriteOperation::SetHpaReplicaRange { .. }
             | WriteOperation::ExpandClaim { .. }
             | WriteOperation::SetDefaultStorageClass { .. }
+            | WriteOperation::SetReclaimPolicy { .. }
+            | WriteOperation::RecreateClaim { .. }
             | WriteOperation::EvictPod { .. }
             | WriteOperation::SetNodeTaints { .. }
             | WriteOperation::SetNodeLabels { .. }
@@ -656,6 +696,12 @@ fn checked_operation(operation: WriteOperation) -> Option<WriteOperation> {
             })
         }
         WriteOperation::EvictPod { ref uid, .. } if !is_valid_uid(uid) => None,
+        // A class name is a DNS subdomain, which is also what keeps it out of the body's structure.
+        WriteOperation::RecreateClaim {
+            ref uid,
+            ref storage_class,
+            ..
+        } if !is_valid_uid(uid) || !is_dns_subdomain(storage_class) => None,
         WriteOperation::SetNodeTaints {
             ref taints,
             ref resource_version,
@@ -707,6 +753,8 @@ fn checked_operation(operation: WriteOperation) -> Option<WriteOperation> {
         | WriteOperation::DeleteNodeShellPod { .. }
         | WriteOperation::SetHpaReplicaRange { .. }
         | WriteOperation::SetDefaultStorageClass { .. }
+        | WriteOperation::SetReclaimPolicy { .. }
+        | WriteOperation::RecreateClaim { .. }
         | WriteOperation::EvictPod { .. }
         | WriteOperation::SetNodeTaints { .. }
         | WriteOperation::SetNodeLabels { .. }
@@ -810,6 +858,14 @@ fn fitting_access_check(target: &ObjectRef, operation: &WriteOperation) -> Optio
         }
         (WriteOperation::SetDefaultStorageClass { .. }, ObjectKind::StorageClass) => {
             AccessCheck::PatchStorageClasses
+        }
+        (WriteOperation::SetReclaimPolicy { .. }, ObjectKind::PersistentVolume) => {
+            AccessCheck::Patch(ObjectKind::PersistentVolume)
+        }
+        // The create is the server's to refuse: the gate reads both rights, the request names the
+        // one a dry-run can show.
+        (WriteOperation::RecreateClaim { .. }, ObjectKind::PersistentVolumeClaim) => {
+            AccessCheck::Delete(ObjectKind::PersistentVolumeClaim)
         }
         _ => return None,
     })
@@ -1315,6 +1371,18 @@ impl ClusterConnection {
                 self.settle(request, mode, sent)?;
                 Ok(Answer::patched())
             }
+            WriteOperation::SetReclaimPolicy { policy, .. } => {
+                let body = reclaim_policy_patch(*policy);
+                let sent = run_raw(api.patch(name, &params, &Patch::Merge(&body))).await;
+                self.settle(request, mode, sent)?;
+                Ok(Answer::patched())
+            }
+            WriteOperation::RecreateClaim {
+                uid, storage_class, ..
+            } => {
+                self.recreate_claim(request, &api, (uid, storage_class), mode)
+                    .await
+            }
             WriteOperation::SetDefaultStorageClass { is_default } => {
                 // An unset removes the beta key (`null` in a merge patch), which 0014 also reads.
                 let annotations = if *is_default {
@@ -1358,6 +1426,83 @@ impl ClusterConnection {
             Ok(Err(error)) => Err(self.write_error(request, mode, error)),
             Err(_elapsed) => Err(self.timed_out(mode)),
         }
+    }
+
+    /// Recreate with another class: reads the claim, deletes it pinned to its uid, waits until it
+    /// is gone, and creates the new one. A dry-run stops after the dry-run of the delete: the
+    /// create would meet the old claim and read as a name clash. A create that fails after the
+    /// delete says so, since the claim is gone by then.
+    #[allow(clippy::disallowed_methods)]
+    async fn recreate_claim(
+        &self,
+        request: &WriteRequest,
+        api: &Api<DynamicObject>,
+        (uid, storage_class): (&str, &str),
+        mode: WriteMode,
+    ) -> Result<Answer, WriteError> {
+        let name = request.target.name();
+        let fresh = self.get_object(&request.target, READ_ACTION).await?;
+        let body =
+            recreated_claim_body(&fresh, uid, storage_class).map_err(|refusal| match refusal {
+                RecreateRefusal::Replaced => invalid("the claim was replaced since it was read"),
+                RecreateRefusal::Bound => {
+                    invalid("only a claim that no volume is bound to can be recreated")
+                }
+                RecreateRefusal::Terminating => invalid("the claim is already being deleted"),
+                RecreateRefusal::Unreadable => self.unusable_object(mode),
+            })?;
+        let delete = DeleteParams {
+            dry_run: mode == WriteMode::DryRun,
+            grace_period_seconds: None,
+            propagation_policy: Some(PropagationPolicy::Background),
+            preconditions: Some(Preconditions {
+                resource_version: None,
+                uid: Some(uid.to_owned()),
+            }),
+        };
+        let sent = run_raw(api.delete(name, &delete)).await;
+        self.settle(request, mode, sent)?;
+        if mode == WriteMode::DryRun {
+            return Ok(Answer::of(WriteEffect::Created));
+        }
+        let after_delete = |error: WriteError| {
+            invalid(format!(
+                "claim {name} was deleted, but creating it again failed: {error}"
+            ))
+        };
+        self.wait_until_gone(api, name, uid)
+            .await
+            .map_err(after_delete)?;
+        let body = serde_json::from_value::<DynamicObject>(body)
+            .map_err(|_| after_delete(self.unusable_object(mode)))?;
+        let sent = run_raw(api.create(&post_params(mode), &body)).await;
+        let created = self.settle(request, mode, sent).map_err(after_delete)?;
+        // The new claim has the name of the old one, so there is no created name to report.
+        Ok(Answer {
+            effect: WriteEffect::Created,
+            created_name: None,
+            uid: committed_uid(&created, mode),
+            dropped_fields: Vec::new(),
+        })
+    }
+
+    /// Polls until no claim with `uid` is left under `name`: a finalizer can hold a deleted claim.
+    async fn wait_until_gone(
+        &self,
+        api: &Api<DynamicObject>,
+        name: &str,
+        uid: &str,
+    ) -> Result<(), WriteError> {
+        for _ in 0..GONE_POLLS {
+            let found = self.run(READ_ACTION, api.get_opt(name)).await?;
+            if found.is_none_or(|object| object.metadata.uid.as_deref() != Some(uid)) {
+                return Ok(());
+            }
+            tokio::time::sleep(GONE_POLL).await;
+        }
+        Err(invalid(
+            "the old claim is still being deleted, so the new one was not created",
+        ))
     }
 
     /// The JSON Patch of a Roll back (`kubectl rollout undo --to-revision` parity): reads the
@@ -1620,6 +1765,13 @@ fn create_failure(request: &WriteRequest, status: &Status) -> Option<WriteError>
 }
 
 /// `fieldManager=k8sboard` in both modes; `DryRun` adds `dryRun=All`.
+fn invalid(message: impl Into<String>) -> WriteError {
+    WriteError::Invalid {
+        message: message.into(),
+        fields: Vec::new(),
+    }
+}
+
 fn patch_params(mode: WriteMode) -> PatchParams {
     PatchParams {
         dry_run: mode == WriteMode::DryRun,
@@ -1798,6 +1950,10 @@ mod object_write_node_tests;
 #[allow(clippy::disallowed_methods)]
 #[path = "object_write_resource_edit_tests.rs"]
 mod object_write_resource_edit_tests;
+#[cfg(test)]
+#[allow(clippy::disallowed_methods)]
+#[path = "object_write_volume_tests.rs"]
+mod object_write_volume_tests;
 
 #[cfg(test)]
 #[allow(clippy::disallowed_methods)]

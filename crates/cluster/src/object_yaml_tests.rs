@@ -1071,6 +1071,7 @@ fn only_the_editable_kinds_offer_edit_yaml() {
             "HorizontalPodAutoscaler",
             "ResourceQuota",
             "PodDisruptionBudget",
+            "PersistentVolumeClaim",
             "Secret",
             "Role",
             "ClusterRole",

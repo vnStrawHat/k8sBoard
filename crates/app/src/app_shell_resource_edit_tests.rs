@@ -1385,3 +1385,191 @@ fn a_retry_off_the_storage_classes_screen_says_why_and_opens_nothing(cx: &mut Te
     assert_eq!(t.notification_count(cx), before + 1);
     assert!(writes(&t.stg_api).is_empty());
 }
+
+// ---- Recreate with class… ----
+
+const PENDING_PATH: &str = "/api/v1/namespaces/team-a/persistentvolumeclaims/data-pending";
+const PENDING_CLAIM: &str = r#"{"apiVersion":"v1","kind":"PersistentVolumeClaim","metadata":{"name":"data-pending","namespace":"team-a","uid":"claim-uid"},"spec":{"accessModes":["ReadWriteOnce"],"resources":{"requests":{"storage":"100Mi"}},"storageClassName":"missing"},"status":{"phase":"Pending"}}"#;
+
+/// The Pending claim until a real DELETE arrives; accepts the create of the new one.
+fn recreating_answers() -> impl Fn(&RecordedRequest) -> (u16, String) + Send + Sync + Clone + 'static
+{
+    let is_deleted = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    move |request: &RecordedRequest| {
+        match request.method.as_str() {
+        "GET" if request.path == PENDING_PATH => {
+            if is_deleted.load(std::sync::atomic::Ordering::SeqCst) {
+                (404, NOT_FOUND.to_owned())
+            } else {
+                (200, PENDING_CLAIM.to_owned())
+            }
+        }
+        "DELETE" => {
+            if !request.body.contains("\"dryRun\"") {
+                is_deleted.store(true, std::sync::atomic::Ordering::SeqCst);
+            }
+            (200, PENDING_CLAIM.to_owned())
+        }
+        // Every right is granted: the lazy review of the kind asks delete and create.
+        "POST" if request.path.ends_with("/selfsubjectaccessreviews") => (
+            201,
+            r#"{"apiVersion":"authorization.k8s.io/v1","kind":"SelfSubjectAccessReview","metadata":{},"spec":{},"status":{"allowed":true}}"#.to_owned(),
+        ),
+        "POST" if request.path.ends_with("/persistentvolumeclaims") => {
+            (201, PENDING_CLAIM.replace("missing", "standard"))
+        }
+        _ => (404, NOT_FOUND.to_owned()),
+    }
+    }
+}
+
+/// A pod of `team-a` whose one container mounts the claim `claim`.
+fn mounting_pod(name: &str, claim: &str) -> cluster::PodSummary {
+    cluster::PodSummary {
+        namespace: "team-a".to_owned(),
+        annotations: cluster::AnnotationTerms::default(),
+        name: name.to_owned(),
+        status: cluster::PodStatus::Reason(cluster::StatusReason::Pending),
+        ready: cluster::ReadyCount { ready: 0, total: 1 },
+        restarts: 0,
+        node_name: None,
+        created_at: None,
+        pod_ip: None,
+        qos_class: None,
+        service_account: None,
+        controller: None,
+        conditions: Vec::new(),
+        containers: vec![cluster::ContainerSummary {
+            terminal: cluster::ContainerTerminal::None,
+            name: "main".to_owned(),
+            image: "busybox".to_owned(),
+            kind: cluster::ContainerKind::Main,
+            state: cluster::ContainerState::NotReported,
+            is_ready: false,
+            restart_count: 0,
+            last_termination: None,
+            image_digest: None,
+            pull_policy: None,
+            is_started: None,
+            ports: Vec::new(),
+            resources: Vec::new(),
+            probes: cluster::ContainerProbes::default(),
+            env: Vec::new(),
+            env_from: Vec::new(),
+            mounts: vec![cluster::MountEntry {
+                path: "/data".to_owned(),
+                volume: "data".to_owned(),
+                source: cluster::VolumeSource::PersistentVolumeClaim {
+                    claim: claim.to_owned(),
+                },
+                is_read_only: false,
+                sub_path: None,
+            }],
+        }],
+        status_message: None,
+        labels: Vec::new(),
+        host_network: false,
+        image_pull_secrets: Vec::new(),
+        node_selector: Vec::new(),
+        node_affinity: Vec::new(),
+        is_finished: false,
+    }
+}
+
+fn pending_claim_row() -> Vec<KindRow> {
+    let mut pending = claim("data-pending", "100Mi", "100Mi");
+    pending.phase = "Pending".to_owned();
+    pending.volume = None;
+    pending.capacity = None;
+    pending.storage_class = Some("missing".to_owned());
+    vec![persistent_volume_claim_row(&pending)]
+}
+
+/// The cursor on the Pending claim `data-pending` of staging, with the classes the PVCs screen
+/// watches loaded: `standard` is the default.
+fn on_stg_pending_claim(t: &Clusters, pods: Vec<cluster::PodSummary>, cx: &mut TestAppContext) {
+    t.show_kind(PVC_KIND, pending_claim_row(), pending_claim_row(), cx);
+    session_of(&t.fixture, &t.stg, cx).update(cx, |session, cx| {
+        session.set_pods_for_test(pods, cx);
+        session.set_companion_classes_for_test(
+            vec![class("fast", false, true), class("standard", true, false)],
+            cx,
+        );
+    });
+    cx.run_until_parked();
+    t.cursor_on(&t.stg, PVC_KIND, "data-pending", cx);
+    t.wait_for("the lazy review", cx, |cx| {
+        t.fixture.shell.read_with(cx, |shell, cx| {
+            shell.guard_for(&t.stg, cx).is_some_and(|guard| {
+                matches!(
+                    guard
+                        .kind_access
+                        .get(cluster::ObjectKind::PersistentVolumeClaim),
+                    Some(crate::kind_access::KindAccess::Known(_))
+                )
+            })
+        })
+    });
+}
+
+#[gpui_kit::test]
+fn recreate_asks_the_default_class_then_confirms_one_delete_and_create(cx: &mut TestAppContext) {
+    let t = edit_clusters_answering("recreate", recreating_answers(), cx);
+    on_stg_pending_claim(&t, Vec::new(), cx);
+    dispatch(&t, RowAction::RecreateClaim, cx);
+    let popover = t.popover(cx).expect("the popover is open");
+    popover.read_with(cx, |popover, cx| {
+        assert_eq!(popover.state_line(cx), "Now class missing \u{b7} Pending \u{b7} 100Mi");
+        assert_eq!(popover.typed_text(cx), "standard", "the default class is picked");
+        assert!(popover.can_submit(cx));
+        assert_eq!(
+            texts(popover.warning_lines(cx))[0],
+            "Deletes claim data-pending and creates it again with class standard; 100Mi and ReadWriteOnce stay"
+        );
+    });
+    assert!(!t.has_dialog(cx));
+    submit(&t, &popover, cx);
+    t.wait_for("the dialog", cx, |cx| t.has_dialog(cx));
+    assert_eq!(
+        t.dialog_label(cx),
+        "Recreate claim data-pending with class standard"
+    );
+    t.wait_for_dry_run(cx);
+    let sent = writes(&t.stg_api);
+    assert_eq!(sent.len(), 1, "only the dry-run delete: {sent:?}");
+    assert_eq!(sent[0].method, "DELETE");
+    assert!(sent[0].body.contains("\"dryRun\""), "{}", sent[0].body);
+    t.confirm(cx);
+    t.wait_for("the create", cx, |_| writes(&t.stg_api).len() == 3);
+    let sent = writes(&t.stg_api);
+    assert_eq!(sent[1].method, "DELETE");
+    assert_eq!(sent[2].method, "POST");
+    assert!(
+        sent[2].body.contains("\"storageClassName\":\"standard\""),
+        "{}",
+        sent[2].body
+    );
+    assert!(sent[2].body.contains("100Mi"), "{}", sent[2].body);
+}
+
+#[gpui_kit::test]
+fn recreate_is_refused_for_a_bound_claim_and_for_one_a_pod_mounts(cx: &mut TestAppContext) {
+    let t = edit_clusters_answering("recreate-refused", recreating_answers(), cx);
+    // A bound claim.
+    on_stg_claim(&t, cx);
+    let before = t.notification_count(cx);
+    dispatch(&t, RowAction::RecreateClaim, cx);
+    cx.run_until_parked();
+    assert!(t.popover(cx).is_none());
+    assert_eq!(t.notification_count(cx), before + 1);
+    assert!(writes(&t.stg_api).is_empty());
+    // A Pending claim a pod already mounts (the pod waits for it): nothing is deleted under it.
+    let pod = mounting_pod("waiting-api-0", "data-pending");
+    on_stg_pending_claim(&t, vec![pod], cx);
+    let before = t.notification_count(cx);
+    dispatch(&t, RowAction::RecreateClaim, cx);
+    cx.run_until_parked();
+    assert!(t.popover(cx).is_none());
+    assert_eq!(t.notification_count(cx), before + 1);
+    assert!(writes(&t.stg_api).is_empty());
+}

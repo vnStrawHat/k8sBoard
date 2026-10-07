@@ -636,7 +636,10 @@ static PERSISTENT_VOLUME_CLAIMS: KindSpec = KindSpec {
         column("Class", 150., Align::Left),
         AGE_COLUMN,
     ],
-    read_only_actions: &[KindAction::keyed("Expand…", ResourceAction::ExpandClaim)],
+    read_only_actions: &[
+        KindAction::keyed("Expand…", ResourceAction::ExpandClaim),
+        KindAction::keyed("Recreate with class…", ResourceAction::RecreateClaim),
+    ],
     delete_label: "Delete PVC…",
     has_port_forward: false,
 };
@@ -667,7 +670,10 @@ static PERSISTENT_VOLUMES: KindSpec = KindSpec {
         column("Reclaim", 90., Align::Left),
         AGE_COLUMN,
     ],
-    read_only_actions: &[],
+    read_only_actions: &[KindAction::keyed(
+        "Set reclaim policy…",
+        ResourceAction::SetReclaimPolicy,
+    )],
     delete_label: "Delete PV…",
     has_port_forward: false,
 };

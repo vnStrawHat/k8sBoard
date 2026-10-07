@@ -5,7 +5,10 @@
 //! itself: a submit hands the values to the shell, which builds the intent and opens the confirm
 //! dialog.
 
-use cluster::{HorizontalPodAutoscalerSummary, ObjectKind, PersistentVolumeClaimSummary};
+use cluster::{
+    HorizontalPodAutoscalerSummary, ObjectKind, PersistentVolumeClaimSummary,
+    PersistentVolumeSummary,
+};
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::{Input, InputEvent, InputState, NumberInput};
 use gpui_kit::component::{
@@ -25,6 +28,9 @@ use crate::resource_edits::{
 };
 use crate::status_tone::{StatusTone, tone_color};
 use crate::table_selection::ClusterObject;
+use crate::volume_edits::{
+    ChoiceOption, class_state_text, policy_state_text, reclaim_warnings, recreate_warnings,
+};
 use crate::workload_actions::{
     ImageInput, ImageTarget, ReplicasInput, ScaleTarget, image_input, image_warnings,
     parse_replicas, replicas_input, scale_warnings, tag_range,
@@ -54,6 +60,12 @@ pub(crate) enum ValueForm {
         selected: usize,
         image: Entity<InputState>,
         cause: Entity<InputState>,
+    },
+    /// One of a few named options, as buttons: the class a claim is recreated with, or the reclaim
+    /// policy of a volume. `selected` indexes `options`.
+    Choice {
+        options: Vec<ChoiceOption>,
+        selected: usize,
     },
 }
 
@@ -85,6 +97,16 @@ pub(crate) enum ValueTargets {
     ImageOne {
         object: ClusterObject,
         target: Box<ImageTarget>,
+    },
+    /// The cursor Pending claim that is recreated with another class.
+    ClaimClass {
+        object: ClusterObject,
+        claim: Box<PersistentVolumeClaimSummary>,
+    },
+    /// The cursor volume whose reclaim policy is set.
+    VolumePolicy {
+        object: ClusterObject,
+        volume: Box<PersistentVolumeSummary>,
     },
 }
 
@@ -248,6 +270,61 @@ impl ValuePopover {
         popover
     }
 
+    /// A Recreate popover for one Pending claim: the loaded classes as buttons, `selected` first.
+    pub(crate) fn recreate_one(
+        shell: WeakEntity<AppShell>,
+        object: ClusterObject,
+        claim: PersistentVolumeClaimSummary,
+        (options, selected): (Vec<ChoiceOption>, usize),
+    ) -> Self {
+        Self {
+            shell,
+            form: ValueForm::Choice { options, selected },
+            targets: ValueTargets::ClaimClass {
+                object,
+                claim: Box::new(claim),
+            },
+            is_edited: false,
+            _subscriptions: Vec::new(),
+        }
+    }
+
+    /// A reclaim policy popover for one volume: the policies as buttons, the other one picked.
+    pub(crate) fn reclaim_policy_one(
+        shell: WeakEntity<AppShell>,
+        object: ClusterObject,
+        volume: PersistentVolumeSummary,
+        (options, selected): (Vec<ChoiceOption>, usize),
+    ) -> Self {
+        Self {
+            shell,
+            form: ValueForm::Choice { options, selected },
+            targets: ValueTargets::VolumePolicy {
+                object,
+                volume: Box::new(volume),
+            },
+            is_edited: false,
+            _subscriptions: Vec::new(),
+        }
+    }
+
+    /// The option the Choice buttons have picked.
+    fn picked_option(&self) -> Option<&ChoiceOption> {
+        let ValueForm::Choice { options, selected } = &self.form else {
+            return None;
+        };
+        options.get(*selected)
+    }
+
+    fn pick_option(&mut self, index: usize, cx: &mut Context<Self>) {
+        if let ValueForm::Choice { options, selected } = &mut self.form
+            && index < options.len()
+        {
+            *selected = index;
+            cx.notify();
+        }
+    }
+
     /// Puts `text` in the image field with its tag selected, and focuses the field.
     fn show_image(&mut self, text: &str, window: &mut Window, cx: &mut Context<Self>) {
         let ValueForm::Image { image, .. } = &self.form else {
@@ -384,6 +461,10 @@ impl ValuePopover {
             ValueForm::ReplicaRange { min, .. } => min.read(cx).value(),
             ValueForm::Storage { input } => input.read(cx).value(),
             ValueForm::Image { image, .. } => image.read(cx).value(),
+            ValueForm::Choice { .. } => self
+                .picked_option()
+                .map(|option| SharedString::from(option.value.clone()))
+                .unwrap_or_default(),
         }
     }
 
@@ -502,7 +583,22 @@ impl ValuePopover {
             }
             ValueForm::Storage { .. } => matches!(self.storage_choice(cx), StorageInput::Set(_)),
             ValueForm::Image { .. } => matches!(self.image_choice(cx), ImageInput::Set(_)),
+            ValueForm::Choice { .. } => self.is_choice_new(),
         }
+    }
+
+    /// Whether the picked option differs from what the object has now: a claim recreated with the
+    /// class it has, or a volume set to the policy it has, is no change.
+    fn is_choice_new(&self) -> bool {
+        let Some(option) = self.picked_option() else {
+            return false;
+        };
+        let current = match &self.targets {
+            ValueTargets::ClaimClass { claim, .. } => claim.storage_class.as_deref(),
+            ValueTargets::VolumePolicy { volume, .. } => Some(volume.reclaim_policy.as_str()),
+            _ => return false,
+        };
+        current != Some(option.value.as_str())
     }
 
     /// `Scale deployment/api`, or `Scale 3 deployments`.
@@ -518,6 +614,12 @@ impl ValuePopover {
             ValueTargets::ClaimTicked { count } => format!("Expand {count} claims"),
             ValueTargets::ImageOne { target, .. } => {
                 format!("Set image of {}", target.subject_text())
+            }
+            ValueTargets::ClaimClass { claim, .. } => {
+                format!("Recreate claim {} with class", claim.name)
+            }
+            ValueTargets::VolumePolicy { volume, .. } => {
+                format!("Reclaim policy of volume {}", volume.name)
             }
         }
     }
@@ -541,6 +643,8 @@ impl ValuePopover {
                 .unwrap_or_default(),
             ValueTargets::ClaimTicked { count } => format!("One size for the {count} ticked rows"),
             ValueTargets::ImageOne { .. } => IMAGE_STATE_TEXT.to_owned(),
+            ValueTargets::ClaimClass { claim, .. } => class_state_text(claim),
+            ValueTargets::VolumePolicy { volume, .. } => policy_state_text(volume),
         }
     }
 
@@ -551,6 +655,10 @@ impl ValuePopover {
             ValueForm::ReplicaRange { .. } => "Set limits",
             ValueForm::Storage { .. } => "Expand",
             ValueForm::Image { .. } => "Set image",
+            ValueForm::Choice { .. } => match self.targets {
+                ValueTargets::ClaimClass { .. } => "Recreate…",
+                _ => "Set policy…",
+            },
         }
     }
 
@@ -573,7 +681,9 @@ impl ValuePopover {
                     | ValueTargets::HpaTicked { .. }
                     | ValueTargets::ClaimOne { .. }
                     | ValueTargets::ClaimTicked { .. }
-                    | ValueTargets::ImageOne { .. } => {}
+                    | ValueTargets::ImageOne { .. }
+                    | ValueTargets::ClaimClass { .. }
+                    | ValueTargets::VolumePolicy { .. } => {}
                 });
             }
             ValueForm::ReplicaRange { .. } => {
@@ -591,7 +701,9 @@ impl ValuePopover {
                     | ValueTargets::Ticked { .. }
                     | ValueTargets::ClaimOne { .. }
                     | ValueTargets::ClaimTicked { .. }
-                    | ValueTargets::ImageOne { .. } => {}
+                    | ValueTargets::ImageOne { .. }
+                    | ValueTargets::ClaimClass { .. }
+                    | ValueTargets::VolumePolicy { .. } => {}
                 });
             }
             ValueForm::Storage { .. } => {
@@ -609,7 +721,27 @@ impl ValuePopover {
                     | ValueTargets::Ticked { .. }
                     | ValueTargets::HpaOne { .. }
                     | ValueTargets::HpaTicked { .. }
-                    | ValueTargets::ImageOne { .. } => {}
+                    | ValueTargets::ImageOne { .. }
+                    | ValueTargets::ClaimClass { .. }
+                    | ValueTargets::VolumePolicy { .. } => {}
+                });
+            }
+            ValueForm::Choice { .. } => {
+                if !self.is_choice_new() {
+                    return;
+                }
+                let Some(option) = self.picked_option() else {
+                    return;
+                };
+                let value = option.value.clone();
+                let _ = self.shell.update(cx, |shell, cx| match &self.targets {
+                    ValueTargets::ClaimClass { object, .. } => {
+                        shell.submit_recreate(object, &value, window, cx);
+                    }
+                    ValueTargets::VolumePolicy { object, .. } => {
+                        shell.submit_reclaim_policy(object, &value, window, cx);
+                    }
+                    _ => {}
                 });
             }
             ValueForm::Image { cause, .. } => {
@@ -655,6 +787,17 @@ impl ValuePopover {
                 .current_image_target(cx)
                 .map(|target| image_warnings(&target))
                 .unwrap_or_default(),
+            ValueForm::Choice { .. } => match (&self.targets, self.picked_option()) {
+                (ValueTargets::ClaimClass { claim, .. }, Some(option)) if self.is_choice_new() => {
+                    recreate_warnings(claim, &option.value)
+                }
+                (ValueTargets::VolumePolicy { volume, .. }, Some(option))
+                    if self.is_choice_new() =>
+                {
+                    reclaim_warnings(volume, &option.value)
+                }
+                _ => Vec::new(),
+            },
         }
     }
 
@@ -678,7 +821,36 @@ impl ValuePopover {
                 StorageInput::Refused(_) => None,
                 StorageInput::Incomplete | StorageInput::Set(_) => None,
             },
+            ValueForm::Choice { .. } => None,
         }
+    }
+
+    /// The buttons of a Choice popover, one per option: the picked one filled, a hint beside the
+    /// name when the option has one.
+    fn render_choices(
+        &self,
+        options: &[ChoiceOption],
+        selected: usize,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        v_flex()
+            .gap_1()
+            .children(options.iter().enumerate().map(|(index, option)| {
+                let label = match &option.hint {
+                    Some(hint) => format!("{} \u{b7} {hint}", option.value),
+                    None => option.value.clone(),
+                };
+                let button = Button::new(("value-choice", index))
+                    .label(label)
+                    .small()
+                    .on_click(cx.listener(move |popover, _, _, cx| popover.pick_option(index, cx)));
+                if index == selected {
+                    button.primary().into_any_element()
+                } else {
+                    button.outline().into_any_element()
+                }
+            }))
+            .into_any_element()
     }
 
     /// The container buttons of a Set image popover: one per container of the template, shown only
@@ -744,6 +916,7 @@ impl ValuePopover {
                 )
                 .into_any_element(),
             ValueForm::Storage { input } => Input::new(input).into_any_element(),
+            ValueForm::Choice { options, selected } => self.render_choices(options, *selected, cx),
             ValueForm::ReplicaRange { min, max } => h_flex()
                 .gap_2()
                 .child(
