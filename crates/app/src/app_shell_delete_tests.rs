@@ -972,6 +972,20 @@ fn del_on_a_ticked_row_deletes_the_ticked_set_in_order(cx: &mut TestAppContext) 
 }
 
 #[gpui_kit::test]
+fn del_with_ticked_rows_and_no_cursor_row_deletes_the_ticked_set(cx: &mut TestAppContext) {
+    let t = delete_test("delete-bulk-no-cursor", cx);
+    t.tick_staging_pods(&["api-0", "api-1", "api-2"], 2, cx);
+    assert!(
+        t.shell().read_with(cx, |shell, _| shell.selected.is_none()),
+        "ticking does not move the cursor"
+    );
+    t.press_delete(cx);
+    t.wait_for_dialog(cx);
+    t.t.wait_for_dry_run(cx);
+    assert_eq!(t.dialog_label(cx), "Delete 2 pods");
+}
+
+#[gpui_kit::test]
 fn del_on_an_unticked_row_deletes_that_row_only(cx: &mut TestAppContext) {
     let t = delete_test("delete-bulk-unticked", cx);
     t.tick_staging_pods(&["api-0", "api-1", "api-2"], 2, cx);

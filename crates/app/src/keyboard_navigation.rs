@@ -630,6 +630,10 @@ impl AppShell {
             return;
         }
         let Some(subject) = self.selected.clone() else {
+            // Ctrl+A then Del with no cursor row still means the ticked rows.
+            if row == RowAction::Delete {
+                self.delete_ticked_without_cursor(window, cx);
+            }
             return;
         };
         let (Some(live), Some(guard)) = (

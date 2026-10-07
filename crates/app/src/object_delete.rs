@@ -1035,6 +1035,20 @@ impl AppShell {
         checked.len() >= 2 && checked.contains(subject)
     }
 
+    /// Del with ticked rows and no cursor row: the ticked set, through the same gate and confirm as
+    /// a cursor row among them.
+    pub(crate) fn delete_ticked_without_cursor(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let checked = self.checked_objects(cx);
+        let Some(first) = checked.first() else {
+            return;
+        };
+        self.remove_at_cursor(Removal::Delete, first, window, cx);
+    }
+
     /// Del, R and X on a pod, the menu items, and the palette entries end here: the cursor row, or
     /// the ticked set when the cursor row is one of several.
     pub(crate) fn remove_at_cursor(
