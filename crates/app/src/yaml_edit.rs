@@ -12,8 +12,8 @@ use std::time::Duration;
 
 use cluster::{
     ClusterConnection, EditBase, EditCheck, EditError, EditPreview, EnvValues, FieldChange,
-    FieldPath, ObjectEdit, ObjectKind, ObjectRef, WriteEffect, WriteError, WriteOperation,
-    WriteOutcome, WriteRequest, format_yaml, rebase,
+    FieldPath, HELM_MANAGED_WARNING, ObjectEdit, ObjectKind, ObjectRef, WriteEffect, WriteError,
+    WriteOperation, WriteOutcome, WriteRequest, format_yaml, rebase,
 };
 use gpui_kit::component::input::{
     EditorState, InputEvent, Position, RangeDecoration, RangeDecorationCollection,
@@ -533,6 +533,12 @@ impl YamlEditView {
     // ---- commands ----
 
     pub(crate) fn show_tab(&mut self, tab: EditTab, cx: &mut Context<Self>) {
+        // The Diff shows the server's answer for the text in the editor, so opening it asks, unless a
+        // passed check already covers this text.
+        if tab == EditTab::Diff && self.can_check() && !self.is_checked(&self.text(cx)) {
+            let text = self.text(cx);
+            self.run_preview(text, cx);
+        }
         self.tab = tab;
         // A failed list (the Deployment was not loaded yet, a network error) is asked again.
         let needs_history = self
@@ -670,20 +676,30 @@ impl YamlEditView {
         }
     }
 
-    fn apply_press(&mut self, press: KeyPress, window: &mut Window, cx: &mut Context<Self>) {
+    /// Whether the text can be checked with the server now: it holds changes, the object is read,
+    /// and no check runs. A recreated object cannot take the text; only Discard leaves the banner.
+    fn can_check(&self) -> bool {
         #[cfg(feature = "screenshot")]
         if self.is_fixture {
-            return;
+            return false;
         }
-        // A recreated object cannot take the text; only Discard leaves the banner.
         let is_recreated = matches!(self.banner, Some(EditBanner::Recreated));
-        if self.is_running() || self.base.is_none() || !self.is_dirty || is_recreated {
+        !(self.is_running() || self.base.is_none() || !self.is_dirty || is_recreated)
+    }
+
+    /// Whether a passed dry-run is for exactly `text`.
+    fn is_checked(&self, text: &str) -> bool {
+        matches!(&self.preview, PreviewState::Passed(passed) if passed.for_text == text)
+    }
+
+    fn apply_press(&mut self, press: KeyPress, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.can_check() {
             return;
         }
         let text = self.text(cx);
-        if let PreviewState::Passed(passed) = &self.preview
-            && passed.for_text == text
-        {
+        // A dry-run that passed for this text, from this key or from opening the Diff, goes straight
+        // to the confirm dialog.
+        if self.is_checked(&text) {
             if press == KeyPress::Fresh {
                 self.confirm(window, cx);
             }
@@ -700,10 +716,19 @@ impl YamlEditView {
         let Some(request) = passed.request.clone() else {
             return;
         };
-        let mut warnings = passed.checks.clone();
+        let mut warnings: Vec<SharedString> = self
+            .base
+            .as_ref()
+            .is_some_and(EditBase::is_helm_managed)
+            .then(|| HELM_MANAGED_WARNING.into())
+            .into_iter()
+            .collect();
+        warnings.extend(passed.checks.iter().cloned());
         warnings.extend(passed.quota.warnings().iter().cloned());
         warnings.extend(self.overwritten.iter().cloned());
-        let intent = self.intent(request, warnings);
+        let change_lines = edit_change_lines(self.kind, &passed.changes, passed.more_changes);
+        let mut intent = self.intent(request, warnings);
+        intent.change_lines = change_lines;
         let _ = self
             .shell
             .update(cx, |shell, cx| shell.start_write(intent, window, cx));
@@ -988,6 +1013,54 @@ pub(crate) fn edit_intent(
         warnings,
         change_lines: Vec::new(),
     }
+}
+
+/// The most changes the confirm dialog lists; the rest are counted.
+const CONFIRM_CHANGE_LINES: usize = 12;
+
+/// The lines of the confirm dialog for the changes the dry-run found: `path: old → new` for a scalar,
+/// the path alone for a map or a list, and for the data of a Secret, whose values are never shown.
+/// The values are the masked ones of the preview, so a hidden env value reads `<hidden>`.
+pub(crate) fn edit_change_lines(
+    kind: ObjectKind,
+    changes: &[ChangeLine],
+    more_changes: usize,
+) -> Vec<SharedString> {
+    let mut lines: Vec<SharedString> = changes
+        .iter()
+        .take(CONFIRM_CHANGE_LINES)
+        .map(|change| change_line(kind, change))
+        .collect();
+    let rest = changes.len().saturating_sub(CONFIRM_CHANGE_LINES) + more_changes;
+    if rest > 0 {
+        lines.push(format!("and {rest} more").into());
+    }
+    lines
+}
+
+fn change_line(kind: ObjectKind, change: &ChangeLine) -> SharedString {
+    let is_container = |value: &Option<SharedString>| {
+        value
+            .as_ref()
+            .is_some_and(|text| text == "{…}" || text == "[…]")
+    };
+    let is_secret_data = kind == ObjectKind::Secret
+        && ["data", "stringData"].iter().any(|root| {
+            change.path.strip_prefix(root).is_some_and(|rest| {
+                rest.is_empty() || rest.starts_with('.') || rest.starts_with('[')
+            })
+        });
+    if is_secret_data || is_container(&change.old) || is_container(&change.new) {
+        return change.path.clone();
+    }
+    let shown = |value: &Option<SharedString>| value.clone().unwrap_or_else(|| "—".into());
+    format!(
+        "{}: {} → {}",
+        change.path,
+        shown(&change.old),
+        shown(&change.new)
+    )
+    .into()
 }
 
 /// `path` cut in the middle to at most `max` characters: the end names the field that changed, and

@@ -312,7 +312,7 @@ impl YamlEditView {
             .size_full()
             .into_any_element(),
             PreviewState::NotChecked => muted_center(
-                "Press Ctrl S to check the change with the server",
+                "Nothing to check: the text is unchanged",
                 theme.muted_foreground,
             ),
             PreviewState::Failed(failure) => {

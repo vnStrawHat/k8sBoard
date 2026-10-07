@@ -2023,3 +2023,96 @@ fn closing_the_main_window_releases_the_open_editor(cx: &mut TestAppContext) {
     // The editor's inputs must not outlive the window: a debug build reports them at exit.
     assert!(t.shell().read_with(cx, |shell, _| shell.edit.is_none()));
 }
+
+// ---- the Diff tab and the confirm (UX round 3, O16 and O17) ----
+
+impl EditTest {
+    fn show_tab(&self, tab: EditTab, cx: &mut TestAppContext) {
+        self.view(cx).update(cx, |view, cx| view.show_tab(tab, cx));
+    }
+}
+
+#[gpui_kit::test]
+fn opening_the_diff_runs_the_dry_run_without_ctrl_s(cx: &mut TestAppContext) {
+    let t = edit_test("edit-diff-opens", cx);
+    t.open(cx);
+    t.change("replicas: 3", "replicas: 5", cx);
+    assert!(t.puts().is_empty());
+    t.show_tab(EditTab::Diff, cx);
+    t.wait_for_preview(cx);
+    let dry_runs = t.puts();
+    assert_eq!(dry_runs.len(), 1, "{dry_runs:?}");
+    assert!(dry_runs[0].has_query("dryRun", "All"));
+    assert!(t.is_passed(cx));
+    assert_eq!(t.with_view(cx, |view| view.tab()), EditTab::Diff);
+}
+
+#[gpui_kit::test]
+fn the_diff_asks_again_only_for_a_text_no_check_covers(cx: &mut TestAppContext) {
+    let t = edit_test("edit-diff-once", cx);
+    t.open(cx);
+    // An unchanged text has nothing to check.
+    t.show_tab(EditTab::Diff, cx);
+    assert!(t.puts().is_empty());
+    t.change("replicas: 3", "replicas: 5", cx);
+    t.show_tab(EditTab::Diff, cx);
+    t.wait_for_preview(cx);
+    // Back and forth over the same text: the passed check stands.
+    t.show_tab(EditTab::Editor, cx);
+    t.show_tab(EditTab::Diff, cx);
+    t.wait_for_preview(cx);
+    assert_eq!(t.puts().len(), 1);
+    // A new text is a new question.
+    t.change("replicas: 5", "replicas: 6", cx);
+    t.show_tab(EditTab::Editor, cx);
+    t.show_tab(EditTab::Diff, cx);
+    t.wait_for_preview(cx);
+    assert_eq!(t.puts().len(), 2);
+}
+
+#[gpui_kit::test]
+fn ctrl_s_after_the_diff_opened_goes_straight_to_the_confirm(cx: &mut TestAppContext) {
+    let t = edit_test("edit-diff-then-confirm", cx);
+    t.open(cx);
+    t.change("replicas: 3", "replicas: 5", cx);
+    t.show_tab(EditTab::Diff, cx);
+    t.wait_for_preview(cx);
+    assert!(!t.t.has_dialog(cx));
+    t.t.fixture.press("ctrl-s", cx);
+    cx.run_until_parked();
+    assert!(t.t.has_dialog(cx), "the one Ctrl S opens the confirm");
+    t.t.wait_for_dry_run(cx);
+    // The editor's check and the dialog's own.
+    assert_eq!(t.puts().len(), 2);
+}
+
+#[gpui_kit::test]
+fn the_confirm_lists_old_and_new_for_each_scalar_and_the_helm_warning(cx: &mut TestAppContext) {
+    let t = edit_test("edit-confirm-lines", cx);
+    {
+        let mut object = lock(&t.server.object);
+        object["metadata"]["labels"]["app.kubernetes.io/managed-by"] = json!("Helm");
+    }
+    t.open(cx);
+    t.change("replicas: 3", "replicas: 5", cx);
+    t.change("image: api:1", "image: api:2", cx);
+    t.apply(cx);
+    t.wait_for_preview(cx);
+    t.apply(cx);
+    cx.run_until_parked();
+    let dialog = t.t.dialog(cx);
+    let lines = dialog.read_with(cx, |dialog, _| dialog.change_lines());
+    let lines: Vec<&str> = lines.iter().map(AsRef::as_ref).collect();
+    assert!(lines.contains(&"spec.replicas: 3 → 5"), "{lines:?}");
+    assert!(
+        lines.contains(&"spec.template.spec.containers[api].image: api:1 → api:2"),
+        "{lines:?}"
+    );
+    let warnings = dialog.read_with(cx, |dialog, _| dialog.warning_lines());
+    assert_eq!(
+        warnings.first().map(AsRef::as_ref),
+        Some(cluster::HELM_MANAGED_WARNING)
+    );
+    // The values in the dialog are the masked ones of the preview: the env literal stays out.
+    assert!(lines.iter().all(|line| !line.contains("s3cr3t-env")));
+}

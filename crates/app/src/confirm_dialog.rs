@@ -1534,6 +1534,14 @@ impl ConfirmDialog {
         }
     }
 
+    /// The lines the dialog lists as the change, when the intent names its own.
+    pub(crate) fn change_lines(&self) -> Vec<SharedString> {
+        match &self.kind {
+            DialogKind::Write(intent) => intent.change_lines.clone(),
+            DialogKind::Batch(_) | DialogKind::Connect(_) | DialogKind::Unlock { .. } => Vec::new(),
+        }
+    }
+
     /// What the change is called in the title of the dialog.
     pub(crate) fn label(&self) -> Option<SharedString> {
         match &self.kind {

@@ -266,3 +266,95 @@ fn history_tab_only_for_deployments() {
         assert_eq!(edit_tabs(kind), [EditTab::Editor, EditTab::Diff]);
     }
 }
+
+fn change(path: &str, old: Option<&str>, new: Option<&str>) -> ChangeLine {
+    ChangeLine {
+        path: path.to_owned().into(),
+        old: old.map(|text| text.to_owned().into()),
+        new: new.map(|text| text.to_owned().into()),
+    }
+}
+
+fn lines(kind: ObjectKind, changes: &[ChangeLine], more: usize) -> Vec<String> {
+    edit_change_lines(kind, changes, more)
+        .iter()
+        .map(ToString::to_string)
+        .collect()
+}
+
+#[test]
+fn a_scalar_change_reads_old_arrow_new() {
+    let changes = [
+        change("spec.replicas", Some("3"), Some("5")),
+        change("metadata.labels.tier", None, Some("web")),
+        change("metadata.annotations.note", Some("old"), None),
+    ];
+    assert_eq!(
+        lines(ObjectKind::Deployment, &changes, 0),
+        [
+            "spec.replicas: 3 → 5",
+            "metadata.labels.tier: — → web",
+            "metadata.annotations.note: old → —"
+        ]
+    );
+}
+
+#[test]
+fn a_map_or_a_list_change_is_its_path_alone() {
+    let changes = [
+        change("spec.template.spec.containers[sidecar]", None, Some("{…}")),
+        change("spec.template.spec.tolerations", Some("[…]"), Some("[…]")),
+    ];
+    assert_eq!(
+        lines(ObjectKind::Deployment, &changes, 0),
+        [
+            "spec.template.spec.containers[sidecar]",
+            "spec.template.spec.tolerations"
+        ]
+    );
+}
+
+#[test]
+fn a_hidden_env_value_stays_hidden() {
+    let changes = [change(
+        "spec.template.spec.containers[api].env[DB_PASS].value",
+        Some("<hidden>"),
+        Some("<hidden, changed>"),
+    )];
+    assert_eq!(
+        lines(ObjectKind::Deployment, &changes, 0),
+        ["spec.template.spec.containers[api].env[DB_PASS].value: <hidden> → <hidden, changed>"]
+    );
+}
+
+#[test]
+fn secret_data_shows_its_path_and_never_a_value() {
+    let changes = [
+        change("data.password", Some("a"), Some("b")),
+        change("data[\"tls.crt\"]", Some("a"), Some("b")),
+        change("stringData.token", None, Some("t")),
+        change("metadata.labels.team", Some("a"), Some("b")),
+        // Only the root `data` counts, not a key that starts with it.
+        change("dataset", Some("a"), Some("b")),
+    ];
+    assert_eq!(
+        lines(ObjectKind::Secret, &changes, 0),
+        [
+            "data.password",
+            "data[\"tls.crt\"]",
+            "stringData.token",
+            "metadata.labels.team: a → b",
+            "dataset: a → b"
+        ]
+    );
+}
+
+#[test]
+fn the_confirm_lists_a_dozen_changes_and_counts_the_rest() {
+    let many: Vec<ChangeLine> = (0..15)
+        .map(|index| change(&format!("spec.field{index}"), Some("1"), Some("2")))
+        .collect();
+    let shown = lines(ObjectKind::Deployment, &many, 4);
+    assert_eq!(shown.len(), 13);
+    assert_eq!(shown[12], "and 7 more");
+}
