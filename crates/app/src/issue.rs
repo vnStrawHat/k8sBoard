@@ -60,6 +60,7 @@ pub(crate) enum IssueRule {
     KindJob,
     KindClaim,
     PvcPending,
+    ServiceNoPods,
     KindAutoscaler,
     KindDisruptionBudget,
     KindQuota,

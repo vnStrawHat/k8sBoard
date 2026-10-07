@@ -560,9 +560,9 @@ fn watch_count_follows_the_condition_plan(cx: &mut TestAppContext) {
         .build()
         .expect("a runtime");
     let runtime = ClusterRuntime::new(tokio.handle().clone());
-    // (namespaces, expected): N events and 8 kinds over N namespaces up to two, else one
+    // (namespaces, expected): N events and 10 kinds over N namespaces up to two, else one
     // cluster-wide watch per kind.
-    for (names, expected) in [(1, 9), (2, 18), (3, 11)] {
+    for (names, expected) in [(1, 11), (2, 22), (3, 13)] {
         let scope = NamespaceScope::of_namespaces((0..names).map(|index| format!("n{index}")));
         let multiplicity = scope_multiplicity(&scope);
         let probe = cx.update(|cx| {
@@ -595,7 +595,7 @@ fn watch_count_follows_the_condition_plan(cx: &mut TestAppContext) {
                 events_restart: None,
                 conditions,
             };
-            assert_eq!(feeds.watch_count(1), 7);
+            assert_eq!(feeds.watch_count(1), 9);
             Probe
         })
     });
@@ -605,7 +605,7 @@ fn watch_count_follows_the_condition_plan(cx: &mut TestAppContext) {
         cx.new(|cx| {
             let mut feeds = planned_feeds(&runtime, &NamespaceScope::All, cx);
             feeds.events_watch = None;
-            assert_eq!(feeds.watch_count(1), 8);
+            assert_eq!(feeds.watch_count(1), 10);
             Probe
         })
     });

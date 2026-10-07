@@ -796,3 +796,137 @@ fn pdb_blocked_by_unhealthy_pods_waits_but_a_full_budget_does_not() {
     .expect("a finding");
     assert_eq!(no_room.grace, None);
 }
+
+// ---- ServiceNoPods ----
+
+fn service(name: &str, selector: &[&str]) -> cluster::ServiceSummary {
+    cluster::ServiceSummary {
+        namespace: "shop".to_owned(),
+        name: name.to_owned(),
+        created_at: Some(ago(3_600)),
+        labels: Vec::new(),
+        service_type: "ClusterIP".to_owned(),
+        cluster_ips: vec!["10.0.0.1".to_owned()],
+        is_headless: false,
+        external_addresses: Vec::new(),
+        ports: Vec::new(),
+        selector: selector.iter().map(|term| (*term).to_owned()).collect(),
+    }
+}
+
+fn ingress_to(name: &str, service: &str) -> cluster::IngressSummary {
+    cluster::IngressSummary {
+        namespace: "shop".to_owned(),
+        name: name.to_owned(),
+        created_at: None,
+        labels: Vec::new(),
+        class: None,
+        hosts: Vec::new(),
+        addresses: Vec::new(),
+        rules: vec![cluster::IngressPath {
+            host: None,
+            path: Some("/".to_owned()),
+            backend: format!("{service}:80"),
+            service: Some(service.to_owned()),
+        }],
+        default_backend: None,
+        default_service: None,
+        tls: Vec::new(),
+    }
+}
+
+fn labelled_pod(labels: &[&str]) -> cluster::PodSummary {
+    let mut pod = crate::log_fixtures::fixture_pod("web-0", Vec::new());
+    pod.labels = labels.iter().map(|term| (*term).to_owned()).collect();
+    pod
+}
+
+fn unrouted(
+    services: Vec<cluster::ServiceSummary>,
+    ingresses: Vec<cluster::IngressSummary>,
+    pods: &[cluster::PodSummary],
+) -> Vec<Finding> {
+    let services: Vec<KindObject> = services.into_iter().map(KindObject::Service).collect();
+    let ingresses: Vec<KindObject> = ingresses.into_iter().map(KindObject::Ingress).collect();
+    let feeds = [
+        (ResourceKind::Services, &services[..]),
+        (ResourceKind::Ingresses, &ingresses[..]),
+    ];
+    condition_findings(&IssueInputs {
+        pods: Some(pods),
+        objects: &feeds,
+        ..inputs()
+    })
+}
+
+#[test]
+fn a_service_no_pod_matches_becomes_an_issue_when_an_ingress_routes_to_it() {
+    let found = unrouted(
+        vec![service("web-v2", &["app=web-v2"])],
+        vec![ingress_to("shop", "web-v2")],
+        &[labelled_pod(&["app=web"])],
+    );
+    let [finding] = found.as_slice() else {
+        panic!("one finding, got {found:?}");
+    };
+    assert_eq!(finding.rule, IssueRule::ServiceNoPods);
+    assert_eq!(finding.severity, IssueSeverity::Critical);
+    assert_eq!(
+        finding.object,
+        IssueObject::new("Service", Some("shop"), "web-v2")
+    );
+    assert_eq!(
+        finding.cause,
+        "No pod in shop has the labels app=web-v2; Ingress shop routes to it."
+    );
+    assert_eq!(finding.grace, Some(SERVICE_NO_PODS_GRACE));
+    assert_eq!(finding.onset, Some(ago(3_600)));
+}
+
+#[test]
+fn a_service_with_pods_or_no_route_or_no_selector_is_no_issue() {
+    let route = vec![ingress_to("shop", "web")];
+    let matching = [labelled_pod(&["app=web", "tier=front"])];
+    assert!(unrouted(vec![service("web", &["app=web"])], route.clone(), &matching).is_empty());
+    // Nothing routes to it: the Service drawer says so, the Issues board does not.
+    assert!(
+        unrouted(
+            vec![service("web-v2", &["app=web-v2"])],
+            route.clone(),
+            &matching
+        )
+        .is_empty()
+    );
+    // No selector: its endpoints are made by hand.
+    assert!(unrouted(vec![service("web", &[])], route.clone(), &[]).is_empty());
+    let mut external = service("web", &["app=web"]);
+    external.service_type = "ExternalName".to_owned();
+    assert!(unrouted(vec![external], route, &[]).is_empty());
+}
+
+#[test]
+fn several_ingresses_and_a_default_backend_all_count_as_routes() {
+    let mut by_default = ingress_to("edge", "other");
+    by_default.default_service = Some("web-v2".to_owned());
+    let found = unrouted(
+        vec![service("web-v2", &["app=web-v2"])],
+        vec![ingress_to("shop", "web-v2"), by_default],
+        &[],
+    );
+    assert_eq!(
+        found.first().map(|finding| finding.cause.as_str()),
+        Some("No pod in shop has the labels app=web-v2; Ingress shop and 1 more route to it.")
+    );
+}
+
+#[test]
+fn the_rule_waits_for_the_pods_and_both_feeds() {
+    let services = [KindObject::Service(service("web-v2", &["app=web-v2"]))];
+    let feeds = [(ResourceKind::Services, &services[..])];
+    let found = condition_findings(&IssueInputs {
+        pods: Some(&[]),
+        objects: &feeds,
+        ..inputs()
+    });
+    assert!(found.is_empty(), "no Ingress feed yet");
+}

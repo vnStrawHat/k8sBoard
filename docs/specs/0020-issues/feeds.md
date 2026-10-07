@@ -40,7 +40,7 @@ impl WarningEvents {
 pub(crate) struct IssueFeeds { pub(crate) events: WarningEvents, _events: WatchSubscription, pub(crate) conditions: Vec<ConditionFeed> }
 pub(crate) struct ConditionFeed { pub(crate) kind: ResourceKind, pub(crate) list: LiveList<KindObject>,
     off: Option<String> /* Off reason */, _subscription: Option<WatchSubscription> }   // None once Off
-pub(crate) const CONDITION_KINDS: [ResourceKind; 8];  // the 7 kinds + Secrets (TLS only)
+pub(crate) const CONDITION_KINDS: [ResourceKind; 10];  // the 7 kinds + Secrets (TLS only) + Services and Ingresses (ServiceNoPods)
 pub(crate) fn condition_plan(scope: &NamespaceScope, access: &AccessState) -> Vec<(ResourceKind, FeedPlan)>;
 pub(crate) enum FeedPlan { Start { watch_scope: NamespaceScope }, Wait, Off(String) }
 ```

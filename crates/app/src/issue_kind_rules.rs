@@ -4,7 +4,7 @@
 //! arbitrary text, so nothing here logs them.
 
 use cluster::{
-    BlockCause, DisruptionState, JobStatus, NamespacePhase, NodeSummary,
+    BlockCause, DisruptionState, IngressSummary, JobStatus, NamespacePhase, NodeSummary,
     PersistentVolumeClaimSummary, SecretDetails,
 };
 use jiff::{SignedDuration, Timestamp};
@@ -62,7 +62,98 @@ pub(crate) fn condition_findings(inputs: &IssueInputs) -> Vec<Finding> {
             findings.extend(finding);
         }
     }
+    findings.extend(unrouted_service_findings(inputs));
     findings
+}
+
+/// How long a Service nothing selects may be young before an Ingress routing to it is an issue: the
+/// pods of a Deployment applied together with it are still being made.
+pub(crate) const SERVICE_NO_PODS_GRACE: SignedDuration = SignedDuration::from_mins(2);
+
+/// ServiceNoPods: a Service whose selector matches no pod while an Ingress routes to it, so the
+/// route answers 503. A Service nothing routes to is the owner's business (the Service drawer says
+/// so); one with no selector, or an ExternalName, has endpoints of its own.
+fn unrouted_service_findings(inputs: &IssueInputs) -> Vec<Finding> {
+    let objects_of = |kind: ResourceKind| {
+        inputs
+            .objects
+            .iter()
+            .find(|(feed, _)| *feed == kind)
+            .map(|(_, objects)| *objects)
+    };
+    let (Some(pods), Some(services), Some(ingresses)) = (
+        inputs.pods,
+        objects_of(ResourceKind::Services),
+        objects_of(ResourceKind::Ingresses),
+    ) else {
+        return Vec::new();
+    };
+    let ingresses: Vec<&IngressSummary> = ingresses
+        .iter()
+        .filter_map(|object| match object {
+            KindObject::Ingress(ingress) => Some(ingress),
+            _ => None,
+        })
+        .collect();
+    services
+        .iter()
+        .filter_map(|object| match object {
+            KindObject::Service(service) => Some(service),
+            _ => None,
+        })
+        .filter(|service| !service.selector.is_empty() && service.service_type != "ExternalName")
+        .filter(|service| {
+            !pods.iter().any(|pod| {
+                pod.namespace == service.namespace
+                    && service
+                        .selector
+                        .iter()
+                        .all(|term| pod.labels.contains(term))
+            })
+        })
+        .filter_map(|service| {
+            let routes: Vec<&str> = ingresses
+                .iter()
+                .filter(|ingress| ingress.namespace == service.namespace)
+                .filter(|ingress| routes_to(ingress, &service.name))
+                .map(|ingress| ingress.name.as_str())
+                .collect();
+            let (first, more) = routes.split_first()?;
+            let by = match more.len() {
+                0 => format!("Ingress {first} routes"),
+                count => format!("Ingress {first} and {count} more route"),
+            };
+            Some(Finding {
+                rule: IssueRule::ServiceNoPods,
+                severity: IssueSeverity::Critical,
+                object: IssueObject::new(
+                    ResourceKind::Services.object_kind(),
+                    Some(&service.namespace),
+                    &service.name,
+                ),
+                reason: "No matching pods".into(),
+                cause: format!(
+                    "No pod in {} has the labels {}; {by} to it.",
+                    service.namespace,
+                    service.selector.join(", ")
+                ),
+                container: None,
+                onset: service.created_at,
+                grace: Some(SERVICE_NO_PODS_GRACE),
+                action: IssueAction::Open,
+                workload: None,
+            })
+        })
+        .collect()
+}
+
+/// Whether a path of the Ingress, or its default backend, names the Service.
+fn routes_to(ingress: &IngressSummary, service: &str) -> bool {
+    ingress.default_service.as_deref() == Some(service)
+        || ingress
+            .rules
+            .iter()
+            .any(|rule| rule.service.as_deref() == Some(service))
 }
 
 /// A failed Job that a newer Job of the same owner has since completed: the CronJob recovered, so

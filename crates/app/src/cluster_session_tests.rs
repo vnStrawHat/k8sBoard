@@ -1542,12 +1542,12 @@ fn condition_plan_opens_the_expected_number_of_watches() {
             .sum();
         events + conditions
     };
-    // N + 8N up to two namespaces: 9 and 18.
-    assert_eq!(issue_watches(&["a"]), 9);
-    assert_eq!(issue_watches(&["a", "b"]), 18);
-    // Above two, one cluster-wide watch per kind: N events + 8.
-    assert_eq!(issue_watches(&["a", "b", "c"]), 3 + 8);
-    assert_eq!(issue_watches(&["a", "b", "c", "d", "e"]), 5 + 8);
+    // N + 10N up to two namespaces: 11 and 22.
+    assert_eq!(issue_watches(&["a"]), 11);
+    assert_eq!(issue_watches(&["a", "b"]), 22);
+    // Above two, one cluster-wide watch per kind: N events + 10.
+    assert_eq!(issue_watches(&["a", "b", "c"]), 3 + 10);
+    assert_eq!(issue_watches(&["a", "b", "c", "d", "e"]), 5 + 10);
 }
 
 #[test]

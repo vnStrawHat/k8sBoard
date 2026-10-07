@@ -53,8 +53,12 @@ PvcPending stays quiet while the Warning feed is not Ready (`events` `None`), an
 
 ## Order inside `evaluate`
 
-pods → nodes → `NamespaceStuck` → `KindRollout` → `KindJob` → `KindClaim` → `PvcPending` → `KindAutoscaler` → `KindDisruptionBudget` → `KindQuota` → `QuotaNearLimit` → certificates → `VolumeFull` → events. `IssueRule` variants are declared in this order.
+pods → nodes → `NamespaceStuck` → `KindRollout` → `KindJob` → `KindClaim` → `PvcPending` → `KindAutoscaler` → `KindDisruptionBudget` → `KindQuota` → `QuotaNearLimit` → certificates → `ServiceNoPods` → `VolumeFull` → events. `IssueRule` variants are declared in this order.
+
+## ServiceNoPods (round 3, N14)
+
+A Service whose selector matches no pod of its namespace while an Ingress path or default backend names it: Critical, `No matching pods`, cause `No pod in shop has the labels app=web-v2; Ingress shop routes to it.` (`Ingress a and 2 more route to it.`), onset the Service's creation, grace 2 min, action Open. A Service with no selector or of type ExternalName, one nothing routes to, and any Service while the pods, the Services, or the Ingresses feed has not loaded give nothing. The Services and Ingresses are two more condition feeds (`CONDITION_KINDS` has 10 kinds).
 
 ## Not built (no rule here)
 
-StatefulSets, ReplicaSets, CronJobs (their pods and Jobs carry the problem), Services V1/V2, Ingress CERTIFICATE (the Secret issue covers it), PV RELEASED/RECLAIM FAILED, RBAC VERY BROAD/CLUSTER ADMIN (0015 hygiene, not outages).
+StatefulSets, ReplicaSets, CronJobs (their pods and Jobs carry the problem), Services V2 (no ready endpoints), Ingress CERTIFICATE (the Secret issue covers it), PV RELEASED/RECLAIM FAILED, RBAC VERY BROAD/CLUSTER ADMIN (0015 hygiene, not outages).

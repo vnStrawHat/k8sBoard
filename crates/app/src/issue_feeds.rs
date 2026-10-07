@@ -39,8 +39,8 @@ pub(crate) enum IssueFeed {
     PodMetrics,
     NodeMetrics,
     VolumeUsage,
-    /// A condition feed: Deployments, DaemonSets, Jobs, HPAs, PDBs, quotas, claims, or the TLS
-    /// secrets (`Secrets`).
+    /// A condition feed: Deployments, DaemonSets, Jobs, HPAs, PDBs, quotas, claims, the TLS
+    /// secrets (`Secrets`), Services, or Ingresses.
     Kind(ResourceKind),
 }
 
@@ -62,6 +62,8 @@ impl IssueFeed {
             Self::Kind(ResourceKind::ResourceQuotas) => "quotas",
             Self::Kind(ResourceKind::PersistentVolumeClaims) => "volume claims",
             Self::Kind(ResourceKind::Secrets) => "certificates",
+            Self::Kind(ResourceKind::Services) => "services",
+            Self::Kind(ResourceKind::Ingresses) => "ingresses",
             Self::Kind(kind) => kind.label(),
         }
     }
@@ -307,8 +309,9 @@ impl WarningEvents {
 }
 
 /// The kinds whose conditions the engine reads, always watched: Deployments, DaemonSets, Jobs,
-/// HPAs, PDBs, quotas, claims, and the TLS secrets (the Secrets watch lists TLS secrets only).
-const CONDITION_KINDS: [ResourceKind; 8] = [
+/// HPAs, PDBs, quotas, claims, the TLS secrets (the Secrets watch lists TLS secrets only), and the
+/// Services and Ingresses that tell a Service nothing selects from one an Ingress routes to.
+const CONDITION_KINDS: [ResourceKind; 10] = [
     ResourceKind::Deployments,
     ResourceKind::DaemonSets,
     ResourceKind::Jobs,
@@ -317,6 +320,8 @@ const CONDITION_KINDS: [ResourceKind; 8] = [
     ResourceKind::ResourceQuotas,
     ResourceKind::PersistentVolumeClaims,
     ResourceKind::Secrets,
+    ResourceKind::Services,
+    ResourceKind::Ingresses,
 ];
 
 /// Whether the TLS Secrets list and watch run (`general.watch_tls_secrets`). It shows in API audit
@@ -660,6 +665,18 @@ fn condition_updates(
             keep,
             |item| &item.namespace,
             KindObject::Secret,
+        ),
+        ResourceKind::Services => objects(
+            connection.watch_services(scope),
+            keep,
+            |item| &item.namespace,
+            KindObject::Service,
+        ),
+        ResourceKind::Ingresses => objects(
+            connection.watch_ingresses(scope),
+            keep,
+            |item| &item.namespace,
+            KindObject::Ingress,
         ),
         // Not a condition kind: an empty stream reads as a stopped feed.
         _ => futures::stream::empty().boxed(),

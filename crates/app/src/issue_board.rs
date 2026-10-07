@@ -258,6 +258,10 @@ fn is_feed_missing(key: &IssueKey, inputs: &IssueInputs) -> bool {
         | IssueRule::CertExpired
         | IssueRule::CertExpiring => !has_objects(&key.object.kind),
         IssueRule::PvcPending => !has_objects(&key.object.kind) || inputs.events.is_none(),
+        // Read with the Ingresses and the pods: any of the three missing hides the finding.
+        IssueRule::ServiceNoPods => {
+            !has_objects(&key.object.kind) || !has_objects("Ingress") || inputs.pods.is_none()
+        }
         IssueRule::VolumeFull => inputs.kubelet.is_none(),
         IssueRule::EventFailedCreate | IssueRule::EventJobFailed | IssueRule::EventBurst => {
             inputs.events.is_none()

@@ -444,7 +444,8 @@ fn cluster_ip_cell(service: &ServiceSummary) -> KindCell {
     KindCell::mono_or_absent(&service.cluster_ips.join(","))
 }
 
-/// `{port} → {target}/{protocol} · {name} · node {nodePort}`. The port comes first so a
+/// `{port} → {target}/{protocol} · name {name} · node {nodePort}`: the label `name` keeps a port
+/// named `80-8080` from reading as a range. The port comes first so a
 /// truncated line still shows it.
 fn port_text(port: &ServicePortSummary) -> String {
     let mut text = match &port.target_port {
@@ -452,7 +453,7 @@ fn port_text(port: &ServicePortSummary) -> String {
         None => format!("{}/{}", port.port, port.protocol),
     };
     if let Some(name) = &port.name {
-        text.push_str(&format!(" · {name}"));
+        text.push_str(&format!(" · name {name}"));
     }
     if let Some(node_port) = port.node_port {
         text.push_str(&format!(" · node {node_port}"));

@@ -115,7 +115,7 @@ fn service_ports_cell_follows_kubectl_and_drawer_lists_targets() {
     assert_eq!(
         ports.rows,
         [DetailRow::Port {
-            text: "80 → 8080/TCP · http · node 30080".into(),
+            text: "80 → 8080/TCP · name http · node 30080".into(),
             port: 80,
             is_tcp: true,
         }]
@@ -247,14 +247,17 @@ fn port_text_without_target_name_or_node_port_is_just_the_port() {
 #[test]
 fn port_text_adds_target_name_and_node_port_in_that_order() {
     assert_eq!(port_text(&port(None, Some("8080"), None)), "80 → 8080/TCP");
-    assert_eq!(port_text(&port(Some("http"), None, None)), "80/TCP · http");
+    assert_eq!(
+        port_text(&port(Some("http"), None, None)),
+        "80/TCP · name http"
+    );
     assert_eq!(
         port_text(&port(None, None, Some(30080))),
         "80/TCP · node 30080"
     );
     assert_eq!(
         port_text(&port(Some("http"), Some("web"), Some(30080))),
-        "80 → web/TCP · http · node 30080"
+        "80 → web/TCP · name http · node 30080"
     );
 }
 
@@ -669,4 +672,12 @@ fn ingress_backends_cell_joins_names_or_is_absent() {
     );
     web.rules.clear();
     assert_eq!(ingress_row(&web).cells.get(2), Some(&KindCell::Absent));
+}
+
+#[test]
+fn a_port_named_like_a_range_reads_as_a_name() {
+    assert_eq!(
+        port_text(&port(Some("80-8080"), Some("8080"), None)),
+        "80 → 8080/TCP · name 80-8080"
+    );
 }
