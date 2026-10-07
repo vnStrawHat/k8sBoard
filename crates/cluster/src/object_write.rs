@@ -36,6 +36,7 @@ use crate::node_maintenance_bodies::{
 };
 use crate::object_create::{ObjectDraft, is_valid_name, missing_paths};
 use crate::object_edit::{ObjectEdit, is_helm_release};
+use crate::object_metadata::{are_valid_metadata_changes, metadata_patch};
 use crate::object_yaml::{ObjectKind, ObjectRef};
 use crate::quantity::ByteAmount;
 use crate::workload_write_bodies::{
@@ -157,6 +158,12 @@ pub enum WriteOperation {
     },
     /// Per-key merge patch of `metadata.labels` (0034).
     SetNodeLabels { changes: Vec<LabelChange> },
+    /// Per-key merge patch of `metadata.labels` and `metadata.annotations` of a Pod or a workload
+    /// (0032b). Annotation values are never audited.
+    SetObjectMetadata {
+        labels: Vec<LabelChange>,
+        annotations: Vec<LabelChange>,
+    },
     /// Merge patch of the changed keys of a ConfigMap or Secret, guarded by the base
     /// `resourceVersion` (0047). The edit holds new values: nothing prints it.
     SetDataValues(Box<ValuesEdit>),
@@ -192,6 +199,7 @@ impl WriteOperation {
             Self::EvictPod { .. } => "EvictPod",
             Self::SetNodeTaints { .. } => "SetNodeTaints",
             Self::SetNodeLabels { .. } => "SetNodeLabels",
+            Self::SetObjectMetadata { .. } => "SetObjectMetadata",
             Self::SetDataValues(_) => "SetDataValues",
             Self::CreateObject(_) => "CreateObject",
             Self::RenewCertificate { .. } => "RenewCertificate",
@@ -561,6 +569,24 @@ impl WriteRequest {
                     .collect::<Vec<_>>()
                     .join("; "),
             )],
+            // Label values are audited like a node's; an annotation is named, never quoted: it can
+            // hold anything a tool wrote.
+            WriteOperation::SetObjectMetadata {
+                labels,
+                annotations,
+            } => labels
+                .iter()
+                .map(|change| ChangedField {
+                    path: Cow::Owned(format!("metadata.labels[{}]", change.key)),
+                    value: change.value.clone(),
+                    from: None,
+                })
+                .chain(annotations.iter().map(|change| ChangedField {
+                    path: Cow::Owned(format!("metadata.annotations[{}]", change.key)),
+                    value: None,
+                    from: None,
+                }))
+                .collect(),
             // Names and markers only: a value never reaches the dialog or the audit line (0047).
             WriteOperation::SetDataValues(edit) => edit
                 .change_paths()
@@ -603,6 +629,7 @@ impl WriteRequest {
             | WriteOperation::EvictPod { .. }
             | WriteOperation::SetNodeTaints { .. }
             | WriteOperation::SetNodeLabels { .. }
+            | WriteOperation::SetObjectMetadata { .. }
             | WriteOperation::SetDataValues(_)
             | WriteOperation::CreateObject(_)
             | WriteOperation::RenewCertificate { .. } => true,
@@ -635,6 +662,10 @@ fn checked_operation(operation: WriteOperation) -> Option<WriteOperation> {
             ..
         } if resource_version.is_empty() || !are_valid_taints(taints) => None,
         WriteOperation::SetNodeLabels { ref changes } if !are_valid_label_changes(changes) => None,
+        WriteOperation::SetObjectMetadata {
+            ref labels,
+            ref annotations,
+        } if !are_valid_metadata_changes(labels, annotations) => None,
         // A draft is checked again here: its body must still agree with its target (0042 decision 5).
         WriteOperation::CreateObject(draft) => draft
             .is_consistent()
@@ -679,6 +710,7 @@ fn checked_operation(operation: WriteOperation) -> Option<WriteOperation> {
         | WriteOperation::EvictPod { .. }
         | WriteOperation::SetNodeTaints { .. }
         | WriteOperation::SetNodeLabels { .. }
+        | WriteOperation::SetObjectMetadata { .. }
         | WriteOperation::SetDataValues(_)
         // The target rule (`fitting_access_check`) carries the check: the operation has no value
         // of its own to validate.
@@ -713,6 +745,16 @@ fn fitting_access_check(target: &ObjectRef, operation: &WriteOperation) -> Optio
             ObjectKind::Node,
         ) => AccessCheck::PatchNodes,
         (WriteOperation::EvictPod { .. }, ObjectKind::Pod) => AccessCheck::CreatePodEviction,
+        (
+            WriteOperation::SetObjectMetadata { .. },
+            kind @ (ObjectKind::Pod
+            | ObjectKind::Deployment
+            | ObjectKind::StatefulSet
+            | ObjectKind::DaemonSet
+            | ObjectKind::ReplicaSet
+            | ObjectKind::Job
+            | ObjectKind::CronJob),
+        ) => AccessCheck::Patch(kind),
         (WriteOperation::ScaleWorkload { .. }, ObjectKind::Deployment) => {
             AccessCheck::PatchDeploymentScale
         }
@@ -1189,6 +1231,15 @@ impl ClusterConnection {
             }
             WriteOperation::SetNodeLabels { changes } => {
                 let body = labels_patch(changes);
+                let sent = run_raw(api.patch(name, &params, &Patch::Merge(&body))).await;
+                self.settle(request, mode, sent)?;
+                Ok(Answer::patched())
+            }
+            WriteOperation::SetObjectMetadata {
+                labels,
+                annotations,
+            } => {
+                let body = metadata_patch(labels, annotations);
                 let sent = run_raw(api.patch(name, &params, &Patch::Merge(&body))).await;
                 self.settle(request, mode, sent)?;
                 Ok(Answer::patched())
@@ -1762,3 +1813,8 @@ mod object_write_create_tests;
 #[allow(clippy::disallowed_methods)]
 #[path = "object_write_certificate_tests.rs"]
 mod object_write_certificate_tests;
+
+#[cfg(test)]
+#[allow(clippy::disallowed_methods)]
+#[path = "object_write_metadata_tests.rs"]
+mod object_write_metadata_tests;

@@ -50,6 +50,7 @@ fn failed_node(name: &str) -> NodeKubeletStats {
 
 fn pod_summary(namespace: &str, name: &str, host_network: bool) -> PodSummary {
     PodSummary {
+        annotations: cluster::AnnotationTerms::default(),
         is_finished: false,
         namespace: namespace.to_owned(),
         name: name.to_owned(),

@@ -317,7 +317,7 @@ fn quoted(text: &str) -> String {
 
 /// The write path is the one judge of a valid key and value; each row is asked on its own so the
 /// message can name it. An empty key is left to the checks that name no field.
-fn first_row_problem<'a>(
+pub(crate) fn first_row_problem<'a>(
     rows: impl Iterator<Item = (&'a str, &'a str)>,
     is_accepted: impl Fn(&str, Option<&str>) -> bool,
 ) -> Option<RowProblem> {

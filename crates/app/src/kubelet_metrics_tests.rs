@@ -32,6 +32,7 @@ fn ready_nodes(count: usize) -> Vec<NodeSummary> {
 
 fn pod(name: &str, node: Option<&str>, reason: StatusReason) -> PodSummary {
     PodSummary {
+        annotations: cluster::AnnotationTerms::default(),
         is_finished: false,
         namespace: "shop".to_owned(),
         name: name.to_owned(),

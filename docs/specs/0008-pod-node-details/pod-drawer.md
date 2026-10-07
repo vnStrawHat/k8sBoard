@@ -81,3 +81,7 @@ envFrom rows come first. Each row: name (mono, truncated, tooltip) and source (m
 
 - `pod_menu` gains `context: &str` (callers pass `session.read(cx).context()`), and a `Copy kubectl command` item after Copy name, always enabled.
 - `pub(crate) fn kubectl_describe_command(context, namespace, name) -> String` in `resource_actions.rs`: `kubectl --context {c} -n {ns} describe pod {name}`. Each part is single-quoted when it has a character outside `[A-Za-z0-9@%+=:,./_-]`, with `'` written as `'\''`. The function carries `// ponytail: POSIX sh quoting only; PowerShell and cmd need other rules — add a per-shell variant if Windows users paste into them.`
+
+## Annotations (UX round 3)
+
+The Overview ends with Labels, then an `Annotations` section folded into one `N annotations` row until opened (`annotations_section` in `drawer.rs`, shared with the workload drawers). The terms come from `PodSummary.annotations` (`key=value`, at most 50, cut at 200 characters, an applied manifest left out, a credential-looking key's value `<hidden>`). Editing is in [0032b metadata-edit.md](../0032b-resource-edits/metadata-edit.md).

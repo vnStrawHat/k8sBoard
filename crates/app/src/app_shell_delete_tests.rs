@@ -221,6 +221,7 @@ fn answers(server: &Arc<DeleteServer>) -> impl Fn(&RecordedRequest) -> (u16, Str
 
 fn pod(name: &str, has_controller: bool) -> PodSummary {
     PodSummary {
+        annotations: cluster::AnnotationTerms::default(),
         is_finished: false,
         namespace: NAMESPACE.to_owned(),
         name: name.to_owned(),

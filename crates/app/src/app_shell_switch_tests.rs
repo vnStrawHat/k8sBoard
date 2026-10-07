@@ -970,6 +970,7 @@ fn retry_on_a_running_row_starts_no_second_probe(cx: &mut TestAppContext) {
 
 pub(super) fn palette_pod(name: &str) -> cluster::PodSummary {
     cluster::PodSummary {
+        annotations: cluster::AnnotationTerms::default(),
         is_finished: false,
         namespace: "shop".to_owned(),
         name: name.to_owned(),

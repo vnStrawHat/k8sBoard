@@ -34,6 +34,7 @@ fn known_denying(denied: &[AccessCheck]) -> AccessState {
 
 fn pod(namespace: &str, name: &str) -> PodSummary {
     PodSummary {
+        annotations: cluster::AnnotationTerms::default(),
         is_finished: false,
         namespace: namespace.to_owned(),
         name: name.to_owned(),

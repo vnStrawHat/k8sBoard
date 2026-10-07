@@ -132,6 +132,7 @@ mod tests {
 
     fn deployment(selector: &[&str]) -> DeploymentSummary {
         DeploymentSummary {
+            annotations: cluster::AnnotationTerms::default(),
             namespace: "team-a".to_owned(),
             name: "api".to_owned(),
             created_at: None,
@@ -157,6 +158,7 @@ mod tests {
 
     fn cron_job() -> CronJobSummary {
         CronJobSummary {
+            annotations: cluster::AnnotationTerms::default(),
             namespace: "team-a".to_owned(),
             name: "reconcile".to_owned(),
             created_at: None,

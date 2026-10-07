@@ -7,6 +7,7 @@ use crate::table_selection::ResourceKey;
 
 fn job() -> JobSummary {
     JobSummary {
+        annotations: cluster::AnnotationTerms::default(),
         namespace: "team-a".to_owned(),
         name: "migrate".to_owned(),
         created_at: None,
@@ -33,6 +34,7 @@ fn job() -> JobSummary {
 
 fn cron_job() -> CronJobSummary {
     CronJobSummary {
+        annotations: cluster::AnnotationTerms::default(),
         namespace: "team-a".to_owned(),
         name: "reconcile".to_owned(),
         created_at: None,

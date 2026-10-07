@@ -397,6 +397,7 @@ fn certificate_watch_follows_the_saved_choice(cx: &mut gpui_kit::TestAppContext)
 
 fn deployment_in(namespace: &str) -> DeploymentSummary {
     DeploymentSummary {
+        annotations: cluster::AnnotationTerms::default(),
         namespace: namespace.to_owned(),
         name: "api".to_owned(),
         created_at: None,

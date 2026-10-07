@@ -162,6 +162,8 @@ mod hpa_watch;
 mod keyboard_navigation;
 #[path = "leaving_work.rs"]
 mod leaving_work;
+#[path = "metadata_editor.rs"]
+mod metadata_editor;
 #[path = "node_editor.rs"]
 pub(crate) mod node_editor;
 #[path = "node_shell_cleanup.rs"]
@@ -253,6 +255,10 @@ mod app_shell_certificate_tests;
 #[cfg(test)]
 #[path = "app_shell_delete_tests.rs"]
 mod app_shell_delete_tests;
+
+#[cfg(test)]
+#[path = "app_shell_metadata_edit_tests.rs"]
+mod app_shell_metadata_edit_tests;
 
 #[cfg(test)]
 #[path = "app_shell_node_edit_tests.rs"]
@@ -471,6 +477,9 @@ pub(crate) struct AppShell {
     /// The node editor opened last, for the tests that drive it.
     #[cfg(test)]
     last_node_editor: Option<gpui_kit::WeakEntity<node_editor::NodeEditor>>,
+    /// The labels and annotations editor opened last, for the tests that drive it.
+    #[cfg(test)]
+    last_metadata_editor: Option<gpui_kit::WeakEntity<metadata_editor::MetadataEditor>>,
     /// The bulk label editor opened last, for the tests that drive it.
     #[cfg(test)]
     last_bulk_label_editor: Option<gpui_kit::WeakEntity<node_editor::BulkLabelEditor>>,
@@ -775,6 +784,8 @@ impl AppShell {
             last_leaving: None,
             #[cfg(test)]
             last_node_editor: None,
+            #[cfg(test)]
+            last_metadata_editor: None,
             #[cfg(test)]
             last_bulk_label_editor: None,
             #[cfg(test)]
@@ -2423,6 +2434,12 @@ impl AppShell {
             self.drop_secret_values();
         }
         self.follow_drawer_subjects(cx);
+        cx.notify();
+    }
+
+    /// Folds or opens the Annotations section of the drawer's Overview.
+    pub(crate) fn toggle_annotations(&mut self, cx: &mut Context<Self>) {
+        self.drawer.are_annotations_open = !self.drawer.are_annotations_open;
         cx.notify();
     }
 

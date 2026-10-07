@@ -224,6 +224,7 @@ mod tests {
 
     fn pod(name: &str, ready: (u32, u32), created: Option<&str>) -> PodSummary {
         PodSummary {
+            annotations: cluster::AnnotationTerms::default(),
             is_finished: false,
             namespace: "ns".to_owned(),
             name: name.to_owned(),

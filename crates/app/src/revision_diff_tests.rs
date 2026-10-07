@@ -24,6 +24,7 @@ fn side(replica_set: &str, revision: Option<u64>, is_current: bool) -> RevisionS
 
 fn replica_set(revision: Option<&str>, image: &str) -> ReplicaSetSummary {
     ReplicaSetSummary {
+        annotations: cluster::AnnotationTerms::default(),
         namespace: "shop".to_owned(),
         name: "api-7d9f8c".to_owned(),
         created_at: None,

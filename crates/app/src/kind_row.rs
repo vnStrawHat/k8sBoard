@@ -74,6 +74,22 @@ pub(crate) enum KindObject {
     Namespace(NamespaceSummary),
 }
 
+impl KindObject {
+    /// The annotations of a workload row, which the Overview folds under Labels; none for a kind
+    /// that has no such section.
+    pub(crate) fn annotations(&self) -> Option<&[String]> {
+        match self {
+            Self::Deployment(workload) => Some(workload.annotations.terms()),
+            Self::StatefulSet(workload) => Some(workload.annotations.terms()),
+            Self::DaemonSet(workload) => Some(workload.annotations.terms()),
+            Self::ReplicaSet(workload) => Some(workload.annotations.terms()),
+            Self::Job(workload) => Some(workload.annotations.terms()),
+            Self::CronJob(workload) => Some(workload.annotations.terms()),
+            _ => None,
+        }
+    }
+}
+
 /// The paint-time content of a `DetailRow::Live`, read from the row's `KindObject` and the
 /// session's live lists.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -612,6 +628,7 @@ envoyproxy/envoy:v1.30"
 
     fn pod(namespace: &str, controller: Option<(&str, &str)>) -> PodSummary {
         PodSummary {
+            annotations: cluster::AnnotationTerms::default(),
             is_finished: false,
             namespace: namespace.to_owned(),
             name: "pod".to_owned(),

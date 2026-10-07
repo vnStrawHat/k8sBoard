@@ -169,9 +169,9 @@ pub(crate) fn audit_entry(
 /// button says `Apply changes` and whose line says what was done: `Edit YAML` or `Edit values`.
 fn audit_action(intent: &WriteIntent) -> String {
     match intent.action {
-        ResourceAction::EditYaml(_) | ResourceAction::EditValues(_) => {
-            action_label(intent.action).to_owned()
-        }
+        ResourceAction::EditYaml(_)
+        | ResourceAction::EditValues(_)
+        | ResourceAction::EditMetadata(_) => action_label(intent.action).to_owned(),
         _ => intent.button.to_string(),
     }
 }

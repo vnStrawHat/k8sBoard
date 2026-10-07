@@ -30,6 +30,7 @@ fn condition(name: &str, is_true: bool, reason: &str, message: &str) -> Workload
 
 fn deployment(conditions: Vec<WorkloadCondition>) -> DeploymentSummary {
     DeploymentSummary {
+        annotations: cluster::AnnotationTerms::default(),
         namespace: "shop".to_owned(),
         name: "api".to_owned(),
         created_at: None,
@@ -64,6 +65,7 @@ fn stalled_deployment() -> DeploymentSummary {
 
 fn daemon_set(desired: u32, current: u32, misscheduled: u32) -> DaemonSetSummary {
     DaemonSetSummary {
+        annotations: cluster::AnnotationTerms::default(),
         namespace: "kube-system".to_owned(),
         name: "agent".to_owned(),
         created_at: None,
@@ -84,6 +86,7 @@ fn daemon_set(desired: u32, current: u32, misscheduled: u32) -> DaemonSetSummary
 
 fn job(status: JobStatus, failed: u32, conditions: Vec<WorkloadCondition>) -> JobSummary {
     JobSummary {
+        annotations: cluster::AnnotationTerms::default(),
         namespace: "shop".to_owned(),
         name: "import".to_owned(),
         created_at: None,

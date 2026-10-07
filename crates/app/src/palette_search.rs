@@ -274,7 +274,7 @@ pub(crate) struct PaletteInput<'a> {
 }
 
 /// The row actions in the order of the shortcut sheet.
-const ROW_ACTIONS: [RowAction; 27] = [
+const ROW_ACTIONS: [RowAction; 28] = [
     RowAction::ViewLogs,
     RowAction::ViewYaml,
     RowAction::CopyName,
@@ -285,6 +285,7 @@ const ROW_ACTIONS: [RowAction; 27] = [
     RowAction::Drain,
     RowAction::EditTaints,
     RowAction::EditLabels,
+    RowAction::EditMetadata,
     RowAction::EditYaml,
     RowAction::EditValues,
     RowAction::RestartRollout,
@@ -568,7 +569,7 @@ fn score_sum(scores: &[Option<u32>], eligible: Option<&[bool]>) -> Option<u32> {
 
 /// The actions a pair can carry, for `labelled_tokens`: the labels of `subject_action` that any
 /// subject can offer, and the two that an object state flips (`state_label`).
-const PAIR_LABEL_ACTIONS: [ResourceAction; 25] = [
+const PAIR_LABEL_ACTIONS: [ResourceAction; 26] = [
     ResourceAction::ViewLogs,
     ResourceAction::OpenShell,
     ResourceAction::PortForward,
@@ -579,6 +580,7 @@ const PAIR_LABEL_ACTIONS: [ResourceAction; 25] = [
     ResourceAction::Drain,
     ResourceAction::EditTaints,
     ResourceAction::EditLabels,
+    ResourceAction::EditMetadata(ObjectKind::Deployment),
     ResourceAction::CopyName,
     ResourceAction::ViewYaml,
     ResourceAction::EditYaml(ObjectKind::Pod),

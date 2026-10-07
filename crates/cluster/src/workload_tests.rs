@@ -245,3 +245,72 @@ fn condition_keeps_the_last_transition_time() {
         Some(at)
     );
 }
+
+fn annotated(pairs: &[(&str, &str)]) -> ObjectMeta {
+    ObjectMeta {
+        annotations: Some(
+            pairs
+                .iter()
+                .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
+                .collect(),
+        ),
+        ..Default::default()
+    }
+}
+
+#[test]
+fn annotation_terms_list_the_keys_in_order() {
+    let metadata = annotated(&[("team", "shop"), ("a.io/owner", "infra")]);
+    assert_eq!(
+        annotation_terms(&metadata).terms(),
+        ["a.io/owner=infra", "team=shop"]
+    );
+    assert!(annotation_terms(&ObjectMeta::default()).terms().is_empty());
+}
+
+#[test]
+fn annotation_terms_leave_out_an_applied_manifest() {
+    let metadata = annotated(&[
+        (
+            "kubectl.kubernetes.io/last-applied-configuration",
+            "{\"data\":{\"password\":\"s3cret\"}}",
+        ),
+        ("team", "shop"),
+    ]);
+    assert_eq!(annotation_terms(&metadata).terms(), ["team=shop"]);
+}
+
+#[test]
+fn annotation_terms_hide_the_value_of_a_credential_key() {
+    let metadata = annotated(&[("deploy-token", "abc123"), ("team", "shop")]);
+    let terms = annotation_terms(&metadata);
+    assert_eq!(terms.terms(), ["deploy-token=<hidden>", "team=shop"]);
+}
+
+#[test]
+fn annotation_terms_cut_a_long_value_to_one_line() {
+    let long = format!("first line\n{}", "x".repeat(300));
+    let terms = annotation_terms(&annotated(&[("note", &long)]));
+    let terms = terms.terms();
+    assert!(terms[0].ends_with('…'));
+    assert!(!terms[0].contains('\n'));
+    assert!(terms[0].chars().count() < 220);
+}
+
+#[test]
+fn annotation_terms_keep_at_most_fifty() {
+    let pairs: Vec<(String, String)> = (0..80)
+        .map(|n| (format!("k{n:02}"), "v".to_owned()))
+        .collect();
+    let refs: Vec<(&str, &str)> = pairs
+        .iter()
+        .map(|(k, v)| (k.as_str(), v.as_str()))
+        .collect();
+    assert_eq!(annotation_terms(&annotated(&refs)).terms().len(), 50);
+}
+
+#[test]
+fn debug_prints_the_count_and_no_value() {
+    let terms = annotation_terms(&annotated(&[("owner", "SECRETANNOTATION")]));
+    assert_eq!(format!("{terms:?}"), "AnnotationTerms(1)");
+}

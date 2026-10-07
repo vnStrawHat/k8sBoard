@@ -42,6 +42,7 @@ fn termination(reason: Option<StatusReason>, exit_code: i32) -> Termination {
 fn pod(status: PodStatus, ready: u32, containers: Vec<ContainerSummary>) -> PodSummary {
     let total = u32::try_from(containers.len()).unwrap_or_default();
     PodSummary {
+        annotations: cluster::AnnotationTerms::default(),
         is_finished: false,
         namespace: "ns".to_owned(),
         name: "pod".to_owned(),

@@ -7,7 +7,8 @@ use crate::namespace::NamespaceScope;
 use crate::pod_status::non_negative;
 use crate::resource_watch::{WatchUpdate, summary_watch};
 use crate::workload::{
-    TemplateContainer, label_terms, non_empty, optional_count, selector_terms, template_containers,
+    AnnotationTerms, TemplateContainer, annotation_terms, label_terms, non_empty, optional_count,
+    selector_terms, template_containers,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -17,6 +18,9 @@ pub struct StatefulSetSummary {
     pub created_at: Option<jiff::Timestamp>,
     /// `key=value` terms in key order.
     pub labels: Vec<String>,
+    /// `key=value` terms in key order, for the drawer's folded Annotations section: see
+    /// `annotation_terms` for what is cut and hidden.
+    pub annotations: AnnotationTerms,
     /// `spec.replicas`, defaulting to 1 as the API server does.
     pub desired: u32,
     pub ready: u32,
@@ -71,6 +75,7 @@ pub(crate) fn stateful_set_summary(stateful_set: &StatefulSet) -> StatefulSetSum
             .as_ref()
             .map(|time| time.0),
         labels: label_terms(&stateful_set.metadata),
+        annotations: annotation_terms(&stateful_set.metadata),
         desired: spec.and_then(|spec| spec.replicas).map_or(1, non_negative),
         ready: optional_count(status.and_then(|status| status.ready_replicas)),
         current: optional_count(status.and_then(|status| status.current_replicas)),

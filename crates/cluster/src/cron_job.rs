@@ -6,7 +6,10 @@ use crate::cron_schedule::{CronSchedule, ScheduleError};
 use crate::namespace::NamespaceScope;
 use crate::pod_status::non_negative;
 use crate::resource_watch::{WatchUpdate, summary_watch};
-use crate::workload::{TemplateContainer, label_terms, non_empty, template_containers};
+use crate::workload::{
+    AnnotationTerms, TemplateContainer, annotation_terms, label_terms, non_empty,
+    template_containers,
+};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CronJobSummary {
@@ -15,6 +18,9 @@ pub struct CronJobSummary {
     pub created_at: Option<jiff::Timestamp>,
     /// `key=value` terms in key order.
     pub labels: Vec<String>,
+    /// `key=value` terms in key order, for the drawer's folded Annotations section: see
+    /// `annotation_terms` for what is cut and hidden.
+    pub annotations: AnnotationTerms,
     pub schedule: String,
     /// `spec.timeZone`; empty is `None`.
     pub time_zone: Option<String>,
@@ -72,6 +78,7 @@ pub(crate) fn cron_job_summary(cron_job: &CronJob) -> CronJobSummary {
         name: cron_job.metadata.name.clone().unwrap_or_default(),
         created_at,
         labels: label_terms(&cron_job.metadata),
+        annotations: annotation_terms(&cron_job.metadata),
         schedule,
         time_zone,
         timetable,

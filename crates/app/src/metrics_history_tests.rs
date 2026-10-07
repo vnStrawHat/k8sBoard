@@ -52,6 +52,7 @@ fn rings_of<'a>(
 /// A pod summary for the controller and the OOM kills; the rest is blank.
 fn summary(namespace: &str, name: &str, controller: Option<(&str, &str)>) -> PodSummary {
     PodSummary {
+        annotations: cluster::AnnotationTerms::default(),
         is_finished: false,
         namespace: namespace.to_owned(),
         name: name.to_owned(),

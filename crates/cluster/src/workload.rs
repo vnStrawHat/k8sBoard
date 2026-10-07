@@ -7,7 +7,9 @@ use k8s_openapi::apimachinery::pkg::apis::meta::v1::{LabelSelector, ObjectMeta};
 use k8s_openapi::apimachinery::pkg::util::intstr::IntOrString;
 
 use crate::container_spec::{ContainerResource, container_resources};
+use crate::edit_placeholders::HIDDEN;
 use crate::event::optional_message;
+use crate::object_yaml::{MASKED_ANNOTATIONS, is_secret_key};
 use crate::pod_status::non_negative;
 use crate::selector::Selector;
 
@@ -74,6 +76,56 @@ pub(crate) fn controller_ref(metadata: &ObjectMeta) -> Option<ControllerRef> {
 /// `key=value` terms in key order.
 pub(crate) fn label_terms(metadata: &ObjectMeta) -> Vec<String> {
     key_value_terms(metadata.labels.as_ref())
+}
+
+/// The annotations of an object as `key=value` terms, for display. `Debug` prints the count only: a
+/// value can hold anything a tool wrote, and a summary is printed whole by `{:?}`.
+#[derive(Clone, Default, PartialEq, Eq)]
+pub struct AnnotationTerms(Vec<String>);
+
+impl AnnotationTerms {
+    pub fn new(terms: Vec<String>) -> Self {
+        Self(terms)
+    }
+
+    pub fn terms(&self) -> &[String] {
+        &self.0
+    }
+}
+
+impl std::fmt::Debug for AnnotationTerms {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "AnnotationTerms({})", self.0.len())
+    }
+}
+
+/// How many annotations a summary keeps, and how long a value may be before it is cut: a summary is
+/// kept for every object of a list, and a few tools write whole documents into annotations.
+const MAX_ANNOTATIONS: usize = 50;
+const MAX_ANNOTATION_CHARS: usize = 200;
+
+/// The annotations as `key=value` terms in key order, for display. The annotations that embed an
+/// applied manifest are left out, the value of a key that looks like a credential is hidden, and a
+/// long value is cut at one line.
+pub(crate) fn annotation_terms(metadata: &ObjectMeta) -> AnnotationTerms {
+    let terms = metadata
+        .annotations
+        .iter()
+        .flatten()
+        .filter(|(key, _)| !MASKED_ANNOTATIONS.contains(&key.as_str()))
+        .take(MAX_ANNOTATIONS)
+        .map(|(key, value)| {
+            if is_secret_key(key) {
+                return format!("{key}={HIDDEN}");
+            }
+            let one_line = value.replace(['\n', '\r'], " ");
+            match one_line.char_indices().nth(MAX_ANNOTATION_CHARS) {
+                Some((end, _)) => format!("{key}={}…", &one_line[..end]),
+                None => format!("{key}={one_line}"),
+            }
+        })
+        .collect();
+    AnnotationTerms(terms)
 }
 
 pub(crate) fn key_value_terms(pairs: Option<&BTreeMap<String, String>>) -> Vec<String> {

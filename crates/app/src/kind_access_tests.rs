@@ -48,6 +48,7 @@ fn kind_access_includes_delete() {
         lazy_checks(ObjectKind::Deployment),
         [
             AccessCheck::Update(ObjectKind::Deployment),
+            AccessCheck::Patch(ObjectKind::Deployment),
             AccessCheck::Delete(ObjectKind::Deployment)
         ]
     );
@@ -68,9 +69,21 @@ fn config_maps_and_secrets_also_ask_patch() {
             AccessCheck::Delete(ObjectKind::Secret)
         ]
     );
-    // No other kind asks for it: a merge patch of values exists for these two only.
+    // Only the kinds with a merge patch ask for it: the values of these two, and the labels and
+    // annotations of pods and workloads.
     for kind in ObjectKind::ALL {
-        if !matches!(kind, ObjectKind::ConfigMap | ObjectKind::Secret) {
+        if !matches!(
+            kind,
+            ObjectKind::ConfigMap
+                | ObjectKind::Secret
+                | ObjectKind::Pod
+                | ObjectKind::Deployment
+                | ObjectKind::StatefulSet
+                | ObjectKind::DaemonSet
+                | ObjectKind::ReplicaSet
+                | ObjectKind::Job
+                | ObjectKind::CronJob
+        ) {
             assert!(
                 !lazy_checks(kind).contains(&AccessCheck::Patch(kind)),
                 "{kind:?}"

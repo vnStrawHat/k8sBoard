@@ -20,14 +20,14 @@ use crate::dock::{DockMode, TabStep};
 use crate::drawer::{DrawerScroll, DrawerTab, drawer_tabs};
 use crate::keymap::{
     Attach, CloseDockTab, CopyName, Cordon, Delete, Dismiss, Drain, EditHpaRange, EditLabels,
-    EditTaints, EditValues, EditYaml, EvictPod, ExpandClaim, ExtendTickDown, ExtendTickUp, GoBack,
-    GoForward, LeaveInput, NextContainer, NextDockTab, OpenDrawer, OpenShell, PauseRollout,
-    PortForward, PreviousContainer, PreviousDockTab, RenewCertificate, RerunJob, RestartPod,
-    RestartRollout, RollBack, Scale, SelectDrawerTab1, SelectDrawerTab2, SelectDrawerTab3,
-    SelectDrawerTab4, SelectDrawerTab5, SelectFirstRow, SelectLastRow, SelectNextPage,
-    SelectNextRow, SelectPreviousPage, SelectPreviousRow, SetDefaultStorageClass, SetImage,
-    SuspendCronJob, ToggleAllTicks, ToggleDock, ToggleDockZoom, ToggleReadOnly, ToggleRowTick,
-    TriggerCronJob, ViewLogs, ViewYaml,
+    EditMetadata, EditTaints, EditValues, EditYaml, EvictPod, ExpandClaim, ExtendTickDown,
+    ExtendTickUp, GoBack, GoForward, LeaveInput, NextContainer, NextDockTab, OpenDrawer, OpenShell,
+    PauseRollout, PortForward, PreviousContainer, PreviousDockTab, RenewCertificate, RerunJob,
+    RestartPod, RestartRollout, RollBack, Scale, SelectDrawerTab1, SelectDrawerTab2,
+    SelectDrawerTab3, SelectDrawerTab4, SelectDrawerTab5, SelectFirstRow, SelectLastRow,
+    SelectNextPage, SelectNextRow, SelectPreviousPage, SelectPreviousRow, SetDefaultStorageClass,
+    SetImage, SuspendCronJob, ToggleAllTicks, ToggleDock, ToggleDockZoom, ToggleReadOnly,
+    ToggleRowTick, TriggerCronJob, ViewLogs, ViewYaml,
 };
 use crate::kind_drawer::REVISIONS_TITLE;
 use crate::live_sections::loaded_replica_sets;
@@ -240,6 +240,7 @@ pub(super) fn register_key_handlers(root: Div, cx: &Context<AppShell>) -> Div {
     let root = on_row_key::<Drain>(root, RowAction::Drain, cx);
     let root = on_row_key::<EditTaints>(root, RowAction::EditTaints, cx);
     let root = on_row_key::<EditLabels>(root, RowAction::EditLabels, cx);
+    let root = on_row_key::<EditMetadata>(root, RowAction::EditMetadata, cx);
     let root = on_row_key::<EditYaml>(root, RowAction::EditYaml, cx);
     let root = on_row_key::<EditValues>(root, RowAction::EditValues, cx);
     let root = on_row_key::<RestartRollout>(root, RowAction::RestartRollout, cx);
@@ -763,6 +764,8 @@ impl AppShell {
             ResourceAction::EditYaml(_) => self.open_edit(subject, window, cx),
             // The values editor of the cursor ConfigMap or Secret, in its own cluster (spec 0047).
             ResourceAction::EditValues(_) => self.open_values_edit(subject, window, cx),
+            // The labels and annotations of the cursor pod or workload, in its own cluster (spec 0032b).
+            ResourceAction::EditMetadata(_) => self.open_metadata_editor(subject, window, cx),
             // The cursor row, or the ticked set when it is one of several (specs 0009, 0033).
             ResourceAction::Delete(_) => {
                 self.remove_at_cursor(Removal::Delete, &subject, window, cx)

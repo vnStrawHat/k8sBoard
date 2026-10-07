@@ -50,6 +50,7 @@ fn terms(items: &[&str]) -> Vec<String> {
 /// A running, ready pod of `shop`; `owner` is its controller as `(kind, name)`.
 pub(crate) fn pod(name: &str, labels: &[&str], owner: Option<(&str, &str)>) -> PodSummary {
     PodSummary {
+        annotations: cluster::AnnotationTerms::default(),
         is_finished: false,
         namespace: NAMESPACE.to_owned(),
         name: name.to_owned(),
@@ -224,6 +225,7 @@ pub(crate) fn service(name: &str, selector: &[&str]) -> ServiceSummary {
 
 pub(crate) fn deployment(name: &str, desired: u32, ready: u32) -> DeploymentSummary {
     DeploymentSummary {
+        annotations: cluster::AnnotationTerms::default(),
         namespace: NAMESPACE.to_owned(),
         name: name.to_owned(),
         created_at: None,
@@ -254,6 +256,7 @@ pub(crate) fn replica_set(
     current: u32,
 ) -> ReplicaSetSummary {
     ReplicaSetSummary {
+        annotations: cluster::AnnotationTerms::default(),
         namespace: NAMESPACE.to_owned(),
         name: name.to_owned(),
         created_at: None,
@@ -271,6 +274,7 @@ pub(crate) fn replica_set(
 
 pub(crate) fn stateful_set(name: &str, desired: u32, ready: u32) -> StatefulSetSummary {
     StatefulSetSummary {
+        annotations: cluster::AnnotationTerms::default(),
         namespace: NAMESPACE.to_owned(),
         name: name.to_owned(),
         created_at: None,
@@ -291,6 +295,7 @@ pub(crate) fn stateful_set(name: &str, desired: u32, ready: u32) -> StatefulSetS
 
 pub(crate) fn daemon_set(name: &str, desired: u32, ready: u32) -> DaemonSetSummary {
     DaemonSetSummary {
+        annotations: cluster::AnnotationTerms::default(),
         namespace: NAMESPACE.to_owned(),
         name: name.to_owned(),
         created_at: None,

@@ -69,6 +69,7 @@ fn container(name: &str, ports: Vec<ContainerPort>) -> ContainerSummary {
 
 fn pod(name: &str, ports: Vec<ContainerPort>) -> PodSummary {
     PodSummary {
+        annotations: cluster::AnnotationTerms::default(),
         is_finished: false,
         namespace: "shop".to_owned(),
         name: name.to_owned(),

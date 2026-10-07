@@ -205,6 +205,7 @@ fn quick_filter_matches_kind_and_cause() {
 #[test]
 fn view_logs_needs_the_subject_pod_in_the_list() {
     let pod = |name: &str| cluster::PodSummary {
+        annotations: cluster::AnnotationTerms::default(),
         is_finished: false,
         namespace: "shop".to_owned(),
         name: name.to_owned(),
@@ -241,6 +242,7 @@ fn view_logs_needs_the_subject_pod_in_the_list() {
 #[test]
 fn view_logs_of_a_job_reads_its_newest_pod() {
     let pod = |name: &str, job: &str, created: i64| cluster::PodSummary {
+        annotations: cluster::AnnotationTerms::default(),
         is_finished: false,
         namespace: "shop".to_owned(),
         name: name.to_owned(),

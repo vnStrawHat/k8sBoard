@@ -481,6 +481,7 @@ fn kubectl_command_quotes_only_unsafe_parts() {
 
 fn pod_on(node: Option<&str>) -> PodSummary {
     PodSummary {
+        annotations: cluster::AnnotationTerms::default(),
         is_finished: false,
         namespace: "ns".to_owned(),
         name: "pod".to_owned(),
@@ -541,6 +542,7 @@ fn filter_similar_disabled_without_reason() {
 
 fn replica_set_row_owned_by(owner: Option<(&str, &str)>) -> KindRow {
     crate::workload_rows::replica_set_row(&cluster::ReplicaSetSummary {
+        annotations: cluster::AnnotationTerms::default(),
         namespace: "team-a".to_owned(),
         name: "api-7d9f8c".to_owned(),
         created_at: None,
@@ -1272,6 +1274,7 @@ fn container_of(name: &str) -> cluster::ContainerSummary {
 
 fn pod_with(containers: Vec<cluster::ContainerSummary>) -> PodSummary {
     PodSummary {
+        annotations: cluster::AnnotationTerms::default(),
         is_finished: false,
         namespace: "shop".to_owned(),
         name: "api-0".to_owned(),
@@ -3159,6 +3162,44 @@ fn edit_values_resolves_on_two_kinds_only() {
 }
 
 #[test]
+fn edit_metadata_is_a_change_tier_action_with_an_unbound_key() {
+    let action = ResourceAction::EditMetadata(ObjectKind::Pod);
+    assert_eq!(action.row_action(), Some(RowAction::EditMetadata));
+    assert_eq!(
+        RowAction::EditMetadata.key_action().name(),
+        "k8sboard::EditMetadata"
+    );
+    assert_eq!(action_label(action), "Edit labels / annotations");
+    assert_eq!(action_risk(action), ActionRisk::Change);
+}
+
+#[test]
+fn edit_metadata_resolves_on_pods_and_workloads_only() {
+    let resolved = |subject: &ResourceKey| subject_action(RowAction::EditMetadata, subject);
+    assert_eq!(
+        resolved(&pod_key()),
+        Some(ResourceAction::EditMetadata(ObjectKind::Pod))
+    );
+    for (kind, object) in [
+        (ResourceKind::Deployments, ObjectKind::Deployment),
+        (ResourceKind::StatefulSets, ObjectKind::StatefulSet),
+        (ResourceKind::DaemonSets, ObjectKind::DaemonSet),
+        (ResourceKind::ReplicaSets, ObjectKind::ReplicaSet),
+        (ResourceKind::Jobs, ObjectKind::Job),
+        (ResourceKind::CronJobs, ObjectKind::CronJob),
+    ] {
+        assert_eq!(
+            resolved(&kind_key(kind)),
+            Some(ResourceAction::EditMetadata(object)),
+            "{kind:?}"
+        );
+    }
+    assert_eq!(resolved(&node_key()), None);
+    assert_eq!(resolved(&kind_key(ResourceKind::Secrets)), None);
+    assert_eq!(resolved(&kind_key(ResourceKind::Services)), None);
+}
+
+#[test]
 fn edit_yaml_still_resolves_on_the_two_kinds() {
     assert_eq!(
         subject_action(RowAction::EditYaml, &kind_key(ResourceKind::Secrets)),
@@ -3516,6 +3557,7 @@ fn pod_menu_follows_w4_order() {
             PortForward,
             Attach,
             Separator,
+            EditMetadata,
             EditYaml,
             ViewYaml,
             RestartPod,

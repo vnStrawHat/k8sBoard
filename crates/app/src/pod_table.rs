@@ -558,6 +558,7 @@ mod tests {
 
     fn pod() -> PodSummary {
         PodSummary {
+            annotations: cluster::AnnotationTerms::default(),
             is_finished: false,
             namespace: "payments".to_owned(),
             name: "api-7".to_owned(),

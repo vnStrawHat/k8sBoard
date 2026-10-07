@@ -7,8 +7,8 @@ use crate::namespace::NamespaceScope;
 use crate::pod_status::non_negative;
 use crate::resource_watch::{WatchUpdate, summary_watch};
 use crate::workload::{
-    TemplateContainer, key_value_terms, label_terms, optional_count, selector_terms,
-    template_containers,
+    AnnotationTerms, TemplateContainer, annotation_terms, key_value_terms, label_terms,
+    optional_count, selector_terms, template_containers,
 };
 
 /// Has no conditions: the DaemonSet controller never writes any.
@@ -19,6 +19,9 @@ pub struct DaemonSetSummary {
     pub created_at: Option<jiff::Timestamp>,
     /// `key=value` terms in key order.
     pub labels: Vec<String>,
+    /// `key=value` terms in key order, for the drawer's folded Annotations section: see
+    /// `annotation_terms` for what is cut and hidden.
+    pub annotations: AnnotationTerms,
     /// `status.desiredNumberScheduled`.
     pub desired: u32,
     pub current: u32,
@@ -66,6 +69,7 @@ pub(crate) fn daemon_set_summary(daemon_set: &DaemonSet) -> DaemonSetSummary {
             .as_ref()
             .map(|time| time.0),
         labels: label_terms(&daemon_set.metadata),
+        annotations: annotation_terms(&daemon_set.metadata),
         desired: status.map_or(0, |status| non_negative(status.desired_number_scheduled)),
         current: status.map_or(0, |status| non_negative(status.current_number_scheduled)),
         ready: status.map_or(0, |status| non_negative(status.number_ready)),

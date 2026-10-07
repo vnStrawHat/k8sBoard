@@ -19,8 +19,8 @@ use crate::namespace::NamespaceScope;
 use crate::pod_status::{PodStatus, StatusReason, is_sidecar, non_negative, pod_display};
 use crate::resource_watch::{WatchUpdate, summary_watch};
 use crate::workload::{
-    ContainerPort, ControllerRef, container_ports, controller_ref, key_value_terms, label_terms,
-    non_empty,
+    AnnotationTerms, ContainerPort, ControllerRef, annotation_terms, container_ports,
+    controller_ref, key_value_terms, label_terms, non_empty,
 };
 
 /// Set on the mirror pod the kubelet creates for a static pod.
@@ -50,8 +50,11 @@ pub struct PodSummary {
     /// `status.message`, kept only when the phase is `Failed` or the reason is `Evicted`.
     /// URL userinfo hidden, then cut like event messages.
     pub status_message: Option<String>,
-    /// `key=value` terms in key order. Labels only: annotations are never read.
+    /// `key=value` terms in key order.
     pub labels: Vec<String>,
+    /// `key=value` terms in key order, for the drawer's folded Annotations section: see
+    /// `annotation_terms` for what is cut and hidden.
+    pub annotations: AnnotationTerms,
     /// The pod uses the node's network namespace; its network stats are the node's.
     pub host_network: bool,
     /// `spec.imagePullSecrets[].name`; empty names are dropped.
@@ -288,6 +291,7 @@ pub(crate) fn pod_summary(pod: &Pod) -> PodSummary {
         containers: container_summaries(pod),
         status_message: status_message(pod),
         labels: label_terms(&pod.metadata),
+        annotations: annotation_terms(&pod.metadata),
         host_network: pod
             .spec
             .as_ref()

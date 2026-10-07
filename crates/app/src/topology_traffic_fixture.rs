@@ -220,6 +220,7 @@ pub(crate) fn traffic_fixture_graph() -> TopologyGraph {
 
 fn pod(name: &str, owner: (&str, &str), app: &str, is_host_network: bool) -> PodSummary {
     PodSummary {
+        annotations: cluster::AnnotationTerms::default(),
         is_finished: false,
         namespace: NAMESPACE.to_owned(),
         name: name.to_owned(),

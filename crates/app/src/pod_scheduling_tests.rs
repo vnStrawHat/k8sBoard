@@ -36,6 +36,7 @@ fn node(labels: &[&str], cpu: &str, memory: &str) -> NodeSummary {
 
 fn pod(selector: &[&str], requests: &[(&str, &str)]) -> PodSummary {
     PodSummary {
+        annotations: cluster::AnnotationTerms::default(),
         namespace: "shop".to_owned(),
         name: "api-0".to_owned(),
         status: PodStatus::Reason(StatusReason::Pending),

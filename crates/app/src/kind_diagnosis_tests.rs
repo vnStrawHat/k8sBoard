@@ -27,6 +27,7 @@ fn condition(
 
 fn deployment(desired: u32, ready: u32) -> DeploymentSummary {
     DeploymentSummary {
+        annotations: cluster::AnnotationTerms::default(),
         namespace: "team-a".to_owned(),
         name: "api".to_owned(),
         created_at: None,
@@ -52,6 +53,7 @@ fn deployment(desired: u32, ready: u32) -> DeploymentSummary {
 
 fn daemon_set(desired: u32, current: u32, ready: u32) -> DaemonSetSummary {
     DaemonSetSummary {
+        annotations: cluster::AnnotationTerms::default(),
         namespace: "kube-system".to_owned(),
         name: "agent".to_owned(),
         created_at: None,
@@ -72,6 +74,7 @@ fn daemon_set(desired: u32, current: u32, ready: u32) -> DaemonSetSummary {
 
 fn job(status: JobStatus, failed: u32) -> JobSummary {
     JobSummary {
+        annotations: cluster::AnnotationTerms::default(),
         namespace: "team-a".to_owned(),
         name: "migrate".to_owned(),
         created_at: None,
@@ -116,6 +119,7 @@ fn node(name: &str, readiness: NodeReadiness) -> NodeSummary {
 /// A healthy pod, ready and running.
 fn pod(name: &str, node: Option<&str>) -> PodSummary {
     PodSummary {
+        annotations: cluster::AnnotationTerms::default(),
         is_finished: false,
         namespace: "team-a".to_owned(),
         name: name.to_owned(),
@@ -2437,6 +2441,7 @@ fn no_box_while_recently_terminating() {
 fn cron_job_ran_at_ten() -> cluster::CronJobSummary {
     let ran_at: Timestamp = "2024-10-04T10:00:00Z".parse().expect("timestamp");
     cluster::CronJobSummary {
+        annotations: cluster::AnnotationTerms::default(),
         namespace: "team-a".to_owned(),
         name: "reconcile".to_owned(),
         created_at: None,

@@ -852,6 +852,7 @@ mod tests {
 
     fn pod(name: &str, container_count: usize) -> PodSummary {
         PodSummary {
+            annotations: cluster::AnnotationTerms::default(),
             is_finished: false,
             namespace: "ns".to_owned(),
             name: name.to_owned(),

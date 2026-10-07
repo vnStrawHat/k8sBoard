@@ -10,8 +10,8 @@ use crate::object_yaml::{ObjectKind, ObjectRef};
 use crate::pod_status::non_negative;
 use crate::resource_watch::{WatchUpdate, selected_summary_watch, summary_watch};
 use crate::workload::{
-    ControllerRef, TemplateContainer, change_cause, controller_ref, label_terms, optional_count,
-    revision, selector_terms, template_containers,
+    AnnotationTerms, ControllerRef, TemplateContainer, annotation_terms, change_cause,
+    controller_ref, label_terms, optional_count, revision, selector_terms, template_containers,
 };
 
 /// The action text of `deployment_revisions`.
@@ -24,6 +24,9 @@ pub struct ReplicaSetSummary {
     pub created_at: Option<jiff::Timestamp>,
     /// `key=value` terms in key order.
     pub labels: Vec<String>,
+    /// `key=value` terms in key order, for the drawer's folded Annotations section: see
+    /// `annotation_terms` for what is cut and hidden.
+    pub annotations: AnnotationTerms,
     /// `spec.replicas`, defaulting to 1 as the API server does.
     pub desired: u32,
     /// `status.replicas`.
@@ -130,6 +133,7 @@ pub(crate) fn replica_set_summary(replica_set: &ReplicaSet) -> ReplicaSetSummary
             .as_ref()
             .map(|time| time.0),
         labels: label_terms(&replica_set.metadata),
+        annotations: annotation_terms(&replica_set.metadata),
         desired: spec.and_then(|spec| spec.replicas).map_or(1, non_negative),
         current: status.map_or(0, |status| non_negative(status.replicas)),
         ready: optional_count(status.and_then(|status| status.ready_replicas)),

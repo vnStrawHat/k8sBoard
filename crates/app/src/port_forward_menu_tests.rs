@@ -52,6 +52,7 @@ fn container(name: &str, kind: ContainerKind, ports: Vec<ContainerPort>) -> Cont
 
 fn pod(containers: Vec<ContainerSummary>) -> PodSummary {
     PodSummary {
+        annotations: cluster::AnnotationTerms::default(),
         is_finished: false,
         namespace: "shop".to_owned(),
         name: "api-0".to_owned(),
@@ -115,6 +116,7 @@ fn template(ports: Vec<ContainerPort>) -> Vec<TemplateContainer> {
 
 fn deployment(containers: Vec<TemplateContainer>) -> DeploymentSummary {
     DeploymentSummary {
+        annotations: cluster::AnnotationTerms::default(),
         namespace: "shop".to_owned(),
         name: "web".to_owned(),
         created_at: None,
@@ -140,6 +142,7 @@ fn deployment(containers: Vec<TemplateContainer>) -> DeploymentSummary {
 
 fn stateful_set(containers: Vec<TemplateContainer>) -> StatefulSetSummary {
     StatefulSetSummary {
+        annotations: cluster::AnnotationTerms::default(),
         namespace: "shop".to_owned(),
         name: "db".to_owned(),
         created_at: None,

@@ -7,8 +7,8 @@ use crate::namespace::NamespaceScope;
 use crate::pod_status::non_negative;
 use crate::resource_watch::{WatchUpdate, summary_watch};
 use crate::workload::{
-    TemplateContainer, WorkloadCondition, condition, int_or_string_text, label_terms,
-    optional_count, revision, selector_terms, template_containers,
+    AnnotationTerms, TemplateContainer, WorkloadCondition, annotation_terms, condition,
+    int_or_string_text, label_terms, optional_count, revision, selector_terms, template_containers,
 };
 
 /// The API server default for `spec.progressDeadlineSeconds`.
@@ -29,6 +29,9 @@ pub struct DeploymentSummary {
     pub created_at: Option<jiff::Timestamp>,
     /// `key=value` terms in key order.
     pub labels: Vec<String>,
+    /// `key=value` terms in key order, for the drawer's folded Annotations section: see
+    /// `annotation_terms` for what is cut and hidden.
+    pub annotations: AnnotationTerms,
     /// `spec.replicas`, defaulting to 1 as the API server does.
     pub desired: u32,
     pub ready: u32,
@@ -84,6 +87,7 @@ pub(crate) fn deployment_summary(deployment: &Deployment) -> DeploymentSummary {
             .as_ref()
             .map(|time| time.0),
         labels: label_terms(&deployment.metadata),
+        annotations: annotation_terms(&deployment.metadata),
         desired: spec.and_then(|spec| spec.replicas).map_or(1, non_negative),
         ready: optional_count(status.and_then(|status| status.ready_replicas)),
         up_to_date: optional_count(status.and_then(|status| status.updated_replicas)),

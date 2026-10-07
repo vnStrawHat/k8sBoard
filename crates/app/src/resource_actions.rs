@@ -27,9 +27,9 @@ use crate::custom_kind::CustomKind;
 use crate::dock::{Dock, LogOrigin};
 use crate::drawer::DrawerTab;
 use crate::keymap::{
-    Attach, CopyName, Cordon, DebugContainer, Delete, Drain, EditHpaRange, EditLabels, EditTaints,
-    EditValues, EditYaml, EvictPod, ExpandClaim, OpenShell, PauseRollout, PortForward,
-    RenewCertificate, RerunJob, RestartPod, RestartRollout, RollBack, Scale,
+    Attach, CopyName, Cordon, DebugContainer, Delete, Drain, EditHpaRange, EditLabels,
+    EditMetadata, EditTaints, EditValues, EditYaml, EvictPod, ExpandClaim, OpenShell, PauseRollout,
+    PortForward, RenewCertificate, RerunJob, RestartPod, RestartRollout, RollBack, Scale,
     SetDefaultStorageClass, SetImage, SuspendCronJob, TriggerCronJob, ViewLogs, ViewYaml,
 };
 use crate::kind_access::{KindAccess, KindAccessMap};
@@ -78,6 +78,8 @@ pub(crate) enum ResourceAction {
     EditYaml(ObjectKind),
     /// The key and value editor of a ConfigMap or Secret; carries the kind of the row (spec 0047).
     EditValues(ObjectKind),
+    /// Labels and annotations of a Pod or a workload; carries the kind of the row (spec 0032b).
+    EditMetadata(ObjectKind),
     /// Carries the kind of the new object: the `New` header button of its screen (spec 0042). It
     /// has no row and no key.
     CreateObject(ObjectKind),
@@ -131,6 +133,8 @@ pub(crate) enum RowAction {
     EditYaml,
     /// Edit values… of a ConfigMap or Secret (spec 0047); its key is E on those two screens.
     EditValues,
+    /// Has an unbound unit action only: the pod and workload menus and the palette dispatch it.
+    EditMetadata,
     RestartRollout,
     SetImage,
     /// Have unbound unit actions only: the pod menu and the palette dispatch them (spec 0040).
@@ -198,6 +202,20 @@ pub(crate) fn edit_values_kind(kind: ResourceKind) -> Option<ObjectKind> {
     match kind {
         ResourceKind::ConfigMaps => Some(ObjectKind::ConfigMap),
         ResourceKind::Secrets => Some(ObjectKind::Secret),
+        _ => None,
+    }
+}
+
+/// The object kind Edit labels / annotations changes on a row of `kind`: the workloads. A pod has its
+/// own subject.
+pub(crate) fn metadata_edit_kind(kind: ResourceKind) -> Option<ObjectKind> {
+    match kind {
+        ResourceKind::Deployments
+        | ResourceKind::StatefulSets
+        | ResourceKind::DaemonSets
+        | ResourceKind::ReplicaSets
+        | ResourceKind::Jobs
+        | ResourceKind::CronJobs => kind.builtin_object(),
         _ => None,
     }
 }
@@ -325,6 +343,10 @@ impl ResourceAction {
                 checks: vec![AccessCheck::Patch(kind)],
                 is_shipped: true,
             },
+            Self::EditMetadata(kind) => ActionGate::Mutating {
+                checks: vec![AccessCheck::Patch(kind)],
+                is_shipped: true,
+            },
             Self::CreateObject(kind) => ActionGate::Mutating {
                 checks: vec![AccessCheck::Create(kind)],
                 is_shipped: true,
@@ -384,6 +406,7 @@ impl ResourceAction {
             Self::ViewYaml => RowAction::ViewYaml,
             Self::EditYaml(_) => RowAction::EditYaml,
             Self::EditValues(_) => RowAction::EditValues,
+            Self::EditMetadata(_) => RowAction::EditMetadata,
             Self::Delete(_) => RowAction::Delete,
             Self::RestartRollout(_) => RowAction::RestartRollout,
             Self::SetImage(_) => RowAction::SetImage,
@@ -423,6 +446,7 @@ impl RowAction {
             Self::ViewYaml => Box::new(ViewYaml),
             Self::EditYaml => Box::new(EditYaml),
             Self::EditValues => Box::new(EditValues),
+            Self::EditMetadata => Box::new(EditMetadata),
             Self::Delete => Box::new(Delete),
             Self::RestartRollout => Box::new(RestartRollout),
             Self::SetImage => Box::new(SetImage),
@@ -453,7 +477,7 @@ impl RowAction {
             Self::PortForward => IconName::ArrowLeftRight,
             Self::Cordon => IconName::Ban,
             Self::Drain => IconName::ArrowDown,
-            Self::EditTaints | Self::EditLabels => IconName::Tag,
+            Self::EditTaints | Self::EditLabels | Self::EditMetadata => IconName::Tag,
             Self::EditYaml => IconName::FilePenLine,
             Self::EditValues => IconName::Pencil,
             Self::RestartRollout | Self::RestartPod => IconName::RotateCw,
@@ -514,6 +538,7 @@ pub(crate) fn action_risk(action: ResourceAction) -> ActionRisk {
         | ResourceAction::ViewYaml
         | ResourceAction::EditYaml(_)
         | ResourceAction::EditValues(_)
+        | ResourceAction::EditMetadata(_)
         | ResourceAction::CreateObject(_)
         | ResourceAction::RestartRollout(_)
         | ResourceAction::SetImage(_)
@@ -548,6 +573,7 @@ pub(crate) fn action_label(action: ResourceAction) -> &'static str {
         ResourceAction::ViewYaml => "View YAML",
         ResourceAction::EditYaml(_) => "Edit YAML",
         ResourceAction::EditValues(_) => "Edit values",
+        ResourceAction::EditMetadata(_) => "Edit labels / annotations",
         ResourceAction::CreateObject(kind) => create_label(kind),
         ResourceAction::Delete(_) => "Delete",
         ResourceAction::RestartRollout(_) => "Restart rollout",
@@ -648,6 +674,12 @@ pub(crate) fn subject_action(row: RowAction, subject: &ResourceKey) -> Option<Re
         .map(ResourceAction::EditYaml),
         // ConfigMaps and Secrets only (spec 0047 decision 9); a Helm release row, which reads as a
         // Secret by storage, a Pod, and a custom kind have none.
+        RowAction::EditMetadata => match subject {
+            ResourceKey::Pod { .. } => Some(ObjectKind::Pod),
+            ResourceKey::Node { .. } => None,
+            ResourceKey::Kind { kind, .. } => metadata_edit_kind(*kind),
+        }
+        .map(ResourceAction::EditMetadata),
         RowAction::EditValues => match subject {
             ResourceKey::Kind { kind, .. } => edit_values_kind(*kind),
             ResourceKey::Pod { .. } | ResourceKey::Node { .. } => None,
@@ -1120,6 +1152,7 @@ enum PodMenuEntry {
     DebugContainer,
     PortForward,
     Attach,
+    EditMetadata,
     EditYaml,
     ViewYaml,
     RestartPod,
@@ -1130,13 +1163,14 @@ enum PodMenuEntry {
     Separator,
 }
 
-const POD_MENU: [PodMenuEntry; 15] = [
+const POD_MENU: [PodMenuEntry; 16] = [
     PodMenuEntry::ViewLogs,
     PodMenuEntry::OpenShell,
     PodMenuEntry::DebugContainer,
     PodMenuEntry::PortForward,
     PodMenuEntry::Attach,
     PodMenuEntry::Separator,
+    PodMenuEntry::EditMetadata,
     PodMenuEntry::EditYaml,
     PodMenuEntry::ViewYaml,
     PodMenuEntry::RestartPod,
@@ -1177,6 +1211,10 @@ pub(crate) fn pod_menu(
             PodMenuEntry::DebugContainer => debug_container.take(),
             PodMenuEntry::PortForward => port_forward.take().map(|item| guarded(row, item)),
             PodMenuEntry::Attach => Some(attach_item(pod, guard)),
+            PodMenuEntry::EditMetadata => Some(action_item(
+                ResourceAction::EditMetadata(ObjectKind::Pod),
+                guard,
+            )),
             PodMenuEntry::EditYaml => Some(action_item(
                 ResourceAction::EditYaml(ObjectKind::Pod),
                 guard,
@@ -1862,6 +1900,9 @@ pub(crate) fn kind_menu(
             },
             None => disabled_menu_item(item.label, NOT_SHIPPED_REASON.into()),
         });
+    }
+    if let Some(object) = metadata_edit_kind(kind) {
+        menu = menu.item(action_item(ResourceAction::EditMetadata(object), guard));
     }
     if let Some(object) = edit_yaml {
         menu = menu.item(action_item(ResourceAction::EditYaml(object), guard));
@@ -3088,6 +3129,7 @@ fn action_item(action: ResourceAction, guard: &ClusterGuard<'_>) -> PopupMenuIte
         ResourceAction::Drain => "Drain…",
         ResourceAction::EditTaints => "Edit taints…",
         ResourceAction::EditLabels => "Edit labels…",
+        ResourceAction::EditMetadata(_) => "Edit labels / annotations…",
         _ => action_label(action),
     };
     let item = match action_availability(action, guard) {

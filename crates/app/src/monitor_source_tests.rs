@@ -27,6 +27,7 @@ fn source() -> MetricsSource {
 
 fn pod(name: &str, controller: Option<(&str, &str)>, host_network: bool) -> PodSummary {
     PodSummary {
+        annotations: cluster::AnnotationTerms::default(),
         is_finished: false,
         namespace: "shop".to_owned(),
         name: name.to_owned(),

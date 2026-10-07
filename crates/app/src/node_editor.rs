@@ -50,8 +50,8 @@ use crate::resource_kind::ResourceKind;
 use crate::row_selection::{BulkButton, BulkState, bulk_actions};
 use crate::table_selection::{ClusterObject, ResourceKey};
 
-const DIALOG_WIDTH: f32 = 560.;
-const ROWS_MAX_HEIGHT: f32 = 320.;
+pub(super) const DIALOG_WIDTH: f32 = 560.;
+pub(super) const ROWS_MAX_HEIGHT: f32 = 320.;
 const EFFECT_CHOICES: [&str; 3] = ["NoSchedule", "PreferNoSchedule", "NoExecute"];
 const MANAGED_BY_KUBERNETES: &str = "Managed by Kubernetes";
 /// The operations of a bulk label row, in select order.
@@ -141,7 +141,7 @@ pub(crate) struct NodeEditor {
 
 /// Closing an editor with changes asks first: returns whether it opened `Discard changes?`, in which
 /// case the editor stays open until the user picks Discard. An outside click never closes it.
-fn ask_before_closing(has_unsaved: bool, window: &mut Window, cx: &mut App) -> bool {
+pub(super) fn ask_before_closing(has_unsaved: bool, window: &mut Window, cx: &mut App) -> bool {
     if !has_unsaved {
         return false;
     }
@@ -182,7 +182,7 @@ fn show_node_editor(editor: Entity<NodeEditor>, title: String, window: &mut Wind
     });
 }
 
-fn text_input(
+pub(super) fn text_input(
     value: &str,
     placeholder: &'static str,
     window: &mut Window,
@@ -247,7 +247,7 @@ fn with_note(line: gpui_kit::Div, note: Option<&'static str>, muted: gpui_kit::H
 
 /// An input cell; the danger border marks the input the validation line names. The border is
 /// always there (transparent when fine) so a row keeps its height.
-fn input_cell(input: Input, is_bad: bool, danger: gpui_kit::Hsla) -> gpui_kit::Div {
+pub(super) fn input_cell(input: Input, is_bad: bool, danger: gpui_kit::Hsla) -> gpui_kit::Div {
     div()
         .flex_1()
         .rounded_md()

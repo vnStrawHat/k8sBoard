@@ -389,6 +389,7 @@ mod tests {
 
     fn pod(name: &str, created: Option<i64>) -> PodSummary {
         PodSummary {
+            annotations: cluster::AnnotationTerms::default(),
             is_finished: false,
             namespace: "ns".to_owned(),
             name: name.to_owned(),
@@ -474,6 +475,7 @@ mod tests {
 
     fn stateful_set(templates: Vec<ClaimTemplate>) -> KindObject {
         KindObject::StatefulSet(StatefulSetSummary {
+            annotations: cluster::AnnotationTerms::default(),
             namespace: "ns".to_owned(),
             name: "web".to_owned(),
             created_at: None,

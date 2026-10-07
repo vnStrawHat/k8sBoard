@@ -10,6 +10,7 @@ use crate::table_selection::ResourceKey;
 
 fn deployment() -> DeploymentSummary {
     DeploymentSummary {
+        annotations: cluster::AnnotationTerms::default(),
         namespace: "team-a".to_owned(),
         name: "api".to_owned(),
         created_at: None,
@@ -59,6 +60,20 @@ fn condition(name: &str, is_true: bool, reason: Option<&str>) -> WorkloadConditi
         message: None,
         last_transition: None,
     }
+}
+
+#[test]
+fn a_workload_row_exposes_its_annotations_for_the_drawer() {
+    let summary = DeploymentSummary {
+        annotations: cluster::AnnotationTerms::new(vec!["team=shop".to_owned()]),
+        ..deployment()
+    };
+    let row = deployment_row(&summary);
+    assert_eq!(
+        row.object.annotations(),
+        Some(&["team=shop".to_owned()][..])
+    );
+    assert_eq!(KindObject::Plain.annotations(), None);
 }
 
 #[test]
@@ -286,6 +301,7 @@ fn deployment_related_pods_use_the_deployment_owner() {
 
 fn stateful_set() -> StatefulSetSummary {
     StatefulSetSummary {
+        annotations: cluster::AnnotationTerms::default(),
         namespace: "team-a".to_owned(),
         name: "web".to_owned(),
         created_at: None,
@@ -311,6 +327,7 @@ fn stateful_set() -> StatefulSetSummary {
 
 fn daemon_set() -> DaemonSetSummary {
     DaemonSetSummary {
+        annotations: cluster::AnnotationTerms::default(),
         namespace: "team-a".to_owned(),
         name: "agent".to_owned(),
         created_at: None,
@@ -331,6 +348,7 @@ fn daemon_set() -> DaemonSetSummary {
 
 fn replica_set() -> ReplicaSetSummary {
     ReplicaSetSummary {
+        annotations: cluster::AnnotationTerms::default(),
         namespace: "team-a".to_owned(),
         name: "api-7d9f8c".to_owned(),
         created_at: None,
@@ -351,6 +369,7 @@ fn replica_set() -> ReplicaSetSummary {
 
 fn pod_named(name: &str) -> PodSummary {
     PodSummary {
+        annotations: cluster::AnnotationTerms::default(),
         is_finished: false,
         namespace: "team-a".to_owned(),
         name: name.to_owned(),

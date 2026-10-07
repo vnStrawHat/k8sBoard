@@ -136,6 +136,7 @@ fn at(text: &str) -> jiff::Timestamp {
 
 fn deployment(revision: Option<&str>) -> DeploymentSummary {
     DeploymentSummary {
+        annotations: cluster::AnnotationTerms::default(),
         namespace: "team-a".to_owned(),
         name: "api".to_owned(),
         created_at: None,
@@ -172,6 +173,7 @@ fn replica_set(
     owner: Option<ControllerRef>,
 ) -> ReplicaSetSummary {
     ReplicaSetSummary {
+        annotations: cluster::AnnotationTerms::default(),
         namespace: "team-a".to_owned(),
         name: name.to_owned(),
         created_at: None,
@@ -194,6 +196,7 @@ fn replica_set(
 
 fn job(name: &str, created: Option<&str>, owner: Option<ControllerRef>) -> JobSummary {
     JobSummary {
+        annotations: cluster::AnnotationTerms::default(),
         namespace: "team-a".to_owned(),
         name: name.to_owned(),
         created_at: created.map(at),
@@ -217,6 +220,7 @@ fn job(name: &str, created: Option<&str>, owner: Option<ControllerRef>) -> JobSu
 
 fn cron_job(schedule: &str, is_suspended: bool) -> CronJobSummary {
     CronJobSummary {
+        annotations: cluster::AnnotationTerms::default(),
         namespace: "team-a".to_owned(),
         name: "nightly".to_owned(),
         created_at: None,
@@ -676,6 +680,7 @@ fn selected_budget(selector: Option<&[&str]>) -> PodDisruptionBudgetSummary {
 
 fn labelled_pod(namespace: &str, name: &str, label: &str, is_ready: bool) -> PodSummary {
     PodSummary {
+        annotations: cluster::AnnotationTerms::default(),
         is_finished: false,
         namespace: namespace.to_owned(),
         name: name.to_owned(),
@@ -883,6 +888,7 @@ fn mounting_pod(namespace: &str, name: &str, claim: &str, paths: &[&str]) -> Pod
         mounts: vec![mount(path)],
     };
     PodSummary {
+        annotations: cluster::AnnotationTerms::default(),
         is_finished: false,
         namespace: namespace.to_owned(),
         name: name.to_owned(),
@@ -1193,6 +1199,7 @@ fn pod_running_as(namespace: &str, name: &str, account: Option<&str>) -> PodSumm
     use cluster::{PodStatus, ReadyCount, StatusReason};
 
     PodSummary {
+        annotations: cluster::AnnotationTerms::default(),
         is_finished: false,
         namespace: namespace.to_owned(),
         name: name.to_owned(),

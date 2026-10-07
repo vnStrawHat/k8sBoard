@@ -35,7 +35,7 @@ const POD_TEMPLATE_HASH: &str = "pod-template-hash";
 const CONVERSION_FAILURE: &str = "the object could not be converted to YAML";
 
 /// Annotations that embed a whole applied manifest, so they can carry Secret data and env literals.
-const MASKED_ANNOTATIONS: [&str; 3] = [
+pub(crate) const MASKED_ANNOTATIONS: [&str; 3] = [
     "kubectl.kubernetes.io/last-applied-configuration",
     "kapp.k14s.io/original",
     "kapp.k14s.io/original-diff",
@@ -738,7 +738,7 @@ const SECRET_FRAGMENTS: [&str; 14] = [
 /// Whether a key looks like it holds a credential. A name heuristic: the key is lowercased and
 /// stripped of `-`, `_`, `.`, and `/`, references are never secret, and any credential fragment
 /// makes it secret.
-pub(crate) fn is_secret_key(key: &str) -> bool {
+pub fn is_secret_key(key: &str) -> bool {
     let normalized: String = key
         .chars()
         .filter(|ch| !matches!(ch, '-' | '_' | '.' | '/'))

@@ -806,6 +806,7 @@ mod tests {
             mounts: Vec::new(),
         };
         PodSummary {
+            annotations: cluster::AnnotationTerms::default(),
             is_finished: false,
             namespace: "shop".to_owned(),
             name: name.to_owned(),

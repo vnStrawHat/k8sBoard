@@ -44,6 +44,7 @@ fn container(name: &str, state: ContainerState) -> ContainerSummary {
 
 fn pod_of(namespace: &str, name: &str, controller: Option<(&str, &str)>) -> PodSummary {
     PodSummary {
+        annotations: cluster::AnnotationTerms::default(),
         is_finished: false,
         namespace: namespace.to_owned(),
         name: name.to_owned(),
@@ -804,6 +805,7 @@ fn issue_evaluation_budget() {
 
 fn stalled_api() -> KindObject {
     KindObject::Deployment(cluster::DeploymentSummary {
+        annotations: cluster::AnnotationTerms::default(),
         namespace: "shop".to_owned(),
         name: "api".to_owned(),
         created_at: None,

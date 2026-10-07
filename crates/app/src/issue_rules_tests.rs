@@ -84,6 +84,7 @@ fn waiting(reason: StatusReason) -> ContainerState {
 
 fn pod_with(name: &str, status: PodStatus, containers: Vec<ContainerSummary>) -> PodSummary {
     PodSummary {
+        annotations: cluster::AnnotationTerms::default(),
         is_finished: false,
         namespace: "shop".to_owned(),
         name: name.to_owned(),

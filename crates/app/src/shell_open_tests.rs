@@ -62,6 +62,7 @@ fn container(name: &str, kind: ContainerKind, is_running: bool) -> ContainerSumm
 
 fn pod(name: &str, containers: Vec<ContainerSummary>) -> PodSummary {
     PodSummary {
+        annotations: cluster::AnnotationTerms::default(),
         is_finished: false,
         namespace: "shop".to_owned(),
         name: name.to_owned(),

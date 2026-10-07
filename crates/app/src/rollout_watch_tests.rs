@@ -4,6 +4,7 @@ use super::*;
 
 fn deployment(ready: u32, desired: u32) -> DeploymentSummary {
     DeploymentSummary {
+        annotations: cluster::AnnotationTerms::default(),
         namespace: "lab-shop".to_owned(),
         name: "web".to_owned(),
         created_at: None,

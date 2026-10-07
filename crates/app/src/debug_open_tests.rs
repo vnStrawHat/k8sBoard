@@ -194,6 +194,7 @@ pub(in crate::app_shell) fn container(
 
 pub(in crate::app_shell) fn pod(name: &str, containers: Vec<ContainerSummary>) -> PodSummary {
     PodSummary {
+        annotations: cluster::AnnotationTerms::default(),
         is_finished: false,
         namespace: "shop".to_owned(),
         name: name.to_owned(),

@@ -54,6 +54,7 @@ mod node_shell_leftovers;
 mod object_count;
 mod object_create;
 mod object_edit;
+mod object_metadata;
 mod object_names;
 mod object_write;
 mod object_yaml;
@@ -169,12 +170,15 @@ pub use node_maintenance_bodies::{GracePeriod, LabelChange};
 pub use node_shell_leftovers::{LeftoverPhase, NodeShellLeftover};
 pub use object_create::{DraftError, DraftFix, DraftWarning, ObjectDraft};
 pub use object_edit::{EditBase, EditError, ObjectEdit, Rebased, format_yaml, rebase};
+pub use object_metadata::ObjectMetadata;
 pub use object_names::{NameList, ObjectName};
 pub use object_write::{
     ChangedField, DeletePropagation, WriteEffect, WriteError, WriteMode, WriteOperation,
     WriteOutcome, WritePolicy, WriteRequest,
 };
-pub use object_yaml::{EnvValues, ObjectIdentity, ObjectKind, ObjectRef, ObjectYaml};
+pub use object_yaml::{
+    EnvValues, ObjectIdentity, ObjectKind, ObjectRef, ObjectYaml, is_secret_key,
+};
 pub use pending_pod::PendingPod;
 pub use persistent_volume::{ClaimRef, PersistentVolumeSummary, VolumeBackend};
 pub use persistent_volume_claim::PersistentVolumeClaimSummary;
@@ -224,4 +228,6 @@ pub use traffic::TrafficCounter;
 pub use traffic_metrics::{
     TrafficEnd, TrafficMetricSource, TrafficRate, TrafficReading, TrafficSourceKind,
 };
-pub use workload::{ContainerPort, ControllerRef, TemplateContainer, WorkloadCondition};
+pub use workload::{
+    AnnotationTerms, ContainerPort, ControllerRef, TemplateContainer, WorkloadCondition,
+};

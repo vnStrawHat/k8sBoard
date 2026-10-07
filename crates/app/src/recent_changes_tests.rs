@@ -541,6 +541,7 @@ fn replica_set(
     created: &str,
 ) -> ReplicaSetSummary {
     ReplicaSetSummary {
+        annotations: cluster::AnnotationTerms::default(),
         namespace: "payments".to_owned(),
         name: name.to_owned(),
         created_at: Some(at(created)),

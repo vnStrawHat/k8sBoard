@@ -31,6 +31,7 @@ fn service(selector: &[&str]) -> ServiceSummary {
 
 fn pod(namespace: &str, name: &str, labels: &[&str]) -> PodSummary {
     PodSummary {
+        annotations: cluster::AnnotationTerms::default(),
         is_finished: false,
         namespace: namespace.to_owned(),
         name: name.to_owned(),

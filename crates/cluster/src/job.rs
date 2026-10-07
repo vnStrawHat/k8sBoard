@@ -9,8 +9,8 @@ use crate::namespace::NamespaceScope;
 use crate::pod_status::non_negative;
 use crate::resource_watch::{WatchUpdate, selected_summary_watch, summary_watch};
 use crate::workload::{
-    ControllerRef, TemplateContainer, WorkloadCondition, condition, controller_ref, label_terms,
-    optional_count, template_containers,
+    AnnotationTerms, ControllerRef, TemplateContainer, WorkloadCondition, annotation_terms,
+    condition, controller_ref, label_terms, optional_count, template_containers,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -20,6 +20,9 @@ pub struct JobSummary {
     pub created_at: Option<jiff::Timestamp>,
     /// `key=value` terms in key order.
     pub labels: Vec<String>,
+    /// `key=value` terms in key order, for the drawer's folded Annotations section: see
+    /// `annotation_terms` for what is cut and hidden.
+    pub annotations: AnnotationTerms,
     pub status: JobStatus,
     pub completions: Option<u32>,
     pub parallelism: Option<u32>,
@@ -102,6 +105,7 @@ pub(crate) fn job_summary(job: &Job) -> JobSummary {
         name: job.metadata.name.clone().unwrap_or_default(),
         created_at: job.metadata.creation_timestamp.as_ref().map(|time| time.0),
         labels: label_terms(&job.metadata),
+        annotations: annotation_terms(&job.metadata),
         status: job_status(api_conditions),
         completions: spec.and_then(|spec| spec.completions).map(non_negative),
         parallelism: spec.and_then(|spec| spec.parallelism).map(non_negative),

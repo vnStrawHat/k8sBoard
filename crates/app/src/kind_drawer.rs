@@ -24,10 +24,10 @@ use crate::cluster_registry::ClusterRef;
 use crate::cluster_session::{CompanionLists, CompanionSource, LiveCluster, RelatedList};
 use crate::custom_rows::{date_text, date_tone};
 use crate::drawer::{
-    DrawerBody, DrawerChrome, DrawerHeader, DrawerSize, DrawerState, DrawerTab, absent_text, chips,
-    created_text, drawer_frame, drawer_tab_bar, drawer_tabs, first_section_title, helm_body,
-    link_text, menu_button, open_link, port_row, section_title, shown_tab, tab_titles,
-    truncated_text, truncated_text_with_tooltip, wide_detail_row, yaml_body,
+    DrawerBody, DrawerChrome, DrawerHeader, DrawerSize, DrawerState, DrawerTab, absent_text,
+    annotations_section, chips, created_text, drawer_frame, drawer_tab_bar, drawer_tabs,
+    first_section_title, helm_body, link_text, menu_button, open_link, port_row, section_title,
+    shown_tab, tab_titles, truncated_text, truncated_text_with_tooltip, wide_detail_row, yaml_body,
 };
 use crate::helm_release_view::HelmReleaseView;
 use crate::helm_rows::VALUES_CHANGE_TITLE;
@@ -120,6 +120,7 @@ pub(crate) fn kind_drawer(
             let paint = DrawerPaint::new(kind, row, live, now)
                 .in_cluster(&context.cluster)
                 .with_roll_back(roll_back)
+                .with_annotations_open(state.are_annotations_open)
                 .with_secret_values(state.secret_values.as_ref())
                 .with_helm(state.helm.as_ref(), state.helm_revision)
                 .with_ports(forward);
@@ -372,6 +373,13 @@ fn overview(paint: &DrawerPaint, cx: &Context<AppShell>) -> Overview {
         sections.push(section_title("Labels", cx).into_any_element());
         sections.push(chips("labels", &row.labels, cx));
     }
+    if let Some(annotations) = row.object.annotations() {
+        sections.extend(annotations_section(
+            annotations,
+            paint.are_annotations_open,
+            cx,
+        ));
+    }
     Overview {
         sections,
         section_starts,
@@ -585,6 +593,8 @@ pub(crate) struct DrawerPaint<'a> {
     cluster: Option<&'a ClusterRef>,
     /// The gate of the Roll back buttons of a Deployment's revisions.
     roll_back: Option<DrawerWriteGate>,
+    /// Whether the Annotations section shows its list.
+    are_annotations_open: bool,
 }
 
 impl<'a> DrawerPaint<'a> {
@@ -605,6 +615,7 @@ impl<'a> DrawerPaint<'a> {
             helm_revision: None,
             cluster: None,
             roll_back: None,
+            are_annotations_open: false,
         }
     }
 }
@@ -617,6 +628,11 @@ impl<'a> DrawerPaint<'a> {
 
     fn with_roll_back(mut self, gate: Option<DrawerWriteGate>) -> Self {
         self.roll_back = gate;
+        self
+    }
+
+    fn with_annotations_open(mut self, is_open: bool) -> Self {
+        self.are_annotations_open = is_open;
         self
     }
 

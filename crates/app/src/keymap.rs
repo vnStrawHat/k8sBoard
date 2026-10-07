@@ -63,6 +63,7 @@ gpui_kit::actions!(
         DebugContainer,
         EditTaints,
         EditLabels,
+        EditMetadata,
         // Pod removals (0040): the pod menu, the palette, and Shift R / X dispatch them.
         RestartPod,
         EvictPod,

@@ -34,6 +34,7 @@ Status: **built (steps 1 to 4, 2026-10-03)**, see [as-built.md](as-built.md); re
 | [files-to-touch.md](files-to-touch.md) | files per step, doc updates |
 | [test-plan.md](test-plan.md) | fake transport, unit and window tests, UAT denied path, ui-verifier |
 | [as-built.md](as-built.md) | where the code differs from the text above, behavior notes, tests, UAT |
+| [metadata-edit.md](metadata-edit.md) | Edit labels / annotations of pods and workloads (UX round 3) |
 
 ## Acceptance criteria
 

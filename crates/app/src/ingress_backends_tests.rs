@@ -52,6 +52,7 @@ fn service(name: &str, ports: &[(Option<&str>, u16)], selector: &[&str]) -> Serv
 
 fn pod(label: &str, is_ready: bool) -> PodSummary {
     PodSummary {
+        annotations: cluster::AnnotationTerms::default(),
         namespace: "shop".to_owned(),
         name: format!("{label}-0"),
         status: PodStatus::Reason(StatusReason::Running),

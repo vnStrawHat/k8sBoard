@@ -68,6 +68,7 @@ fn container(kind: ContainerKind, cpu: &str, memory: &str) -> ContainerSummary {
 
 fn pod(name: &str, node: &str, status: StatusReason, cpu: &str, memory: &str) -> PodSummary {
     PodSummary {
+        annotations: cluster::AnnotationTerms::default(),
         is_finished: false,
         namespace: "ns".to_owned(),
         name: name.to_owned(),

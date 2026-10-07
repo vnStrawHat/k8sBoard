@@ -89,6 +89,7 @@ mod log_target;
 mod log_volume;
 mod log_window;
 mod log_workload;
+mod metadata_edits;
 mod metrics_history;
 mod metrics_page;
 mod monitor_data;

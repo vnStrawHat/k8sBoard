@@ -26,9 +26,10 @@ use crate::container_detail::{
 };
 use crate::dock::Dock;
 use crate::drawer::{
-    DrawerBody, DrawerChrome, DrawerHeader, DrawerSize, DrawerState, DrawerTab, absent_text, chips,
-    created_text, detail_row, drawer_frame, drawer_tab_bar, drawer_tabs, first_section_title,
-    link_text, menu_button, section_title, shown_tab, tab_titles, value_or_absent, yaml_body,
+    DrawerBody, DrawerChrome, DrawerHeader, DrawerSize, DrawerState, DrawerTab, absent_text,
+    annotations_section, chips, created_text, detail_row, drawer_frame, drawer_tab_bar,
+    drawer_tabs, first_section_title, link_text, menu_button, section_title, shown_tab, tab_titles,
+    value_or_absent, yaml_body,
 };
 use crate::kind_join::services_selecting;
 use crate::kind_row::deployment_of_pod;
@@ -106,6 +107,7 @@ pub(crate) fn pod_drawer(
                 loaded_events,
                 session.read(cx).live(),
                 now,
+                state.are_annotations_open,
                 cx,
             ))
         }
@@ -232,6 +234,7 @@ fn overview(
     events: Option<&[EventSummary]>,
     live: Option<&LiveCluster>,
     now: jiff::Timestamp,
+    are_annotations_open: bool,
     cx: &Context<AppShell>,
 ) -> AnyElement {
     let running = pod
@@ -359,6 +362,11 @@ fn overview(
         .children(volumes_section(pod, cx))
         .child(section_title("Labels", cx))
         .child(chips("pod-labels", &labels, cx))
+        .children(annotations_section(
+            pod.annotations.terms(),
+            are_annotations_open,
+            cx,
+        ))
         .into_any_element()
 }
 

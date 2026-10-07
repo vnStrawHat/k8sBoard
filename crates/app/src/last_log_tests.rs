@@ -48,6 +48,7 @@ fn crash_loop() -> ContainerState {
 
 fn pod(containers: Vec<ContainerSummary>) -> PodSummary {
     PodSummary {
+        annotations: cluster::AnnotationTerms::default(),
         namespace: "shop".to_owned(),
         name: "api-0".to_owned(),
         status: PodStatus::Reason(StatusReason::CrashLoopBackOff),

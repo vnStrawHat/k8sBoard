@@ -260,6 +260,7 @@ pub(crate) fn oom_killed(finished_at: &str) -> Termination {
 
 pub(crate) fn fixture_pod(name: &str, containers: Vec<ContainerSummary>) -> PodSummary {
     PodSummary {
+        annotations: cluster::AnnotationTerms::default(),
         is_finished: false,
         namespace: "shop".to_owned(),
         name: name.to_owned(),

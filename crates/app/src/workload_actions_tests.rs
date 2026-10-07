@@ -18,6 +18,7 @@ pub(crate) fn test_cluster() -> ClusterRef {
 
 pub(crate) fn deployment(name: &str) -> DeploymentSummary {
     DeploymentSummary {
+        annotations: cluster::AnnotationTerms::default(),
         namespace: "team-a".to_owned(),
         name: name.to_owned(),
         created_at: None,
@@ -43,6 +44,7 @@ pub(crate) fn deployment(name: &str) -> DeploymentSummary {
 
 pub(crate) fn stateful_set(name: &str, update_strategy: &str) -> StatefulSetSummary {
     StatefulSetSummary {
+        annotations: cluster::AnnotationTerms::default(),
         namespace: "team-a".to_owned(),
         name: name.to_owned(),
         created_at: None,
@@ -63,6 +65,7 @@ pub(crate) fn stateful_set(name: &str, update_strategy: &str) -> StatefulSetSumm
 
 fn daemon_set(name: &str, update_strategy: &str) -> DaemonSetSummary {
     DaemonSetSummary {
+        annotations: cluster::AnnotationTerms::default(),
         namespace: "team-a".to_owned(),
         name: name.to_owned(),
         created_at: None,
@@ -83,6 +86,7 @@ fn daemon_set(name: &str, update_strategy: &str) -> DaemonSetSummary {
 
 pub(crate) fn cron_job(name: &str, policy: &str, active: usize) -> CronJobSummary {
     CronJobSummary {
+        annotations: cluster::AnnotationTerms::default(),
         namespace: "team-a".to_owned(),
         name: name.to_owned(),
         created_at: None,
@@ -104,6 +108,7 @@ pub(crate) fn cron_job(name: &str, policy: &str, active: usize) -> CronJobSummar
 
 pub(crate) fn job(name: &str) -> JobSummary {
     JobSummary {
+        annotations: cluster::AnnotationTerms::default(),
         namespace: "team-a".to_owned(),
         name: name.to_owned(),
         created_at: None,
@@ -706,6 +711,7 @@ pub(crate) fn replica_set(
     image: &str,
 ) -> ReplicaSetSummary {
     ReplicaSetSummary {
+        annotations: cluster::AnnotationTerms::default(),
         namespace: "team-a".to_owned(),
         name: name.to_owned(),
         created_at: None,
