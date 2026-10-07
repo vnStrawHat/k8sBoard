@@ -671,15 +671,16 @@ fn a_discarded_start_deletes_its_pod_without_a_window(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-fn finished_deletes_are_dropped_and_any_delete_hooks_the_quit(cx: &mut TestAppContext) {
+fn a_fresh_shell_has_hooked_the_quit_and_finished_deletes_are_dropped(cx: &mut TestAppContext) {
     let debugs = node_clusters("nc-prune", Answers::Waiting, cx);
     let plan = node_plan(&debugs, &debugs.stg.clone(), cx);
     let connection = debugs.session_connection(&debugs.stg, cx);
+    // The shell hooked the quit when it opened, before any node shell.
     assert!(
         debugs
             .fixture
             .shell
-            .read_with(cx, |shell, _| shell.node_shell_runs.quit.is_none())
+            .read_with(cx, |shell, _| shell.node_shell_runs.quit.is_some())
     );
     for round in 1..=3 {
         debugs.fixture.shell.update(cx, |shell, cx| {
@@ -695,13 +696,6 @@ fn finished_deletes_are_dropped_and_any_delete_hooks_the_quit(cx: &mut TestAppCo
                 .read_with(cx, |shell, _| shell.node_shell_runs.pending.is_empty())
         });
     }
-    // A delete that no tab started (a sweep row, a late create) hooked the quit all the same.
-    assert!(
-        debugs
-            .fixture
-            .shell
-            .read_with(cx, |shell, _| shell.node_shell_runs.quit.is_some())
-    );
     // The next start drops the tasks of the finished ones.
     debugs.fixture.shell.update(cx, |shell, cx| {
         shell.discard_debug_start(&plan, &connection, &created(Some("uid-1")), cx);

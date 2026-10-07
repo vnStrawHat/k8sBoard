@@ -85,19 +85,14 @@ impl AppShell {
         }
     }
 
-    /// Remembers how to delete the pod behind `tab`. The first call also hooks the app quit.
-    pub(super) fn register_cleanup(
-        &mut self,
-        tab: EntityId,
-        cleanup: NodeShellCleanup,
-        cx: &mut Context<Self>,
-    ) {
+    /// Remembers how to delete the pod behind `tab`.
+    pub(super) fn register_cleanup(&mut self, tab: EntityId, cleanup: NodeShellCleanup) {
         self.node_shell_runs.cleanups.insert(tab, cleanup);
-        self.ensure_quit_hook(cx);
     }
 
-    /// The first delete of the run hooks the app quit, whatever started it (a tab, the sweep).
-    fn ensure_quit_hook(&mut self, cx: &mut Context<Self>) {
+    /// Hooks the app quit, once, when the shell opens: a drain abandoned by quitting writes its
+    /// `abandoned` line from the hook whether or not a node shell was ever opened.
+    pub(super) fn hook_app_quit(&mut self, cx: &mut Context<Self>) {
         if self.node_shell_runs.quit.is_none() {
             self.node_shell_runs.quit =
                 Some(cx.on_app_quit(|shell, cx| shell.cleanup_for_quit(cx)));
@@ -115,7 +110,6 @@ impl AppShell {
     /// Starts one delete (a tab's, a sweep row's, or one the window close or a late start owes).
     /// The line to write if the app quits first is remembered until the delete reports.
     pub(super) fn begin_cleanup(&mut self, cleanup: NodeShellCleanup, cx: &mut Context<Self>) {
-        self.ensure_quit_hook(cx);
         let runs = &mut self.node_shell_runs;
         // Finished deletes are no longer pending: their tasks can go.
         runs.in_flight

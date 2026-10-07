@@ -310,7 +310,7 @@ impl AppShell {
         self.watch_shell(&tab, cx);
         self.begin_shell_start(&tab, ShellCommand::Auto, cx);
         if let Some(cleanup) = cleanup {
-            self.register_cleanup(tab.entity_id(), cleanup, cx);
+            self.register_cleanup(tab.entity_id(), cleanup);
         }
         self.store_debug_choice(&plan.cluster, &plan.image, plan.namespace.as_deref(), cx);
     }

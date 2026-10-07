@@ -972,6 +972,9 @@ impl AppShell {
         if options.screen.is_port_forward_fixture() {
             shell.fill_forward_fixture(options.screen != LaunchScreen::PortForwardsList, cx);
         }
+        // A drain abandoned by quitting writes its `abandoned` line from this hook, whether or not
+        // a node shell was ever opened.
+        shell.hook_app_quit(cx);
         shell
     }
 
