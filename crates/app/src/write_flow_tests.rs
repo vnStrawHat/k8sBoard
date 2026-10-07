@@ -475,6 +475,7 @@ fn debug_write_intent() -> Rc<WriteIntent> {
         risk: ActionRisk::Change,
         warnings: Vec::new(),
         change_lines: Vec::new(),
+        audit_fields: Vec::new(),
     })
 }
 
@@ -764,6 +765,7 @@ fn job_intent(action: ResourceAction, kind: ObjectKind, operation: WriteOperatio
         risk: ActionRisk::Change,
         warnings: Vec::new(),
         change_lines: Vec::new(),
+        audit_fields: Vec::new(),
     }
 }
 

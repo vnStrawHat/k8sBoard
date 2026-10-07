@@ -59,7 +59,7 @@ pub(crate) struct AuditObject {
     pub(crate) name: String,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 pub(crate) struct AuditField {
     pub(crate) path: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -127,16 +127,26 @@ pub(crate) fn audit_entry(
     note: Option<&str>,
 ) -> AuditEntry {
     let target = intent.request.target();
-    let fields = intent
+    // A field the intent knows more about (the old and new value of a label an edit changed)
+    // refines the request's path-only one; the rest are appended.
+    let mut extras = intent.audit_fields.clone();
+    let mut fields: Vec<AuditField> = intent
         .request
         .changed_fields()
         .into_iter()
-        .map(|field| AuditField {
-            path: field.path.into_owned(),
-            value: field.value,
-            from: field.from,
+        .map(|field| {
+            let known = extras
+                .iter()
+                .position(|extra| extra.path == field.path)
+                .map(|index| extras.remove(index));
+            AuditField {
+                path: field.path.into_owned(),
+                value: field.value.or_else(|| known.as_ref()?.value.clone()),
+                from: field.from.or_else(|| known.as_ref()?.from.clone()),
+            }
         })
         .collect();
+    fields.extend(extras);
     AuditEntry {
         at: timestamp_now(),
         cluster: guard.display_name().to_owned(),

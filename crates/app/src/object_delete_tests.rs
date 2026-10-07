@@ -308,21 +308,24 @@ fn pvc_warning_uses_the_bound_volume() {
             ObjectKind::PersistentVolumeClaim,
             &claim(ClaimVolume::Deletes("pv-9".to_owned()))
         )),
-        ["The bound volume pv-9 has reclaim policy Delete: its data is deleted too"]
+        ["The PersistentVolume pv-9 is deleted too (reclaim policy Delete)"]
     );
     assert_eq!(
         lines(kind_warnings(
             ObjectKind::PersistentVolumeClaim,
-            &claim(ClaimVolume::NotLoaded)
+            &claim(ClaimVolume::NotLoaded("pv-9".to_owned()))
         )),
         ["If the bound volume's reclaim policy is Delete, its data is deleted too"]
     );
-    assert!(
-        kind_warnings(
+    assert_eq!(
+        lines(kind_warnings(
             ObjectKind::PersistentVolumeClaim,
-            &claim(ClaimVolume::Keeps)
-        )
-        .is_empty()
+            &claim(ClaimVolume::Keeps {
+                volume: "pv-9".to_owned(),
+                policy: "Retain".to_owned()
+            })
+        )),
+        ["The PersistentVolume pv-9 is kept (reclaim policy Retain)"]
     );
     assert!(
         kind_warnings(
@@ -812,4 +815,173 @@ fn only_the_pods_of_a_bulk_delete_without_a_controller_get_the_tag() {
     assert!(pods_without_controller(&single).is_empty());
     let owned = batch_of(ObjectKind::Pod, vec![pod("a", true), pod("b", true)]);
     assert!(pods_without_controller(&owned).is_empty());
+}
+
+#[test]
+fn a_volume_read_settles_a_claim_whose_list_was_not_loaded() {
+    let not_loaded = || TargetFacts::Claim(ClaimVolume::NotLoaded("pv-9".to_owned()));
+    assert_eq!(
+        with_reclaim_policy(not_loaded(), Some("Delete".to_owned())),
+        TargetFacts::Claim(ClaimVolume::Deletes("pv-9".to_owned()))
+    );
+    assert_eq!(
+        with_reclaim_policy(not_loaded(), Some("Retain".to_owned())),
+        TargetFacts::Claim(ClaimVolume::Keeps {
+            volume: "pv-9".to_owned(),
+            policy: "Retain".to_owned()
+        })
+    );
+    // A failed read keeps the conditional line; any other fact is left alone.
+    assert_eq!(with_reclaim_policy(not_loaded(), None), not_loaded());
+    assert_eq!(
+        with_reclaim_policy(TargetFacts::Plain, Some("Delete".to_owned())),
+        TargetFacts::Plain
+    );
+}
+
+fn binding_target(kind: ObjectKind, name: &str, subjects: &[&str]) -> DeleteTarget {
+    target_of(
+        kind,
+        name,
+        TargetFacts::Binding(BindingFacts {
+            role_kind: "ClusterRole".to_owned(),
+            role: "cluster-admin".to_owned(),
+            subjects: subjects.iter().map(|text| (*text).to_owned()).collect(),
+        }),
+    )
+}
+
+#[test]
+fn a_binding_delete_says_what_it_takes_away() {
+    let target = binding_target(
+        ObjectKind::ClusterRoleBinding,
+        "lab-admin",
+        &["ServiceAccount lab-batch/default"],
+    );
+    assert_eq!(
+        lines(kind_warnings(ObjectKind::ClusterRoleBinding, &[target])),
+        ["Removes cluster-admin from ServiceAccount lab-batch/default"]
+    );
+    let many = binding_target(
+        ObjectKind::RoleBinding,
+        "readers",
+        &["User a", "User b", "Group c", "User d", "User e"],
+    );
+    assert_eq!(
+        lines(kind_warnings(ObjectKind::RoleBinding, &[many])),
+        ["Removes cluster-admin from User a, User b, Group c and 2 more"]
+    );
+    let none = binding_target(ObjectKind::RoleBinding, "empty", &[]);
+    assert_eq!(
+        lines(kind_warnings(ObjectKind::RoleBinding, &[none])),
+        ["Removes the binding of cluster-admin; it has no subjects"]
+    );
+}
+
+#[test]
+fn a_bulk_binding_delete_names_each_binding_and_counts_the_rest() {
+    let targets: Vec<DeleteTarget> = ["a", "b", "c", "d"]
+        .iter()
+        .map(|name| binding_target(ObjectKind::ClusterRoleBinding, name, &["User x"]))
+        .collect();
+    assert_eq!(
+        lines(kind_warnings(ObjectKind::ClusterRoleBinding, &targets)),
+        [
+            "a: Removes cluster-admin from User x",
+            "b: Removes cluster-admin from User x",
+            "c: Removes cluster-admin from User x",
+            "and 1 more bindings",
+        ]
+    );
+}
+
+#[test]
+fn the_audit_line_of_a_deleted_binding_keeps_its_grant() {
+    let target = binding_target(
+        ObjectKind::ClusterRoleBinding,
+        "lab-admin",
+        &["ServiceAccount lab-batch/default", "User alice"],
+    );
+    let batch = batch_of(ObjectKind::ClusterRoleBinding, vec![target]);
+    let BatchExtras::Delete(extras) = &batch.plan.extras else {
+        panic!("a delete batch");
+    };
+    let fields = audit_fields_of(extras, &batch.plan.items[0]);
+    let paths: Vec<(&str, Option<&str>)> = fields
+        .iter()
+        .map(|field| (field.path.as_str(), field.value.as_deref()))
+        .collect();
+    assert_eq!(
+        paths,
+        [
+            ("roleRef", Some("ClusterRole/cluster-admin")),
+            (
+                "subjects",
+                Some("ServiceAccount lab-batch/default, User alice")
+            ),
+        ]
+    );
+    // The item's own intent carries them to the audit line.
+    let intent = batch.item_intent(&batch.plan.items[0]);
+    assert_eq!(intent.audit_fields.len(), 2);
+}
+
+fn replica_set_target(name: &str, pods: u32, rollback: Option<(&str, &str)>) -> DeleteTarget {
+    target_of(
+        ObjectKind::ReplicaSet,
+        name,
+        TargetFacts::ReplicaSet(ReplicaSetFacts {
+            pods,
+            rollback: rollback.map(|(deployment, revision)| RollbackTarget {
+                deployment: deployment.to_owned(),
+                revision: revision.to_owned(),
+            }),
+        }),
+    )
+}
+
+#[test]
+fn deleting_a_rollback_target_says_the_deployment_loses_that_revision() {
+    let old = replica_set_target("web-6f", 0, Some(("web", "21")));
+    assert_eq!(
+        lines(kind_warnings(ObjectKind::ReplicaSet, &[old])),
+        ["Deployment web can no longer roll back to rev 21"]
+    );
+    let live = replica_set_target("web-7a", 3, None);
+    assert!(kind_warnings(ObjectKind::ReplicaSet, &[live]).is_empty());
+    let two = [
+        replica_set_target("a", 0, Some(("web", "20"))),
+        replica_set_target("b", 0, Some(("web", "21"))),
+    ];
+    assert_eq!(
+        lines(kind_warnings(ObjectKind::ReplicaSet, &two)),
+        [
+            "2 of these are revisions kept for rollback: their Deployments can no longer roll back to them"
+        ]
+    );
+}
+
+#[test]
+fn a_replica_set_without_pods_has_no_propagation_choice() {
+    let batch = |targets| extras(ObjectKind::ReplicaSet, targets);
+    assert!(!has_dependents(&batch(vec![replica_set_target(
+        "old", 0, None
+    )])));
+    assert!(has_dependents(&batch(vec![replica_set_target(
+        "live", 2, None
+    )])));
+    // One with pods among the rest keeps the choice.
+    assert!(has_dependents(&batch(vec![
+        replica_set_target("old", 0, None),
+        replica_set_target("live", 2, None)
+    ])));
+    // Other owner kinds are unchanged.
+    assert!(has_dependents(&extras(
+        ObjectKind::Deployment,
+        vec![target_of(ObjectKind::Deployment, "web", TargetFacts::Plain)]
+    )));
+    assert!(!has_dependents(&extras(
+        ObjectKind::ConfigMap,
+        vec![target_of(ObjectKind::ConfigMap, "cm", TargetFacts::Plain)]
+    )));
 }

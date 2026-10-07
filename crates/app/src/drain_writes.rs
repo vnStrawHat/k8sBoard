@@ -70,6 +70,7 @@ pub(crate) fn removal_write(
         risk: action_risk(ResourceAction::Drain),
         warnings: Vec::new(),
         change_lines: Vec::new(),
+        audit_fields: Vec::new(),
     })
 }
 

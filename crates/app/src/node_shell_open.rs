@@ -186,6 +186,7 @@ impl AppShell {
             risk,
             warnings: Vec::new(),
             change_lines: Vec::new(),
+            audit_fields: Vec::new(),
         });
         let plan = Rc::new(TabPlan {
             cluster: cluster.clone(),
@@ -296,6 +297,7 @@ impl AppShell {
             risk,
             warnings: Vec::new(),
             change_lines: Vec::new(),
+            audit_fields: Vec::new(),
         });
         let intent = ConnectIntent {
             cluster,

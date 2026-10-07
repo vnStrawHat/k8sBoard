@@ -17,7 +17,7 @@ use gpui_kit::component::notification::Notification;
 use gpui_kit::{AnyWindowHandle, App, AppContext as _, Context, SharedString, WeakEntity, Window};
 
 use super::object_delete::{
-    DeleteExtras, Removal, delete_commit_progress, delete_notice, with_targets,
+    DeleteExtras, Removal, audit_fields_of, delete_commit_progress, delete_notice, with_targets,
 };
 use super::rollout_watch::{notify_rollout, rollout_toast_id};
 use super::write_flow::{
@@ -400,6 +400,10 @@ impl BatchIntent {
             risk: self.risk,
             warnings: self.warnings.clone(),
             change_lines: Vec::new(),
+            audit_fields: match &self.plan.extras {
+                BatchExtras::Delete(extras) => audit_fields_of(extras, item),
+                _ => Vec::new(),
+            },
         }
     }
 }

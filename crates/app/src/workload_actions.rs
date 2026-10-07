@@ -101,6 +101,7 @@ fn intent_of(
         risk: described.risk,
         warnings: described.warnings,
         change_lines: Vec::new(),
+        audit_fields: Vec::new(),
     })
 }
 

@@ -961,6 +961,7 @@ impl ValuesEditView {
             risk: ActionRisk::Change,
             warnings,
             change_lines: Vec::new(),
+            audit_fields: Vec::new(),
         };
         let open_id = self.open_id;
         let _ = self.shell.update(cx, |shell, cx| {

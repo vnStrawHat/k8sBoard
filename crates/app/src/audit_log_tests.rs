@@ -274,6 +274,7 @@ fn write_entry_uses_the_intent_cluster() {
         risk: ActionRisk::Change,
         warnings: Vec::new(),
         change_lines: Vec::new(),
+        audit_fields: Vec::new(),
     };
     let access = AccessState::Unknown;
     // The guard is the intent's cluster, whatever else is viewed.
@@ -841,6 +842,7 @@ fn a_scale_line_keeps_the_old_and_the_new_count() {
         risk: crate::write_guard::ActionRisk::Destructive,
         warnings: Vec::new(),
         change_lines: Vec::new(),
+        audit_fields: Vec::new(),
     };
     let access = AccessState::Unknown;
     let guard = test_guard(&access, WriteLock::Unlocked, "stg-b", Environment::STAGING);
@@ -857,6 +859,68 @@ fn a_path_only_kind_drops_the_old_value_too() {
     let fields = vec![AuditField {
         from: Some("hunter2".to_owned()),
         ..field("data.password", Some("hunter3"))
+    }];
+    let recorded = recordable_fields("Secret", fields);
+    assert!(recorded[0].value.is_none() && recorded[0].from.is_none());
+}
+
+#[test]
+fn an_edit_line_refines_its_path_with_the_values_the_intent_knows() {
+    use crate::app_shell::write_flow::WriteIntent;
+    use crate::yaml_edit::edit_intent;
+    use crate::yaml_edit::yaml_edit_tests::sample_edit;
+    use cluster::{ObjectKind, ObjectRef, WriteOperation, WriteRequest};
+
+    let target = ObjectRef::new(
+        ObjectKind::Deployment,
+        Some("payments".to_owned()),
+        "api".to_owned(),
+    )
+    .expect("a deployment");
+    let request = WriteRequest::new(
+        target,
+        WriteOperation::ReplaceObject(Box::new(sample_edit())),
+    )
+    .expect("an editable kind");
+    let cluster = crate::cluster_registry::ClusterRef {
+        kubeconfig: PathBuf::from("test.yaml"),
+        context: "stg-b".to_owned(),
+    };
+    let mut intent: WriteIntent = edit_intent(
+        &cluster,
+        &"stg-b".into(),
+        ObjectKind::Deployment,
+        request,
+        Vec::new(),
+    );
+    intent.audit_fields = vec![
+        AuditField {
+            from: Some("3".to_owned()),
+            ..field("spec.replicas", Some("4"))
+        },
+        AuditField {
+            from: None,
+            ..field("metadata.labels.team", Some("platform"))
+        },
+    ];
+    let access = AccessState::Unknown;
+    let guard = test_guard(&access, WriteLock::Unlocked, "stg-b", Environment::STAGING);
+    let entry = audit_entry(&intent, &guard, AuditOutcome::Applied, None, None);
+    let json = serde_json::to_value(&entry.fields).expect("fields serialize");
+    assert_eq!(
+        json,
+        serde_json::json!([
+            { "path": "spec.replicas", "value": "4", "from": "3" },
+            { "path": "metadata.labels.team", "value": "platform" },
+        ])
+    );
+}
+
+#[test]
+fn a_secret_edit_keeps_no_values_even_when_the_intent_knows_them() {
+    let fields = vec![AuditField {
+        from: Some("old".to_owned()),
+        ..field("metadata.labels.team", Some("new"))
     }];
     let recorded = recordable_fields("Secret", fields);
     assert!(recorded[0].value.is_none() && recorded[0].from.is_none());

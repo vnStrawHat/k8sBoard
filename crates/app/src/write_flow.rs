@@ -75,6 +75,9 @@ pub(crate) struct WriteIntent {
     /// What the dialog lists as the change, such as `image: a → b`. Empty lists the request's
     /// changed fields, which hold paths and new values only.
     pub(crate) change_lines: Vec<SharedString>,
+    /// What the audit line records besides the request's changed fields: facts of the object the
+    /// request cannot name, such as what a deleted binding granted (`roleRef`, `subjects`).
+    pub(crate) audit_fields: Vec<AuditField>,
 }
 
 impl WriteIntent {
@@ -794,6 +797,7 @@ pub(crate) fn cordon_intent(
         risk: action_risk(ResourceAction::Cordon),
         warnings: Vec::new(),
         change_lines: Vec::new(),
+        audit_fields: Vec::new(),
     })
 }
 

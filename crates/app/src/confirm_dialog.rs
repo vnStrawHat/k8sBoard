@@ -31,7 +31,8 @@ use crate::app_shell::batch_write::{
     summarize_dry_runs,
 };
 use crate::app_shell::object_delete::{
-    delete_dry_run_progress, pods_without_controller, propagation_choices, with_propagation,
+    delete_dry_run_progress, has_dependents, pods_without_controller, propagation_choices,
+    with_propagation,
 };
 use crate::app_shell::write_flow::{
     CheckedWriteError, CommitMode, ConnectCommit, ConnectIntent, DryRunState, TypedMatch,
@@ -1287,7 +1288,7 @@ impl ConfirmDialog {
         let BatchExtras::Delete(extras) = &batch.plan.extras else {
             return None;
         };
-        if self.outcome.is_some() || !extras.kind.owns_dependents() {
+        if self.outcome.is_some() || !has_dependents(extras) {
             return None;
         }
         let muted = cx.theme().muted_foreground;

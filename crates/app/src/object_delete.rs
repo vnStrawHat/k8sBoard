@@ -8,9 +8,9 @@
 //! guard, connection, lock, and tier from that cluster's own slot, never from the primary.
 
 use cluster::{
-    ClusterConnection, ClusterError, ControllerRef, DeletePropagation, GracePeriod,
-    HELM_RELEASE_SECRET_TYPE, ObjectIdentity, ObjectKind, ObjectRef, WriteEffect, WriteError,
-    WriteOperation, WriteOutcome, WriteRequest,
+    BindingSummary, ClusterConnection, ClusterError, ControllerRef, DeletePropagation, GracePeriod,
+    HELM_RELEASE_SECRET_TYPE, ObjectIdentity, ObjectKind, ObjectRef, ReplicaSetSummary,
+    SubjectKind, WriteEffect, WriteError, WriteOperation, WriteOutcome, WriteRequest,
 };
 use gpui_kit::component::WindowExt as _;
 use gpui_kit::component::notification::Notification;
@@ -22,7 +22,9 @@ use super::batch_write::{
     SkippedItem, named_list,
 };
 use super::write_flow::{CheckedWriteError, write_error_text};
+use crate::access_bindings::service_account_text;
 use crate::age::format_age;
+use crate::audit_log::AuditField;
 use crate::cluster_registry::ClusterRef;
 use crate::cluster_runtime::ClusterRuntime;
 use crate::cluster_session::{CompanionLists, LiveCluster, error_text};
@@ -105,18 +107,166 @@ pub(crate) enum TargetFacts {
         deletes_asset: bool,
     },
     Claim(ClaimVolume),
+    /// A RoleBinding or ClusterRoleBinding: what it grants, and to whom.
+    Binding(BindingFacts),
+    ReplicaSet(ReplicaSetFacts),
+}
+
+/// What a ReplicaSet delete takes away besides the ReplicaSet itself.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ReplicaSetFacts {
+    /// The pods it runs now: with none, the propagation choice has nothing to decide.
+    pub(crate) pods: u32,
+    /// The Deployment and revision that keep this ReplicaSet as a rollback target: an old revision
+    /// (no pods) a Deployment owns.
+    pub(crate) rollback: Option<RollbackTarget>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct RollbackTarget {
+    pub(crate) deployment: String,
+    pub(crate) revision: String,
+}
+
+impl ReplicaSetFacts {
+    fn of(set: &ReplicaSetSummary) -> Self {
+        let rollback = match (&set.owner, &set.revision) {
+            (Some(owner), Some(revision)) if owner.kind == "Deployment" && set.current == 0 => {
+                Some(RollbackTarget {
+                    deployment: owner.name.clone(),
+                    revision: revision.clone(),
+                })
+            }
+            _ => None,
+        };
+        Self {
+            pods: set.current,
+            rollback,
+        }
+    }
+}
+
+/// Whether the delete has dependents its propagation policy decides about: not a ReplicaSet that
+/// runs no pod.
+pub(crate) fn has_dependents(extras: &DeleteExtras) -> bool {
+    extras.kind.owns_dependents()
+        && !extras.targets.iter().all(
+            |target| matches!(&target.facts, TargetFacts::ReplicaSet(facts) if facts.pods == 0),
+        )
+}
+
+/// `Deployment web can no longer roll back to rev 21`, one line for the first rollback targets.
+fn replica_set_lines(targets: &[DeleteTarget]) -> Vec<String> {
+    let rollbacks: Vec<&RollbackTarget> = targets
+        .iter()
+        .filter_map(|target| match &target.facts {
+            TargetFacts::ReplicaSet(ReplicaSetFacts {
+                rollback: Some(rollback),
+                ..
+            }) => Some(rollback),
+            _ => None,
+        })
+        .collect();
+    match rollbacks.as_slice() {
+        [] => Vec::new(),
+        [one] => vec![format!(
+            "Deployment {} can no longer roll back to rev {}",
+            one.deployment, one.revision
+        )],
+        many => vec![format!(
+            "{} of these are revisions kept for rollback: their Deployments can no longer roll back to them",
+            many.len()
+        )],
+    }
+}
+
+/// The grant a binding makes, for the delete's warning and its audit line.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct BindingFacts {
+    /// `ClusterRole`, or `Role`.
+    pub(crate) role_kind: String,
+    pub(crate) role: String,
+    /// `ServiceAccount lab-batch/default`, `User alice`, `Group devs`.
+    pub(crate) subjects: Vec<String>,
+}
+
+impl BindingFacts {
+    fn of(binding: &BindingSummary) -> Self {
+        let subjects = binding
+            .subjects
+            .iter()
+            .map(|subject| match subject.kind {
+                SubjectKind::ServiceAccount => {
+                    format!("ServiceAccount {}", service_account_text(subject))
+                }
+                SubjectKind::User => format!("User {}", subject.name),
+                SubjectKind::Group => format!("Group {}", subject.name),
+            })
+            .collect();
+        Self {
+            role_kind: binding.role.kind.to_string(),
+            role: binding.role.name.clone(),
+            subjects,
+        }
+    }
+
+    /// `Removes cluster-admin from ServiceAccount lab-batch/default`, at most three subjects and
+    /// then `and 2 more`; a binding without subjects grants nothing to anyone.
+    fn removal_line(&self) -> String {
+        if self.subjects.is_empty() {
+            return format!("Removes the binding of {}; it has no subjects", self.role);
+        }
+        format!(
+            "Removes {} from {}",
+            self.role,
+            listed_subjects(&self.subjects, BINDING_LINE_SUBJECTS)
+        )
+    }
+
+    /// The audit fields of the deleted binding: `roleRef` and `subjects`.
+    fn audit_fields(&self) -> Vec<AuditField> {
+        let field = |path: &str, value: String| AuditField {
+            path: path.to_owned(),
+            value: Some(value),
+            from: None,
+        };
+        vec![
+            field("roleRef", format!("{}/{}", self.role_kind, self.role)),
+            field(
+                "subjects",
+                listed_subjects(&self.subjects, BINDING_AUDIT_SUBJECTS),
+            ),
+        ]
+    }
+}
+
+/// How many subjects the delete warning names, and how many the audit line records, before
+/// `and N more`.
+const BINDING_LINE_SUBJECTS: usize = 3;
+const BINDING_AUDIT_SUBJECTS: usize = 20;
+
+/// The first `limit` subjects joined, then `and N more`.
+fn listed_subjects(subjects: &[String], limit: usize) -> String {
+    let shown = subjects[..subjects.len().min(limit)].join(", ");
+    match subjects.len().saturating_sub(limit) {
+        0 => shown,
+        more => format!("{shown} and {more} more"),
+    }
 }
 
 /// The volume a persistent volume claim is bound to, as far as the session knows it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum ClaimVolume {
     Unbound,
-    /// Bound to a volume whose reclaim policy keeps the data.
-    Keeps,
+    /// Bound to this volume, whose reclaim policy (`Retain`, `Recycle`) keeps the data.
+    Keeps {
+        volume: String,
+        policy: String,
+    },
     /// Bound to this volume, whose reclaim policy deletes the data.
     Deletes(String),
-    /// Bound, but the volume list is not loaded.
-    NotLoaded,
+    /// Bound to this volume, but the volume list is not loaded: the start reads the volume itself.
+    NotLoaded(String),
 }
 
 /// One object of a delete with the uid its precondition pins.
@@ -344,6 +494,10 @@ pub(crate) fn kind_warnings(kind: ObjectKind, targets: &[DeleteTarget]) -> Vec<S
             }
         }
         ObjectKind::PersistentVolumeClaim => lines.extend(claim_lines(targets)),
+        ObjectKind::ReplicaSet => lines.extend(replica_set_lines(targets)),
+        ObjectKind::RoleBinding | ObjectKind::ClusterRoleBinding => {
+            lines.extend(binding_lines(targets));
+        }
         ObjectKind::Pod => {
             let loose = loose_pods(targets);
             match (loose.len(), is_single) {
@@ -363,6 +517,49 @@ pub(crate) fn kind_warnings(kind: ObjectKind, targets: &[DeleteTarget]) -> Vec<S
         _ => {}
     }
     lines.into_iter().map(Into::into).collect()
+}
+
+/// What each binding of a delete grants, one line each, at most three bindings and then a count.
+fn binding_lines(targets: &[DeleteTarget]) -> Vec<String> {
+    let facts: Vec<(&DeleteTarget, &BindingFacts)> = targets
+        .iter()
+        .filter_map(|target| match &target.facts {
+            TargetFacts::Binding(facts) => Some((target, facts)),
+            _ => None,
+        })
+        .collect();
+    let is_single = facts.len() == 1;
+    let mut lines: Vec<String> = facts
+        .iter()
+        .take(BINDING_LINE_BINDINGS)
+        .map(|(target, facts)| match is_single {
+            true => facts.removal_line(),
+            false => format!("{}: {}", target.object.name(), facts.removal_line()),
+        })
+        .collect();
+    if let Some(more) = facts
+        .len()
+        .checked_sub(BINDING_LINE_BINDINGS)
+        .filter(|n| *n > 0)
+    {
+        lines.push(format!("and {more} more bindings"));
+    }
+    lines
+}
+
+/// How many bindings a bulk delete names before it counts the rest.
+const BINDING_LINE_BINDINGS: usize = 3;
+
+/// The audit fields the delete of `item` records beside its request: what a binding granted.
+pub(crate) fn audit_fields_of(extras: &DeleteExtras, item: &BatchItem) -> Vec<AuditField> {
+    extras
+        .targets
+        .iter()
+        .find(|target| target.text() == item.object)
+        .map_or_else(Vec::new, |target| match &target.facts {
+            TargetFacts::Binding(facts) => facts.audit_fields(),
+            _ => Vec::new(),
+        })
 }
 
 /// The pods among `targets` that no controller owns, as `namespace/name`: nothing recreates them.
@@ -450,17 +647,36 @@ fn claim_lines(targets: &[DeleteTarget]) -> Vec<String> {
             _ => None,
         })
         .collect();
+    let kept: Vec<(&str, &str)> = targets
+        .iter()
+        .filter_map(|target| match &target.facts {
+            TargetFacts::Claim(ClaimVolume::Keeps { volume, policy }) => {
+                Some((volume.as_str(), policy.as_str()))
+            }
+            _ => None,
+        })
+        .collect();
     let unknown = count_of(targets, |facts| {
-        matches!(facts, TargetFacts::Claim(ClaimVolume::NotLoaded))
+        matches!(facts, TargetFacts::Claim(ClaimVolume::NotLoaded(_)))
     });
     let mut lines = Vec::new();
     match volumes.as_slice() {
         [] => {}
         [volume] => lines.push(format!(
-            "The bound volume {volume} has reclaim policy Delete: its data is deleted too"
+            "The PersistentVolume {volume} is deleted too (reclaim policy Delete)"
         )),
         many => lines.push(format!(
-            "{} bound volumes have reclaim policy Delete: their data is deleted too",
+            "{} bound PersistentVolumes are deleted too (reclaim policy Delete)",
+            many.len()
+        )),
+    }
+    match kept.as_slice() {
+        [] => {}
+        [(volume, policy)] => lines.push(format!(
+            "The PersistentVolume {volume} is kept (reclaim policy {policy})"
+        )),
+        many => lines.push(format!(
+            "{} bound PersistentVolumes are kept (reclaim policy Retain)",
             many.len()
         )),
     }
@@ -870,11 +1086,25 @@ impl AppShell {
             .map(|(object, _)| object.clone())
             .collect();
         let connection = plan.connection.clone();
-        let reading = runtime.spawn(async move { read_identities(&connection, &objects).await });
+        // The volume list is a companion of another screen, so a claim's volume may still be
+        // unknown here: one read of that volume tells the confirm what happens to its data.
+        let volumes: Vec<Option<String>> = plan
+            .objects
+            .iter()
+            .map(|(_, facts)| match facts {
+                TargetFacts::Claim(ClaimVolume::NotLoaded(volume)) => Some(volume.clone()),
+                _ => None,
+            })
+            .collect();
+        let reading = runtime.spawn(async move {
+            let reads = read_identities(&connection, &objects).await;
+            let policies = read_reclaim_policies(&connection, &volumes).await;
+            (reads, policies)
+        });
         self.delete_start = Some(cx.spawn_in(window, async move |shell, cx| {
-            let reads = reading.await.unwrap_or_default();
+            let (reads, policies) = reading.await.unwrap_or_default();
             let _ = shell.update_in(cx, |shell, window, cx| {
-                shell.finish_delete_start(plan, reads, window, cx);
+                shell.finish_delete_start(plan, reads, policies, window, cx);
             });
         }));
     }
@@ -981,6 +1211,7 @@ impl AppShell {
         &mut self,
         plan: DeletePlan,
         reads: Vec<IdentityRead>,
+        policies: Vec<Option<String>>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -1030,7 +1261,8 @@ impl AppShell {
         }
         let total = objects.len();
         let (mut targets, mut already_gone) = (Vec::new(), Vec::new());
-        for ((object, facts), read) in objects.into_iter().zip(reads) {
+        for (((object, facts), read), policy) in objects.into_iter().zip(reads).zip(policies) {
+            let facts = with_reclaim_policy(facts, policy);
             match read {
                 Ok(identity) => targets.push(DeleteTarget {
                     object,
@@ -1138,6 +1370,36 @@ async fn read_identities(
     reads
 }
 
+/// The reclaim policy of each volume a claim of the delete is bound to (`None` for every other
+/// object). A volume that cannot be read stays `None`: the confirm then keeps its conditional line.
+async fn read_reclaim_policies(
+    connection: &ClusterConnection,
+    volumes: &[Option<String>],
+) -> Vec<Option<String>> {
+    let mut policies = Vec::with_capacity(volumes.len());
+    for volume in volumes {
+        let policy = match volume {
+            Some(volume) => connection.volume_reclaim_policy(volume).await.ok(),
+            None => None,
+        };
+        policies.push(policy);
+    }
+    policies
+}
+
+/// A claim whose volume was not in a loaded list, with the policy the read of that volume found.
+fn with_reclaim_policy(facts: TargetFacts, policy: Option<String>) -> TargetFacts {
+    let (TargetFacts::Claim(ClaimVolume::NotLoaded(volume)), Some(policy)) = (&facts, policy)
+    else {
+        return facts;
+    };
+    let volume = volume.clone();
+    TargetFacts::Claim(match policy.as_str() {
+        "Delete" => ClaimVolume::Deletes(volume),
+        _ => ClaimVolume::Keeps { volume, policy },
+    })
+}
+
 /// `Could not read api-x to pin its uid (…); nothing was deleted` (decision 3).
 fn identity_failure(object: &ObjectRef, error: &ClusterError) -> String {
     format!(
@@ -1224,6 +1486,8 @@ fn target_facts(live: &LiveCluster, key: &ResourceKey) -> TargetFacts {
             Some(KindObject::PersistentVolumeClaim(claim)) => {
                 TargetFacts::Claim(claim_volume(live, claim.volume.as_deref()))
             }
+            Some(KindObject::Binding(binding)) => TargetFacts::Binding(BindingFacts::of(binding)),
+            Some(KindObject::ReplicaSet(set)) => TargetFacts::ReplicaSet(ReplicaSetFacts::of(set)),
             _ => TargetFacts::Plain,
         },
     }
@@ -1239,15 +1503,18 @@ fn claim_volume(live: &LiveCluster, volume: Option<&str>) -> ClaimVolume {
         .companion()
         .and_then(CompanionLists::persistent_volumes)
     else {
-        return ClaimVolume::NotLoaded;
+        return ClaimVolume::NotLoaded(volume.to_owned());
     };
     if list.is_loading() {
-        return ClaimVolume::NotLoaded;
+        return ClaimVolume::NotLoaded(volume.to_owned());
     }
     match list.items().iter().find(|known| known.name == volume) {
         Some(known) if known.reclaim_policy == "Delete" => ClaimVolume::Deletes(volume.to_owned()),
-        Some(_) => ClaimVolume::Keeps,
-        None => ClaimVolume::NotLoaded,
+        Some(known) => ClaimVolume::Keeps {
+            volume: volume.to_owned(),
+            policy: known.reclaim_policy.clone(),
+        },
+        None => ClaimVolume::NotLoaded(volume.to_owned()),
     }
 }
 

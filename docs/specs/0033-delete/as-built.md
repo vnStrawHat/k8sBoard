@@ -37,3 +37,9 @@
 - The lazy `delete` review answered **denied for all 27 kinds** (one screen run per kind): every Delete item and the `Delete…` button read `Not permitted: delete {resource}` (screens `v83-pods-selected-*`, `v83-deployments-menu-*`).
 - A local counting proxy (token injected by the proxy, `DELETE`/`PUT`/`PATCH` refused with a 403) saw **1924 GET, 1381 POST (all SelfSubjectAccessReviews), 0 DELETE, 0 PUT, 0 PATCH** over 29 screen runs. The gate stops before the identity read.
 - Not run live: a real delete (R2: no write-capable cluster). Commits are proven by the fake-transport tests only.
+
+## UX round 3 (P7, P8, P23, P27)
+
+- **Bindings:** the confirm of a RoleBinding or ClusterRoleBinding delete says what it takes away, `Removes cluster-admin from ServiceAccount lab-batch/default` (at most three subjects, then `and N more`; a bulk delete names three bindings, then `and N more bindings`). The audit line keeps `roleRef` (`ClusterRole/cluster-admin`) and `subjects` beside the propagation policy (`WriteIntent.audit_fields`, from `TargetFacts::Binding`).
+- **Claims:** the PVC confirm names the bound PersistentVolume and its reclaim policy: `The PersistentVolume pvc-… is deleted too (reclaim policy Delete)` or `… is kept (reclaim policy Retain)`. When the PV list is not loaded (it is a companion of the StorageClasses screen) the start reads that one volume (`ClusterConnection::volume_reclaim_policy`, a GET); only a failed read keeps the conditional line.
+- **ReplicaSets:** deleting an old revision (a ReplicaSet with no pods that a Deployment owns) warns `Deployment web can no longer roll back to rev 21`; a ReplicaSet with no pods shows no Dependents choice, because nothing depends on it (`has_dependents`).

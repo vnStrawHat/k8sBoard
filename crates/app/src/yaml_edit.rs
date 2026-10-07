@@ -26,6 +26,7 @@ use gpui_kit::{
 
 use crate::app_shell::AppShell;
 use crate::app_shell::write_flow::{CheckedWriteError, WriteIntent, checked_write};
+use crate::audit_log::AuditField;
 use crate::cluster_registry::ClusterRef;
 use crate::cluster_runtime::ClusterRuntime;
 use crate::cluster_session::error_text;
@@ -729,6 +730,7 @@ impl YamlEditView {
         let change_lines = edit_change_lines(self.kind, &passed.changes, passed.more_changes);
         let mut intent = self.intent(request, warnings);
         intent.change_lines = change_lines;
+        intent.audit_fields = edit_audit_fields(&passed.changes);
         let _ = self
             .shell
             .update(cx, |shell, cx| shell.start_write(intent, window, cx));
@@ -1012,6 +1014,7 @@ pub(crate) fn edit_intent(
         risk: ActionRisk::Change,
         warnings,
         change_lines: Vec::new(),
+        audit_fields: Vec::new(),
     }
 }
 
@@ -1038,12 +1041,36 @@ pub(crate) fn edit_change_lines(
     lines
 }
 
+/// The old and new value the audit line keeps of the labels an edit changed, as `path`, `from`,
+/// and `value`. Only labels: an edit's other scalars can hold a credential (a command-line
+/// argument, a URL), so those stay paths. `ChangeLine` values are the masked ones of the preview.
+pub(crate) fn edit_audit_fields(changes: &[ChangeLine]) -> Vec<AuditField> {
+    changes
+        .iter()
+        .filter(|change| is_label_path(&change.path))
+        .filter(|change| !is_container(&change.old) && !is_container(&change.new))
+        .map(|change| AuditField {
+            path: change.path.to_string(),
+            value: change.new.as_ref().map(ToString::to_string),
+            from: change.old.as_ref().map(ToString::to_string),
+        })
+        .collect()
+}
+
+/// `metadata.labels.team` or `metadata.labels["app.kubernetes.io/name"]`, not the map itself.
+fn is_label_path(path: &str) -> bool {
+    path.strip_prefix("metadata.labels")
+        .is_some_and(|rest| rest.starts_with('.') || rest.starts_with('['))
+}
+
+/// Whether a side of a change is a whole map or list, which the preview writes as `{…}` or `[…]`.
+fn is_container(value: &Option<SharedString>) -> bool {
+    value
+        .as_ref()
+        .is_some_and(|text| text == "{…}" || text == "[…]")
+}
+
 fn change_line(kind: ObjectKind, change: &ChangeLine) -> SharedString {
-    let is_container = |value: &Option<SharedString>| {
-        value
-            .as_ref()
-            .is_some_and(|text| text == "{…}" || text == "[…]")
-    };
     let is_secret_data = kind == ObjectKind::Secret
         && ["data", "stringData"].iter().any(|root| {
             change.path.strip_prefix(root).is_some_and(|rest| {

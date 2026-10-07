@@ -446,6 +446,7 @@ pub(crate) fn create_intent(
         risk: ActionRisk::Change,
         warnings,
         change_lines: Vec::new(),
+        audit_fields: Vec::new(),
     }
 }
 

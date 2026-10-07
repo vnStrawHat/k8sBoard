@@ -4,7 +4,7 @@ use k8s_openapi::api::core::v1::{
 };
 use kube::Api;
 
-use crate::connection::ClusterConnection;
+use crate::connection::{ClusterConnection, ClusterError};
 use crate::event::optional_message;
 use crate::resource_watch::{WatchUpdate, summary_watch};
 use crate::storage_class::mask_mount_option;
@@ -83,6 +83,16 @@ impl ClusterConnection {
             "watching persistent volumes",
             persistent_volume_summary,
         )
+    }
+
+    /// The reclaim policy of one volume, by one GET: a claim's delete confirm asks it when the
+    /// volume list is not loaded. A 404 is `ClusterError::Api { code: 404 }`.
+    pub async fn volume_reclaim_policy(&self, name: &str) -> Result<String, ClusterError> {
+        let api = Api::<PersistentVolume>::all(self.client().clone());
+        let volume = self
+            .run("reading a persistent volume", api.get(name))
+            .await?;
+        Ok(persistent_volume_summary(&volume).reclaim_policy)
     }
 }
 
@@ -452,5 +462,34 @@ mod tests {
             ..Default::default()
         });
         assert_eq!(summary.mount_options, ["nfsvers=4.1", "hard"]);
+    }
+}
+
+#[cfg(test)]
+mod reclaim_policy_tests {
+    use serde_json::json;
+
+    use crate::fake_api::FakeApi;
+    use crate::object_write::WritePolicy;
+
+    #[tokio::test]
+    async fn one_get_names_the_reclaim_policy_of_a_volume() {
+        let body = json!({
+            "apiVersion": "v1", "kind": "PersistentVolume",
+            "metadata": { "name": "pvc-1" },
+            "spec": { "persistentVolumeReclaimPolicy": "Delete" },
+        })
+        .to_string();
+        let (connection, api) =
+            FakeApi::connection(WritePolicy::Blocked, move |_| (200, body.clone()));
+        let policy = connection
+            .volume_reclaim_policy("pvc-1")
+            .await
+            .expect("the volume is readable");
+        assert_eq!(policy, "Delete");
+        let requests = api.requests();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].method, "GET");
+        assert_eq!(requests[0].path, "/api/v1/persistentvolumes/pvc-1");
     }
 }

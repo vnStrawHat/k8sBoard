@@ -358,3 +358,44 @@ fn the_confirm_lists_a_dozen_changes_and_counts_the_rest() {
     assert_eq!(shown.len(), 13);
     assert_eq!(shown[12], "and 7 more");
 }
+
+#[test]
+fn the_audit_keeps_the_old_and_new_value_of_a_label_only() {
+    let changes = [
+        change("metadata.labels.team", None, Some("platform")),
+        change(
+            "metadata.labels[\"app.kubernetes.io/name\"]",
+            Some("a"),
+            Some("b"),
+        ),
+        change("metadata.labels", Some("{…}"), Some("{…}")),
+        change("metadata.annotations.note", Some("old"), Some("new")),
+        change(
+            "spec.template.spec.containers[api].args[0]",
+            Some("--token=x"),
+            Some("--token=y"),
+        ),
+    ];
+    let fields = edit_audit_fields(&changes);
+    let seen: Vec<(&str, Option<&str>, Option<&str>)> = fields
+        .iter()
+        .map(|field| {
+            (
+                field.path.as_str(),
+                field.from.as_deref(),
+                field.value.as_deref(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        seen,
+        [
+            ("metadata.labels.team", None, Some("platform")),
+            (
+                "metadata.labels[\"app.kubernetes.io/name\"]",
+                Some("a"),
+                Some("b")
+            ),
+        ]
+    );
+}

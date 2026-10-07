@@ -196,6 +196,7 @@ impl AppShell {
             risk: action_risk(ResourceAction::DebugContainer),
             warnings: Vec::new(),
             change_lines: Vec::new(),
+            audit_fields: Vec::new(),
         });
         let plan = Rc::new(TabPlan {
             cluster: pod.cluster.clone(),
