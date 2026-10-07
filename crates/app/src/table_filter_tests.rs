@@ -7,6 +7,7 @@ struct Row {
     namespace: Option<&'static str>,
     name: &'static str,
     labels: Vec<&'static str>,
+    images: Vec<&'static str>,
     tone: StatusTone,
     node: &'static str,
     status: &'static str,
@@ -20,6 +21,10 @@ impl Default for Row {
             namespace: Some("payments"),
             name: "api-7",
             labels: vec!["app=api", "tier=web"],
+            images: vec![
+                "registry.example.com/team/nginx:1.27",
+                "envoyproxy/envoy:v1.30",
+            ],
             tone: StatusTone::Ok,
             node: "wk-03",
             status: "Running",
@@ -39,6 +44,10 @@ impl TableRow for Row {
 
     fn labels(&self) -> impl Iterator<Item = &str> {
         self.labels.iter().copied()
+    }
+
+    fn images(&self) -> impl Iterator<Item = &str> {
+        self.images.iter().copied()
     }
 
     fn tone(&self) -> StatusTone {
@@ -143,6 +152,24 @@ fn unhealthy_keeps_warn_bad_and_info() {
         };
         assert_eq!(passes(&row, &filter), kept, "{tone:?}");
     }
+}
+
+#[test]
+fn the_quick_filter_searches_every_image_reference() {
+    let row = Row::default();
+    assert!(matches(&row, &text_filter("envoy"), COLUMNS));
+    assert!(matches(&row, &text_filter("team/nginx:1.27"), COLUMNS));
+    assert!(!matches(&row, &text_filter("redis"), COLUMNS));
+}
+
+#[test]
+fn an_image_query_searches_images_only() {
+    let row = Row::default();
+    assert!(matches(&row, &text_filter("image:NGINX"), COLUMNS));
+    assert!(matches(&row, &text_filter("image: envoy:v1"), COLUMNS));
+    assert!(!matches(&row, &text_filter("image:redis"), COLUMNS));
+    // `api` is the name and a label, not an image.
+    assert!(!matches(&row, &text_filter("image:api"), COLUMNS));
 }
 
 #[test]

@@ -31,7 +31,7 @@ use crate::resource_actions::{
     MenuCluster, MenuExtras, browse_instances_item, browse_target, kind_menu, open_url_choice,
     open_url_menu_item, secret_menu,
 };
-use crate::resource_kind::{Align, NameColumn, ResourceKind, kind_columns};
+use crate::resource_kind::{Align, IMAGE_COLUMN_NAME, NameColumn, ResourceKind, kind_columns};
 use crate::row_context::TableSession;
 use crate::secret_values::ValueAccess;
 use crate::settings::{TablePrefs, screen_key};
@@ -70,8 +70,17 @@ pub(crate) struct KindTableDelegate {
 /// saved for it.
 fn new_view(kind: ResourceKind, saved: &BTreeMap<String, TablePrefs>) -> TableView {
     let mut view = TableView::new(default_filter(Screen::Kind(kind)));
+    let plan = kind_plan(Some(kind));
+    // The Image column is opt-in from the Columns menu; a saved choice replaces this.
+    view.hidden = plan
+        .specs
+        .iter()
+        .enumerate()
+        .filter(|(_, spec)| spec.name == IMAGE_COLUMN_NAME)
+        .map(|(column, _)| column)
+        .collect();
     if let Some(prefs) = saved.get(screen_key(Screen::Kind(kind))) {
-        view.apply_prefs(prefs, &kind_plan(Some(kind)));
+        view.apply_prefs(prefs, &plan);
     }
     view
 }
@@ -317,6 +326,18 @@ impl TableRow for KindTableRow<'_> {
         self.row.labels.iter().map(SharedString::as_ref)
     }
 
+    fn images(&self) -> impl Iterator<Item = &str> {
+        self.row
+            .cells
+            .iter()
+            .find_map(|cell| match cell {
+                KindCell::Images { all, .. } => Some(all.as_ref()),
+                _ => None,
+            })
+            .into_iter()
+            .flat_map(str::lines)
+    }
+
     fn tone(&self) -> StatusTone {
         self.row.status.tone
     }
@@ -329,9 +350,12 @@ impl TableRow for KindTableRow<'_> {
             };
         };
         match self.row.cells.get(cell) {
-            Some(KindCell::Text(text) | KindCell::Mono(text) | KindCell::Hinted { text, .. }) => {
-                CellValue::Text(Cow::Borrowed(text.as_ref()))
-            }
+            Some(
+                KindCell::Text(text)
+                | KindCell::Mono(text)
+                | KindCell::Hinted { text, .. }
+                | KindCell::Images { text, .. },
+            ) => CellValue::Text(Cow::Borrowed(text.as_ref())),
             Some(KindCell::Qualified { prefix, text }) => CellValue::Qualified {
                 prefix: prefix.as_deref(),
                 text,
@@ -759,6 +783,7 @@ fn cell_element<'a>(
         KindCell::Text(text) => return hover_text(text, text, None),
         KindCell::Hinted { text, tooltip } => return hover_text(text, tooltip, None),
         KindCell::Mono(text) => return hover_text(text, text, Some(mono)),
+        KindCell::Images { text, all } => return hover_text(text, all, Some(mono)),
         // One qualified column per kind, so the row index alone makes the id unique.
         KindCell::Qualified { prefix, text } => {
             return qualified_text(
@@ -906,6 +931,29 @@ mod tests {
         match kind.name_column() {
             NameColumn::Flexible => 1,
             NameColumn::Hidden { .. } => 0,
+        }
+    }
+
+    #[test]
+    fn the_image_column_starts_hidden_on_every_workload_table() {
+        for kind in [
+            ResourceKind::Deployments,
+            ResourceKind::StatefulSets,
+            ResourceKind::DaemonSets,
+            ResourceKind::ReplicaSets,
+            ResourceKind::Jobs,
+            ResourceKind::CronJobs,
+        ] {
+            let table = delegate(Some(kind));
+            let image = kind_columns(kind)
+                .iter()
+                .position(|column| column.name == IMAGE_COLUMN_NAME)
+                .expect("an Image column");
+            assert_eq!(
+                table.hidden().into_iter().collect::<Vec<_>>(),
+                [image],
+                "{kind:?}"
+            );
         }
     }
 

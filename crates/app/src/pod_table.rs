@@ -1,6 +1,7 @@
 use std::borrow::Cow;
+use std::collections::BTreeSet;
 
-use cluster::{PodSummary, ResourceUsage};
+use cluster::{ContainerKind, PodSummary, ResourceUsage};
 use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::component::menu::PopupMenu;
 use gpui_kit::component::table::{Column, TableDelegate, TableState};
@@ -13,11 +14,13 @@ use crate::age::format_age;
 use crate::app_shell::{AppShell, Screen};
 use crate::cell_truncation::{NameScope, mono_capacity, plain_text, scoped_name_text};
 use crate::dock::Dock;
+use crate::drawer::truncated_text_with_tooltip;
 use crate::filter_bar::filtered_empty_state;
+use crate::kind_row::KindCell;
 use crate::metrics_history::PodUsageHistory;
 use crate::port_forward_menu::{ForwardMenu, pod_subject};
 use crate::resource_actions::{LogsMenu, PodMenuItems, PodMenuLinks, ShellMenu, pod_menu};
-use crate::resource_kind::{Align, KindColumn, column};
+use crate::resource_kind::{Align, IMAGE_COLUMN_NAME, KindColumn, column};
 use crate::row_context::TableSession;
 use crate::settings::TablePrefs;
 use crate::status_tone::{StatusTone, pod_status_label, tone_color, toned_text};
@@ -36,12 +39,13 @@ const RESTARTS: usize = 3;
 const CPU: usize = 4;
 const MEMORY: usize = 5;
 pub(crate) const NODE: usize = 6;
-const AGE: usize = 7;
+const IMAGE: usize = 7;
+const AGE: usize = 8;
 
 /// Name takes most of the spare width, up to a cap: pod names are the longest values. Status is
 /// sized to its longest label (`CrashLoopBackOff`) and Node to a short host name, so the width
 /// they would keep unused goes to Name.
-const POD_COLUMNS: [KindColumn; 8] = [
+const POD_COLUMNS: [KindColumn; 9] = [
     column("Name", 200., Align::Left).grows(4).up_to(640.),
     column("Status", 160., Align::Left),
     column("Ready", 70., Align::Left),
@@ -49,6 +53,7 @@ const POD_COLUMNS: [KindColumn; 8] = [
     column("CPU", 70., Align::Right),
     column("Memory", 80., Align::Right),
     column("Node", 110., Align::Left).grows(2).up_to(260.),
+    column(IMAGE_COLUMN_NAME, 200., Align::Left).grows(1),
     column("Age", 70., Align::Right),
 ];
 
@@ -81,6 +86,8 @@ impl PodTableDelegate {
     ) -> Self {
         let plan = pod_plan();
         let mut view = TableView::new(default_filter(Screen::Pods));
+        // The Image column is opt-in from the Columns menu; a saved choice replaces this.
+        view.hidden = BTreeSet::from([IMAGE]);
         if let Some(saved) = saved {
             view.apply_prefs(saved, &plan);
         }
@@ -200,6 +207,16 @@ fn pod_rows<'a>(pods: &'a [PodSummary], history: Option<&PodUsageHistory>) -> Ve
         .collect()
 }
 
+/// The main containers' images; init and sidecar images are not what the pod runs.
+fn image_cell(pod: &PodSummary) -> KindCell {
+    KindCell::images(
+        pod.containers
+            .iter()
+            .filter(|container| container.kind == ContainerKind::Main)
+            .map(|container| container.image.as_str()),
+    )
+}
+
 fn saturating_number(value: u64) -> CellValue<'static> {
     CellValue::Number(i64::try_from(value).unwrap_or(i64::MAX))
 }
@@ -215,6 +232,13 @@ impl TableRow for PodRow<'_> {
 
     fn labels(&self) -> impl Iterator<Item = &str> {
         self.pod.labels.iter().map(String::as_str)
+    }
+
+    fn images(&self) -> impl Iterator<Item = &str> {
+        self.pod
+            .containers
+            .iter()
+            .map(|container| container.image.as_str())
     }
 
     fn tone(&self) -> StatusTone {
@@ -246,6 +270,10 @@ impl TableRow for PodRow<'_> {
             NODE => pod.node_name.as_deref().map_or(CellValue::Absent, |node| {
                 CellValue::Text(Cow::Borrowed(node))
             }),
+            IMAGE => match image_cell(pod) {
+                KindCell::Images { text, .. } => CellValue::Text(Cow::Owned(text.to_string())),
+                _ => CellValue::Absent,
+            },
             AGE => CellValue::Age(pod.created_at),
             _ => CellValue::Absent,
         }
@@ -357,6 +385,15 @@ impl PodTableDelegate {
                     cx,
                 ),
                 None => dash_cell(cx),
+            },
+            IMAGE => match image_cell(pod) {
+                KindCell::Images { text, all } => {
+                    truncated_text_with_tooltip(("pod-image", row_ix), text, all)
+                        .w_full()
+                        .font_family(mono)
+                        .into_any_element()
+                }
+                _ => dash_cell(cx),
             },
             AGE => div()
                 .w_full()
@@ -544,6 +581,55 @@ mod tests {
         }
     }
 
+    fn container(kind: ContainerKind, image: &str) -> cluster::ContainerSummary {
+        cluster::ContainerSummary {
+            terminal: cluster::ContainerTerminal::None,
+            name: "c".to_owned(),
+            image: image.to_owned(),
+            kind,
+            state: cluster::ContainerState::Running { started_at: None },
+            is_ready: true,
+            restart_count: 0,
+            last_termination: None,
+            image_digest: None,
+            pull_policy: None,
+            is_started: None,
+            ports: Vec::new(),
+            resources: Vec::new(),
+            probes: cluster::ContainerProbes::default(),
+            env: Vec::new(),
+            env_from: Vec::new(),
+            mounts: Vec::new(),
+        }
+    }
+
+    fn pod_with_images() -> PodSummary {
+        PodSummary {
+            containers: vec![
+                container(ContainerKind::Init, "busybox:1"),
+                container(ContainerKind::Main, "reg.io/team/nginx:1.27"),
+                container(ContainerKind::Main, "envoyproxy/envoy:v1"),
+            ],
+            ..pod()
+        }
+    }
+
+    #[test]
+    fn the_image_column_shows_the_main_containers_and_the_filter_searches_all() {
+        let pod = pod_with_images();
+        let row = row(&pod);
+        assert!(matches!(row.value(IMAGE), CellValue::Text(text) if text == "nginx:1.27 +1"));
+        let images: Vec<_> = row.images().collect();
+        assert_eq!(
+            images,
+            ["busybox:1", "reg.io/team/nginx:1.27", "envoyproxy/envoy:v1"]
+        );
+        assert!(matches!(
+            self::row(&self::pod()).value(IMAGE),
+            CellValue::Absent
+        ));
+    }
+
     fn row(pod: &PodSummary) -> PodRow<'_> {
         PodRow { pod, usage: None }
     }
@@ -640,10 +726,10 @@ mod tests {
     }
 
     #[test]
-    fn new_pods_table_shows_the_cpu_column() {
+    fn new_pods_table_hides_only_the_image_column() {
         let table =
             PodTableDelegate::new(WeakEntity::new_invalid(), WeakEntity::new_invalid(), None);
-        assert!(table.view.hidden.is_empty());
+        assert_eq!(table.view.hidden, BTreeSet::from([IMAGE]));
     }
 
     #[test]

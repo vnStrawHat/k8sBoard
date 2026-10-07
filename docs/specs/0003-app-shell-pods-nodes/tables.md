@@ -21,7 +21,10 @@
 | Ready | 70 | `ReadyCount` Display (`3/4`, counts sidecars) |
 | Restarts | 80, right | `restarts` |
 | Node | 180 | `node_name` or "—" |
+| Image | 200, hidden by default | the first main container's `name:tag` (registry and path cut) plus a muted ` +N`; tooltip lists every full reference; "—" when none |
 | Age | 70, right | `format_age(created_at, now)` |
+
+The quick filter searches every image reference of a pod (init containers too), and `image:nginx` keeps only the pods with a matching image. The workload kinds have the same opt-in Image column (0005 `kind-columns.md`).
 
 ## Nodes columns (W5 without CPU/Memory)
 

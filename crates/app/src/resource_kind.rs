@@ -124,6 +124,12 @@ impl KindColumn {
 
 const AGE_COLUMN: KindColumn = column("Age", 70., Align::Right);
 
+/// The container images of a workload; hidden until the Columns menu asks for it.
+const IMAGE_COLUMN: KindColumn = column(IMAGE_COLUMN_NAME, 200., Align::Left).grows(1);
+
+/// The name of the Image column, which a table starts with hidden.
+pub(crate) const IMAGE_COLUMN_NAME: &str = "Image";
+
 /// One mutating menu item of a kind that is shown disabled. `action` is the key action behind
 /// it, when the wireframe gives it a key; the menu shows that key as a hint.
 #[derive(Clone, Copy, Debug)]
@@ -249,6 +255,7 @@ static DEPLOYMENTS: KindSpec = KindSpec {
         column("Up-to-date", 100., Align::Right),
         column("Available", 90., Align::Right),
         column("Strategy", 130., Align::Left),
+        IMAGE_COLUMN,
         AGE_COLUMN,
     ],
     read_only_actions: &[
@@ -285,6 +292,7 @@ static STATEFUL_SETS: KindSpec = KindSpec {
         column("Ready", 80., Align::Left),
         column("Service", 200., Align::Left).grows(1),
         column("Strategy", 140., Align::Left),
+        IMAGE_COLUMN,
         AGE_COLUMN,
     ],
     read_only_actions: &[
@@ -322,6 +330,7 @@ static DAEMON_SETS: KindSpec = KindSpec {
         column("Up-to-date", 100., Align::Right),
         column("Available", 90., Align::Right),
         column("Node selector", 200., Align::Left).grows(2),
+        IMAGE_COLUMN,
         AGE_COLUMN,
     ],
     read_only_actions: &[
@@ -357,6 +366,7 @@ static REPLICA_SETS: KindSpec = KindSpec {
         column("Ready", 80., Align::Right),
         column("Owner", 220., Align::Left).grows(1),
         column("Revision", 90., Align::Right),
+        IMAGE_COLUMN,
         AGE_COLUMN,
     ],
     // Scale belongs to the owning Deployment.
@@ -382,6 +392,7 @@ static JOBS: KindSpec = KindSpec {
         column("Status", 120., Align::Left),
         column("Completions", 110., Align::Left),
         column("Duration", 90., Align::Right),
+        IMAGE_COLUMN,
         AGE_COLUMN,
     ],
     read_only_actions: &[KindAction::keyed("Re-run job", ResourceAction::RerunJob)],
@@ -409,6 +420,7 @@ static CRON_JOBS: KindSpec = KindSpec {
         column("Active", 70., Align::Right),
         column("Last run", 120., Align::Right),
         column("Next run", 100., Align::Right),
+        IMAGE_COLUMN,
         AGE_COLUMN,
     ],
     read_only_actions: &[

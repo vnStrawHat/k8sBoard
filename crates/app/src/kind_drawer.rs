@@ -907,8 +907,8 @@ fn field_value(value: &KindCell, id: usize, now: jiff::Timestamp, cx: &App) -> A
     let mono = cx.theme().mono_font_family.clone();
     match value {
         KindCell::Text(text) => truncated_text(("detail", id), text.clone()).into_any_element(),
-        KindCell::Hinted { text, tooltip } => {
-            truncated_text_with_tooltip(("detail", id), text.clone(), tooltip.clone())
+        KindCell::Hinted { text, tooltip: all } | KindCell::Images { text, all } => {
+            truncated_text_with_tooltip(("detail", id), text.clone(), all.clone())
                 .into_any_element()
         }
         KindCell::Mono(text) => truncated_text(("detail", id), text.clone())

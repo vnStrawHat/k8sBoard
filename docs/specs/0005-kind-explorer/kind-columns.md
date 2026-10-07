@@ -24,15 +24,17 @@
 | Kind | Columns after Name | Deviation from W7 |
 |---|---|---|
 | Namespaces | Status 140 · Age | no Pods or requests columns (need metrics) |
-| Deployments | Ready 80 · Up-to-date 100 r · Available 90 r · Strategy 130 · Age | — |
-| StatefulSets | Ready 80 · Service 200 · Strategy 140 · Age | — |
-| DaemonSets | Desired 80 r · Current 80 r · Ready 80 r · Up-to-date 100 r · Available 90 r · Node selector 200 · Age | adds kubectl's Available |
-| ReplicaSets | Desired 80 r · Current 80 r · Ready 80 r · Owner 220 · Age | — |
-| Jobs | Status 120 · Completions 110 · Duration 90 r · Age | follows kubectl 1.31+ order (Status first) rather than W7 (Completions, Duration, Status) |
-| CronJobs | Schedule 140 · Suspend 80 · Active 70 r · Last run 120 r · Age | kubectl's Last schedule, shown as Last run (one term for the column, the drawer, and the subtitle) |
+| Deployments | Ready 80 · Up-to-date 100 r · Available 90 r · Strategy 130 · Image 200 · Age | — |
+| StatefulSets | Ready 80 · Service 200 · Strategy 140 · Image 200 · Age | — |
+| DaemonSets | Desired 80 r · Current 80 r · Ready 80 r · Up-to-date 100 r · Available 90 r · Node selector 200 · Image 200 · Age | adds kubectl's Available |
+| ReplicaSets | Desired 80 r · Current 80 r · Ready 80 r · Owner 220 · Revision 90 r · Image 200 · Age | — |
+| Jobs | Status 120 · Completions 110 · Duration 90 r · Image 200 · Age | follows kubectl 1.31+ order (Status first) rather than W7 (Completions, Duration, Status) |
+| CronJobs | Schedule 140 · Suspend 80 · Active 70 r · Last run 120 r · Next run 100 r · Image 200 · Age | kubectl's Last schedule, shown as Last run (one term for the column, the drawer, and the subtitle) |
 | Services | Type 130 · Cluster IP 140 · External IP 200 · Ports 180 · Age | kubectl columns; no Endpoints (needs EndpointSlices) |
 | Ingresses | Class 100 · Hosts 260 · Address 180 · TLS 140 · Age | kubectl columns; 0016 replaced Ports with a TLS expiry column (needs the TLS secrets) |
 | ConfigMaps | Data 70 r · Age | kubectl `DATA`; no Used by |
+
+Image is opt-in (hidden by default, ticked in the Columns menu): the first template container as `name:tag` plus ` +N`, every full reference in the tooltip and in the quick filter (`image:nginx` searches images only).
 
 ## Cells
 

@@ -36,6 +36,7 @@ pub(crate) fn deployment_row(deployment: &DeploymentSummary) -> KindRow {
         KindCell::count(deployment.up_to_date),
         KindCell::count(deployment.available),
         KindCell::text_or_absent(non_empty(&deployment.strategy)),
+        images_cell(&deployment.containers),
         KindCell::Age {
             at: deployment.created_at,
             tone: None,
@@ -332,6 +333,7 @@ pub(crate) fn stateful_set_row(set: &StatefulSetSummary) -> KindRow {
             ready_cell(set.ready, set.desired),
             KindCell::mono_or_absent(set.service_name.as_deref().unwrap_or_default()),
             KindCell::text_or_absent(non_empty(&set.update_strategy)),
+            images_cell(&set.containers),
             KindCell::age(set.created_at),
         ],
         sections,
@@ -397,6 +399,7 @@ pub(crate) fn daemon_set_row(set: &DaemonSetSummary) -> KindRow {
             KindCell::count(set.up_to_date),
             KindCell::count(set.available),
             KindCell::label_terms(&set.node_selector),
+            images_cell(&set.containers),
             KindCell::age(set.created_at),
         ],
         sections,
@@ -436,6 +439,7 @@ pub(crate) fn replica_set_row(set: &ReplicaSetSummary) -> KindRow {
             toned_number(set.ready, replica_tone(set.ready, set.desired)),
             KindCell::text_or_absent(owner.as_deref()),
             revision_cell(set.revision.as_deref()),
+            images_cell(&set.containers),
             KindCell::age(set.created_at),
         ],
         sections: vec![
@@ -626,6 +630,11 @@ fn selector_section(selector: &[String]) -> DetailSection {
         title: "Selector",
         rows: vec![DetailRow::Chips(chips(selector))],
     }
+}
+
+/// The Image column: the first template container's image, and a count of the others.
+pub(crate) fn images_cell(containers: &[TemplateContainer]) -> KindCell {
+    KindCell::images(containers.iter().map(|container| container.image.as_str()))
 }
 
 pub(crate) fn containers_section(containers: &[TemplateContainer]) -> DetailSection {

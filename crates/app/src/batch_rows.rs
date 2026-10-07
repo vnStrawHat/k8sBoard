@@ -7,8 +7,8 @@ use crate::kind_row::{
 };
 use crate::status_tone::{StatusLabel, StatusTone};
 use crate::workload_rows::{
-    condition_row, containers_section, controller_owner, non_empty, optional_count, owner_row,
-    toned_number,
+    condition_row, containers_section, controller_owner, images_cell, non_empty, optional_count,
+    owner_row, toned_number,
 };
 
 pub(crate) fn job_row(job: &JobSummary) -> KindRow {
@@ -32,6 +32,7 @@ pub(crate) fn job_row(job: &JobSummary) -> KindRow {
             KindCell::Toned(status.clone()),
             completions.clone(),
             duration.clone(),
+            images_cell(&job.containers),
             KindCell::age(job.created_at),
         ],
         sections: vec![
@@ -121,6 +122,7 @@ pub(crate) fn cron_job_row(cron_job: &CronJobSummary) -> KindRow {
             KindCell::count(cron_job.active_jobs.len()),
             last_schedule.clone(),
             next_run,
+            images_cell(&cron_job.containers),
             KindCell::age(cron_job.created_at),
         ],
         sections: vec![

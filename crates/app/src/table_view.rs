@@ -25,6 +25,11 @@ pub(crate) trait TableRow {
     fn name(&self) -> &str;
     /// `key=value` terms.
     fn labels(&self) -> impl Iterator<Item = &str>;
+    /// The full image references of the row's containers, which `image:` and the quick filter
+    /// search; none for a row without containers.
+    fn images(&self) -> impl Iterator<Item = &str> {
+        std::iter::empty()
+    }
     fn tone(&self) -> StatusTone;
     fn value(&self, column: usize) -> CellValue<'_>;
     /// Whether the row passes the screen's own switch. A switch the screen does not have

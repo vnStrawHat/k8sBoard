@@ -169,6 +169,13 @@ pub(crate) enum KindCell {
         text: SharedString,
         more: usize,
     },
+    /// The container images of a workload: the first as `name:tag` with ` +{n}` for the others,
+    /// and `all`, every full reference one per line, which the tooltip lists and the quick filter
+    /// searches.
+    Images {
+        text: SharedString,
+        all: SharedString,
+    },
     /// Right-aligned mono text that sorts by `value`, such as a request sum. `tone` colours the text
     /// (`None` for a plain quantity).
     Quantity {
@@ -279,6 +286,27 @@ impl KindCell {
 
     pub(crate) fn age(at: Option<jiff::Timestamp>) -> Self {
         Self::Age { at, tone: None }
+    }
+
+    /// The Image column: the first reference as `name:tag` (the registry and path are cut), then
+    /// ` +{n}` for the others. `Absent` without an image.
+    pub(crate) fn images<'a>(references: impl IntoIterator<Item = &'a str>) -> Self {
+        let references: Vec<&str> = references
+            .into_iter()
+            .filter(|reference| !reference.is_empty())
+            .collect();
+        let Some(first) = references.first() else {
+            return Self::Absent;
+        };
+        let short = first.rsplit('/').next().unwrap_or(first);
+        let text = match references.len() - 1 {
+            0 => short.to_owned(),
+            more => format!("{short} +{more}"),
+        };
+        Self::Images {
+            text: text.into(),
+            all: references.join("\n").into(),
+        }
     }
 
     /// Monospaced text, or `Absent` when it is empty. Join a list before passing it.
@@ -546,6 +574,35 @@ mod tests {
             pod_workload("shop", Some(&controller("ReplicaSet", "api-canary"))),
             Some(IssueObject::new("ReplicaSet", Some("shop"), "api-canary"))
         );
+    }
+
+    #[test]
+    fn images_show_the_first_name_and_tag_and_count_the_rest() {
+        assert_eq!(
+            KindCell::images([
+                "registry.example.com:5000/team/nginx:1.27",
+                "envoyproxy/envoy:v1.30"
+            ]),
+            KindCell::Images {
+                text: "nginx:1.27 +1".into(),
+                all: "registry.example.com:5000/team/nginx:1.27
+envoyproxy/envoy:v1.30"
+                    .into(),
+            }
+        );
+        assert_eq!(
+            KindCell::images(["redis:7"]),
+            KindCell::Images {
+                text: "redis:7".into(),
+                all: "redis:7".into(),
+            }
+        );
+    }
+
+    #[test]
+    fn no_image_is_absent() {
+        assert_eq!(KindCell::images([]), KindCell::Absent);
+        assert_eq!(KindCell::images([""]), KindCell::Absent);
     }
 
     #[test]

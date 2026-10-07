@@ -111,6 +111,8 @@ impl LabelQuery {
 }
 
 const LABEL_PREFIX: &str = "label:";
+/// `image:nginx` keeps the rows with a container image that contains `nginx`.
+const IMAGE_PREFIX: &str = "image:";
 
 /// Reads `label:k=v,k2!=v2,k3`. `None` when the `label:` prefix is missing, or a part is empty
 /// or has an empty key.
@@ -178,6 +180,11 @@ fn text_matches<T: TableRow>(row: &T, needle: &str, column_count: usize) -> bool
     if needle.is_empty() {
         return true;
     }
+    if let Some(image) = strip_prefix_ignore_ascii_case(needle, IMAGE_PREFIX) {
+        return row
+            .images()
+            .any(|reference| contains_ignore_ascii_case(reference, image.trim()));
+    }
     let found = |text: &str| contains_ignore_ascii_case(text, needle);
     // `namespace/name` is only built when the needle can span the slash.
     let is_qualified_match = row.namespace().is_some_and(|namespace| {
@@ -196,6 +203,13 @@ fn text_matches<T: TableRow>(row: &T, needle: &str, column_count: usize) -> bool
             | CellValue::Absent => false,
         })
         || row.labels().any(found)
+        || row.images().any(found)
+}
+
+fn strip_prefix_ignore_ascii_case<'a>(text: &'a str, prefix: &str) -> Option<&'a str> {
+    let head = text.get(..prefix.len())?;
+    head.eq_ignore_ascii_case(prefix)
+        .then(|| &text[prefix.len()..])
 }
 
 /// ASCII case-insensitive substring test; an empty needle is found.
