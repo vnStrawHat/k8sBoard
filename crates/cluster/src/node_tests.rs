@@ -331,6 +331,27 @@ fn node_conditions_ignore_heartbeat() {
 }
 
 #[test]
+fn unknown_condition_keeps_the_last_heartbeat() {
+    let heartbeat: jiff::Timestamp = "2024-05-02T10:00:00Z".parse().expect("valid timestamp");
+    let node = node_with_status(ApiNodeStatus {
+        conditions: Some(vec![
+            NodeCondition {
+                last_heartbeat_time: Some(Time(heartbeat)),
+                ..api_condition("Ready", "Unknown")
+            },
+            NodeCondition {
+                last_heartbeat_time: Some(Time(heartbeat)),
+                ..api_condition("DiskPressure", "False")
+            },
+        ]),
+        ..Default::default()
+    });
+    let conditions = node_summary(&node).conditions;
+    assert_eq!(conditions[0].last_heartbeat_at, Some(heartbeat));
+    assert_eq!(conditions[1].last_heartbeat_at, None);
+}
+
+#[test]
 fn node_addresses_keep_api_order() {
     let node = node_with_status(ApiNodeStatus {
         addresses: Some(vec![

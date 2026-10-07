@@ -27,8 +27,7 @@ pub struct NodeSummary {
     pub kubelet_version: String,
     pub internal_ip: Option<String>,
     pub created_at: Option<jiff::Timestamp>,
-    /// In API order. `lastHeartbeatTime` is not kept: the kubelet refreshes it constantly and
-    /// every refresh would change the summary.
+    /// In API order.
     pub conditions: Vec<NodeCondition>,
     /// In API order.
     pub addresses: Vec<NodeAddress>,
@@ -50,6 +49,10 @@ pub struct NodeCondition {
     pub message: Option<String>,
     /// `lastTransitionTime`.
     pub changed_at: Option<jiff::Timestamp>,
+    /// `lastHeartbeatTime`, kept only while the status is `Unknown`: it is when the kubelet last
+    /// reported. A healthy kubelet refreshes it constantly and every refresh would change the
+    /// summary, so it is dropped from any other status.
+    pub last_heartbeat_at: Option<jiff::Timestamp>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -210,16 +213,23 @@ fn node_conditions(node: &Node) -> Vec<NodeCondition> {
 }
 
 fn node_condition(condition: &ApiNodeCondition) -> NodeCondition {
+    let status = match condition.status.as_str() {
+        "True" => ConditionStatus::True,
+        "False" => ConditionStatus::False,
+        _ => ConditionStatus::Unknown,
+    };
+    let is_unknown = status == ConditionStatus::Unknown;
     NodeCondition {
         name: condition.type_.clone(),
-        status: match condition.status.as_str() {
-            "True" => ConditionStatus::True,
-            "False" => ConditionStatus::False,
-            _ => ConditionStatus::Unknown,
-        },
+        status,
         reason: non_empty(condition.reason.as_deref()),
         message: optional_message(condition.message.as_deref()),
         changed_at: condition.last_transition_time.as_ref().map(|time| time.0),
+        last_heartbeat_at: condition
+            .last_heartbeat_time
+            .as_ref()
+            .filter(|_| is_unknown)
+            .map(|time| time.0),
     }
 }
 

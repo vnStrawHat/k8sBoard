@@ -138,6 +138,7 @@ fn node(name: &str, readiness: NodeReadiness) -> NodeSummary {
             reason: None,
             message: None,
             changed_at: Some(ago(7_200)),
+            last_heartbeat_at: None,
         }],
         addresses: Vec::new(),
         system: NodeSystemInfo::default(),

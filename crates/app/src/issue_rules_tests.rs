@@ -202,6 +202,7 @@ fn condition(
         reason: None,
         message: message.map(str::to_owned),
         changed_at: changed_ago.map(ago),
+        last_heartbeat_at: None,
     }
 }
 
@@ -479,7 +480,7 @@ fn rule_graces() {
         (
             "NodeNotReady Unknown",
             Some(node(NodeReadiness::Unknown)),
-            Some(NODE_UNKNOWN_GRACE),
+            None,
         ),
         (
             "NodeNotReady False",
@@ -714,6 +715,44 @@ fn node_not_ready_reads_the_ready_condition() {
     assert_eq!(finding.object, IssueObject::node("node-a"));
     let healthy = node_with("node-b", NodeReadiness::Ready, vec![]);
     assert_eq!(node_finding(&healthy, &inputs()), None);
+}
+
+#[test]
+fn kubelet_silent_since_names_the_last_report_on_the_clock_and_its_age() {
+    let heartbeat: Timestamp = "2026-10-07T10:32:10Z".parse().expect("valid timestamp");
+    let now: Timestamp = "2026-10-07T10:44:30Z".parse().expect("valid timestamp");
+    assert_eq!(
+        kubelet_silent_since(heartbeat, now, &TimeZone::UTC),
+        "kubelet silent since 10:32 (12m)"
+    );
+}
+
+#[test]
+fn node_unknown_cause_names_the_last_heartbeat_and_needs_no_grace() {
+    let mut ready = condition(
+        "Ready",
+        ConditionStatus::Unknown,
+        Some("Kubelet stopped posting node status."),
+        Some(720),
+    );
+    ready.last_heartbeat_at = Some(ago(750));
+    let node = node_with("node-a", NodeReadiness::Unknown, vec![ready]);
+    let finding = node_finding(&node, &inputs()).expect("a finding");
+    assert_eq!(finding.grace, None);
+    assert!(
+        finding
+            .cause
+            .starts_with("Ready is Unknown: kubelet silent since "),
+        "{}",
+        finding.cause
+    );
+    assert!(
+        finding
+            .cause
+            .ends_with("(12m). Kubelet stopped posting node status."),
+        "{}",
+        finding.cause
+    );
 }
 
 #[test]

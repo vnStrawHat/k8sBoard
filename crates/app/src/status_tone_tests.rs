@@ -217,6 +217,19 @@ fn node_not_ready_is_bad() {
     assert_eq!(enabled.tone, StatusTone::Bad);
 }
 
+#[test]
+fn node_with_a_silent_kubelet_is_bad_like_not_ready() {
+    let label = node_status_label(
+        NodeStatus {
+            readiness: NodeReadiness::Unknown,
+            scheduling: NodeScheduling::Enabled,
+        },
+        &[],
+    );
+    assert_eq!(label.text, "Unknown");
+    assert_eq!(label.tone, StatusTone::Bad);
+}
+
 fn node_condition(name: &str, status: ConditionStatus) -> NodeCondition {
     NodeCondition {
         name: name.to_owned(),
@@ -224,6 +237,7 @@ fn node_condition(name: &str, status: ConditionStatus) -> NodeCondition {
         reason: None,
         message: None,
         changed_at: None,
+        last_heartbeat_at: None,
     }
 }
 
@@ -425,12 +439,13 @@ fn node_condition_tone_table() {
             reason: None,
             message: None,
             changed_at: None,
+            last_heartbeat_at: None,
         })
     };
     use ConditionStatus::{False, True, Unknown};
     assert_eq!(tone("Ready", True), StatusTone::Ok);
     assert_eq!(tone("Ready", False), StatusTone::Bad);
-    assert_eq!(tone("Ready", Unknown), StatusTone::Warn);
+    assert_eq!(tone("Ready", Unknown), StatusTone::Bad);
     for problem in [
         "MemoryPressure",
         "DiskPressure",

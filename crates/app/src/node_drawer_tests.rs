@@ -38,6 +38,7 @@ fn condition_detail_joins_reason_and_age() {
         reason: reason.map(str::to_owned),
         message: None,
         changed_at: changed.map(at),
+        last_heartbeat_at: None,
     };
     let now = at(7_200);
     assert_eq!(

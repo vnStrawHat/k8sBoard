@@ -202,8 +202,8 @@ pub(crate) fn node_status_label(status: NodeStatus, conditions: &[NodeCondition]
 fn readiness_label(status: NodeStatus) -> StatusLabel {
     let readiness_tone = match status.readiness {
         NodeReadiness::Ready => StatusTone::Ok,
-        NodeReadiness::NotReady => StatusTone::Bad,
-        NodeReadiness::Unknown => StatusTone::Warn,
+        // A silent kubelet is as down as a NotReady one: nothing on the node reports.
+        NodeReadiness::NotReady | NodeReadiness::Unknown => StatusTone::Bad,
     };
     let readiness_text = readiness_text(status.readiness);
     match status.scheduling {
@@ -238,13 +238,14 @@ pub(crate) fn scheduling_label(scheduling: NodeScheduling) -> StatusLabel {
     }
 }
 
-/// Ready: True is Ok, False is Bad, Unknown is Warn. Every other type (pressure,
+/// Ready: True is Ok, False and Unknown (a silent kubelet) are Bad. Every other type (pressure,
 /// NetworkUnavailable, node-problem-detector conditions) reports a problem when True: True is
 /// Bad, False is Ok, Unknown is Warn.
 pub(crate) fn node_condition_tone(condition: &NodeCondition) -> StatusTone {
     let is_healthy_when_true = condition.name == "Ready";
     match (condition.status, is_healthy_when_true) {
-        (ConditionStatus::Unknown, _) => StatusTone::Warn,
+        (ConditionStatus::Unknown, true) => StatusTone::Bad,
+        (ConditionStatus::Unknown, false) => StatusTone::Warn,
         (ConditionStatus::True, true) | (ConditionStatus::False, false) => StatusTone::Ok,
         (ConditionStatus::True, false) | (ConditionStatus::False, true) => StatusTone::Bad,
     }

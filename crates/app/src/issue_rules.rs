@@ -10,6 +10,7 @@ use cluster::{
     EventSummary, InitStatus, NodeCondition, NodeReadiness, NodeSummary, PodStatus, PodSummary,
     StatusReason, Termination,
 };
+use jiff::tz::TimeZone;
 use jiff::{SignedDuration, Timestamp};
 
 use crate::age::format_age;
@@ -26,7 +27,6 @@ pub(crate) const UNSCHEDULABLE_GRACE: SignedDuration = SignedDuration::from_mins
 pub(crate) const NOT_READY_GRACE: SignedDuration = SignedDuration::from_mins(5);
 pub(crate) const STARTUP_FALLBACK_GRACE: SignedDuration = SignedDuration::from_mins(10);
 pub(crate) const STUCK_STARTING_AFTER: SignedDuration = SignedDuration::from_mins(10);
-pub(crate) const NODE_UNKNOWN_GRACE: SignedDuration = SignedDuration::from_mins(1);
 pub(crate) const RESTART_WINDOW: SignedDuration = SignedDuration::from_hours(1);
 pub(crate) const RESTART_WARN: u32 = 3;
 pub(crate) const EVICTION_WINDOW: SignedDuration = SignedDuration::from_hours(24);
@@ -500,10 +500,10 @@ fn is_true(condition: &NodeCondition) -> bool {
 }
 
 fn not_ready_finding(node: &NodeSummary, now: Timestamp) -> Option<Finding> {
-    let (reason, status, grace) = match node.status.readiness {
+    let (reason, status) = match node.status.readiness {
         NodeReadiness::Ready => return None,
-        NodeReadiness::NotReady => ("NotReady", "False", None),
-        NodeReadiness::Unknown => ("Unknown", "Unknown", Some(NODE_UNKNOWN_GRACE)),
+        NodeReadiness::NotReady => ("NotReady", "False"),
+        NodeReadiness::Unknown => ("Unknown", "Unknown"),
     };
     let ready = condition(node, READY);
     let changed_at = ready.and_then(|ready| ready.changed_at);
@@ -511,13 +511,18 @@ fn not_ready_finding(node: &NodeSummary, now: Timestamp) -> Option<Finding> {
         Some(_) => format!("Ready is {status} for {}.", format_age(changed_at, now)),
         None => format!("Ready is {status}."),
     };
+    if let Some(heartbeat) = ready.and_then(|ready| ready.last_heartbeat_at) {
+        cause = format!(
+            "Ready is {status}: {}.",
+            kubelet_silent_since(heartbeat, now, &TimeZone::system())
+        );
+    }
     if let Some(message) = ready.and_then(|ready| ready.message.as_deref()) {
         cause.push(' ');
         cause.push_str(&quoted(message));
     }
     Some(Finding {
         onset: changed_at,
-        grace,
         ..node_base(
             node,
             IssueRule::NodeNotReady,
@@ -526,6 +531,15 @@ fn not_ready_finding(node: &NodeSummary, now: Timestamp) -> Option<Finding> {
             cause,
         )
     })
+}
+
+/// `kubelet silent since 10:32 (12m)`: when the kubelet last reported, on the clock of `zone`.
+fn kubelet_silent_since(heartbeat: Timestamp, now: Timestamp, zone: &TimeZone) -> String {
+    let clock = heartbeat.to_zoned(zone.clone()).strftime("%H:%M");
+    format!(
+        "kubelet silent since {clock} ({})",
+        format_age(Some(heartbeat), now)
+    )
 }
 
 fn network_finding(node: &NodeSummary) -> Option<Finding> {

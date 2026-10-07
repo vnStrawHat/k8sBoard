@@ -61,6 +61,7 @@ fn with_ready(mut node: NodeSummary, status: ConditionStatus, changed: &str) -> 
         reason: None,
         message: None,
         changed_at: Some(at(changed)),
+        last_heartbeat_at: None,
     });
     node
 }
