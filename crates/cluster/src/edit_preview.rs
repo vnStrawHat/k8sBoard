@@ -284,7 +284,11 @@ fn value_at_mut<'a>(value: &'a mut Value, path: &FieldPath) -> Option<&'a mut Va
 }
 
 /// The changes at `paths`, at most `MAX_CHANGES`, plus the count of the rest.
-fn field_changes(before: &Value, after: &Value, paths: &[FieldPath]) -> (Vec<FieldChange>, usize) {
+pub(crate) fn field_changes(
+    before: &Value,
+    after: &Value,
+    paths: &[FieldPath],
+) -> (Vec<FieldChange>, usize) {
     let changes = paths
         .iter()
         .take(MAX_CHANGES)

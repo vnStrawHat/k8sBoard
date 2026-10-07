@@ -334,6 +334,18 @@ const SERVER_METADATA_FIELDS: [&str; 6] = [
 /// Comments (the hidden-count header) are not kept.
 pub fn clean_yaml(text: &str) -> Result<CleanYaml, EditError> {
     let mut value = parse_mapping(text)?;
+    let hidden_dropped = clean_value(&mut value);
+    value.sort_all_objects();
+    let text = to_yaml_text(&value, None).map_err(serialization_error)?;
+    Ok(CleanYaml {
+        text,
+        hidden_dropped,
+    })
+}
+
+/// The rules of `clean_yaml` on a parsed object: `status`, the server's metadata and every
+/// `<hidden>` entry removed. Returns how many `<hidden>` entries went.
+pub(crate) fn clean_value(value: &mut Value) -> usize {
     if let Some(object) = value.as_object_mut() {
         object.remove("status");
         if let Some(metadata) = object.get_mut("metadata").and_then(Value::as_object_mut) {
@@ -342,13 +354,7 @@ pub fn clean_yaml(text: &str) -> Result<CleanYaml, EditError> {
             }
         }
     }
-    let hidden_dropped = drop_hidden(&mut value);
-    value.sort_all_objects();
-    let text = to_yaml_text(&value, None).map_err(serialization_error)?;
-    Ok(CleanYaml {
-        text,
-        hidden_dropped,
-    })
+    drop_hidden(value)
 }
 
 /// The manifest `clean_yaml` made.

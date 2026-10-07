@@ -46,6 +46,7 @@ mod metrics_api;
 mod metrics_query;
 mod metrics_source;
 mod namespace;
+mod namespace_compare;
 mod network_policy;
 mod network_policy_traffic;
 mod node;
@@ -160,6 +161,10 @@ pub use metrics_source::{
     MetricsSourceFields, metrics_candidates,
 };
 pub use namespace::{NamespaceDeletionCondition, NamespacePhase, NamespaceScope, NamespaceSummary};
+pub use namespace_compare::{
+    COMPARE_KINDS, CompareCounts, KindComparison, KindOutcome, NamespaceComparison,
+    ObjectDifference,
+};
 pub use network_policy::{
     NetworkPolicySummary, PolicyDirection, PolicyPeer, PolicyPort, PolicyRule,
 };
