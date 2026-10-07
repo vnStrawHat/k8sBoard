@@ -17,4 +17,4 @@ The "Secrets: deferred" non-goal of the README is lifted. Secret is the sixth cr
 
 ## Write path
 
-`CreateObject` accepts a Secret. `ObjectDraft` folds `stringData` into base64 `data` (as the server does), so the dry-run answer compares path for path; the confirm and the audit line list the type and the key names (`data[tls.key]`), never a value. The forms close at Review…; a failed dry-run is read in the confirm dialog.
+`CreateObject` accepts a Secret. `ObjectDraft` folds `stringData` into base64 `data` (as the server does), so the dry-run answer compares path for path; the confirm and the audit line list the type and the key names (`data[tls.key]`), never a value. The form stays open under the confirm dialog. A server refusal of the dry-run (a 422, a 403, `AlreadyExists`, a webhook that cannot dry-run) closes the confirm dialog and shows the server's words under the fields; so does a commit that fails without a Retry. The fields are kept, and the next Review… clears the message and checks again. A transient failure (a conflict, a 429) stays in the confirm dialog with its Retry. A commit that went through closes the confirm dialog and then the form.

@@ -127,6 +127,9 @@ pub(crate) struct SecretForm {
     load: Load,
     /// Review… was pressed: the problem line shows now, not while the user is still typing.
     has_tried_review: bool,
+    /// What the server said when it refused the change the last Review… sent: the form stayed open
+    /// under the confirm dialog, so the fields can be fixed and reviewed again.
+    refusal: Option<SharedString>,
 }
 
 fn hidden_input(
@@ -212,6 +215,7 @@ impl SecretForm {
             old_not_after,
             load,
             has_tried_review: false,
+            refusal: None,
         }
     }
 
@@ -289,8 +293,9 @@ impl SecretForm {
         )
     }
 
-    /// Review…: closes the form and starts the guarded flow, whose dialog follows. Nothing is sent
-    /// from here.
+    /// Review…: starts the guarded flow, whose dialog opens over the form. The form stays open: a
+    /// refusal comes back to it (`show_refusal`), and a commit that went through closes it. Nothing
+    /// is sent from here.
     fn review(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if !matches!(self.load, Load::Ready) {
             return;
@@ -303,12 +308,18 @@ impl SecretForm {
                 return;
             }
         };
+        self.refusal = None;
+        cx.notify();
         let shell = self.shell.clone();
-        window.close_dialog(cx);
-        // After the close: the flow opens the confirm dialog, which the close must not pop.
         window.defer(cx, move |window, cx| {
             let _ = shell.update(cx, |shell, cx| shell.start_write(intent, window, cx));
         });
+    }
+
+    /// The server refused the change: its words show under the fields until the next Review….
+    fn show_refusal(&mut self, text: SharedString, cx: &mut Context<Self>) {
+        self.refusal = Some(text);
+        cx.notify();
     }
 
     /// Whether any field has text: closing now would lose it.
@@ -592,6 +603,11 @@ impl Render for SecretForm {
                     .gap_3()
                     .child(self.render_fields(cx))
                     .children(problem.map(|text| div().text_sm().text_color(danger).child(text)))
+                    .children(
+                        self.refusal
+                            .clone()
+                            .map(|text| div().text_sm().text_color(danger).child(text)),
+                    )
                     .into_any_element()
             }
         };
@@ -845,11 +861,36 @@ impl AppShell {
         let access = self.secret_value_access();
         let shell = cx.weak_entity();
         let form = cx.new(|cx| SecretForm::new(shell, target, start, access, replace, window, cx));
-        #[cfg(test)]
-        {
-            self.last_secret_form = Some(form.downgrade());
-        }
+        self.secret_form = Some(form.downgrade());
         show_secret_form(form, title, window, cx);
+    }
+
+    /// Hands the server's refusal of a Secret form's change back to the form, which is still open
+    /// under the confirm dialog. `false` when no form is open (a Secret made from YAML), so the
+    /// dialog keeps the text itself.
+    pub(crate) fn secret_form_refused(
+        &mut self,
+        text: SharedString,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(form) = self.secret_form.as_ref().and_then(WeakEntity::upgrade) else {
+            return false;
+        };
+        form.update(cx, |form, cx| form.show_refusal(text, cx));
+        true
+    }
+
+    /// The commit of a Secret form's change went through: the form closes. The confirm dialog
+    /// above it closed first, so the form is the top dialog.
+    pub(crate) fn secret_form_done(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self
+            .secret_form
+            .take()
+            .and_then(|form| form.upgrade())
+            .is_some()
+        {
+            window.close_dialog(cx);
+        }
     }
 }
 
@@ -869,6 +910,11 @@ impl SecretForm {
 
     pub(crate) fn kind(&self) -> SecretFormKind {
         self.kind
+    }
+
+    /// What the server said when it refused the last Review….
+    pub(crate) fn refusal(&self) -> Option<SharedString> {
+        self.refusal.clone()
     }
 
     pub(crate) fn name_text(&self, cx: &App) -> String {

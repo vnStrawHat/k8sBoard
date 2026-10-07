@@ -36,8 +36,8 @@ use crate::app_shell::object_delete::{
 };
 use crate::app_shell::write_flow::{
     CheckedWriteError, CommitMode, ConnectCommit, ConnectIntent, DryRunState, TypedMatch,
-    WriteIntent, WriteStep, checked_write, commit_block, confirmed, dry_run_state_of, typed_match,
-    unlock_block,
+    WriteIntent, WriteStep, checked_write, commit_block, confirmed, dry_run_state_of,
+    is_secret_form_action, typed_match, unlock_block,
 };
 use crate::cluster_registry::ClusterRef;
 use crate::environment::{Environment, environment_badge};
@@ -459,9 +459,23 @@ impl ConfirmDialog {
                 });
                 return;
             }
+            let state = dry_run_state_of(result);
+            // A Secret form is still open under this dialog: the server's refusal goes back to it,
+            // and the user fixes the fields there instead of retyping them.
+            if let DryRunState::Refused(text) | DryRunState::Rejected(text) = &state
+                && is_secret_form_action(intent.action)
+                && shell
+                    .update(cx, |shell, cx| shell.secret_form_refused(text.clone(), cx))
+                    .unwrap_or(false)
+            {
+                let _ = cx.update_window(window, |_, window, cx| {
+                    let _ = this.update(cx, |dialog, cx| dialog.close(window, cx));
+                });
+                return;
+            }
             let _ = this.update(cx, |dialog, cx| {
                 dialog.is_conflict = is_conflict;
-                dialog.dry_run = Some(dry_run_state_of(result));
+                dialog.dry_run = Some(state);
                 cx.notify();
             });
         }));

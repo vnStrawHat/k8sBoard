@@ -595,6 +595,15 @@ pub(super) async fn append_in_background(
     report_audit(queue_audit(config_dir.as_deref(), &entry), shell, cx).await;
 }
 
+/// The actions the Secret forms build: a refusal of one goes back to the form, which stays open
+/// under the confirm dialog, and a commit that went through closes it.
+pub(crate) fn is_secret_form_action(action: ResourceAction) -> bool {
+    matches!(
+        action,
+        ResourceAction::CreateObject(ObjectKind::Secret) | ResourceAction::ReplaceCertificate
+    )
+}
+
 /// The dry-run line a finished dry-run gives.
 pub(crate) fn dry_run_state_of(result: Result<WriteOutcome, CheckedWriteError>) -> DryRunState {
     match result {
@@ -1440,6 +1449,16 @@ fn finish_commit(
     {
         return;
     }
+    // A Secret form is still open under the dialog: the server's words go back to it.
+    if let Err(error) = &result
+        && is_secret_form_action(intent.action)
+    {
+        let text = match error {
+            CheckedWriteError::Blocked(text) => text.clone(),
+            CheckedWriteError::Write(error) => write_error_text(error).into(),
+        };
+        let _ = shell.update(cx, |shell, cx| shell.secret_form_refused(text, cx));
+    }
     let is_watched =
         result.is_ok() && watches_rollout(intent) && !is_paused_edit(shell, intent, cx);
     let notice = match &result {
@@ -1473,6 +1492,9 @@ fn finish_commit(
                 dialog.close(window, cx);
             }
         });
+        if result.is_ok() && is_secret_form_action(intent.action) {
+            let _ = shell.update(cx, |shell, cx| shell.secret_form_done(window, cx));
+        }
         let created_view =
             created_job_subject(intent, created.as_deref()).filter(|_| result.is_ok());
         match rollout_subject(intent, is_watched).filter(|_| result.is_ok()) {

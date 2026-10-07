@@ -500,9 +500,9 @@ pub(crate) struct AppShell {
     /// The labels and annotations editor opened last, for the tests that drive it.
     #[cfg(test)]
     last_metadata_editor: Option<gpui_kit::WeakEntity<metadata_editor::MetadataEditor>>,
-    /// The Secret form opened last, for the tests that drive it.
-    #[cfg(test)]
-    last_secret_form: Option<gpui_kit::WeakEntity<secret_form::SecretForm>>,
+    /// The Secret form that is open: it stays under the confirm dialog, which hands a refusal back
+    /// to it and closes it after a commit that went through.
+    secret_form: Option<gpui_kit::WeakEntity<secret_form::SecretForm>>,
     /// The bulk label editor opened last, for the tests that drive it.
     #[cfg(test)]
     last_bulk_label_editor: Option<gpui_kit::WeakEntity<node_editor::BulkLabelEditor>>,
@@ -815,8 +815,7 @@ impl AppShell {
             last_node_editor: None,
             #[cfg(test)]
             last_metadata_editor: None,
-            #[cfg(test)]
-            last_secret_form: None,
+            secret_form: None,
             #[cfg(test)]
             last_bulk_label_editor: None,
             #[cfg(test)]

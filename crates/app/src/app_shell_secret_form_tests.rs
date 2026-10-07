@@ -65,10 +65,20 @@ fn form_test(name: &str, cx: &mut TestAppContext) -> FormTest {
 /// `form_test` with `screen` shown. The permissions of Secrets are reviewed only when the Secrets
 /// screen shows.
 fn form_test_on(name: &str, screen: Screen, cx: &mut TestAppContext) -> FormTest {
+    form_test_serving(name, screen, server(), cx)
+}
+
+/// `form_test_on` over a server that answers as `answer` says.
+fn form_test_serving(
+    name: &str,
+    screen: Screen,
+    answer: impl Fn(&RecordedRequest) -> (u16, String) + Send + Sync + 'static,
+    cx: &mut TestAppContext,
+) -> FormTest {
     let fixture = open_switch_fixture(name, cx);
     switch_to(&fixture, "stg-b", cx);
     let (prod, stg) = (fixture.cluster("prod-a", cx), fixture.cluster("stg-b", cx));
-    let stg_api = go_live_answering(&fixture, &stg, "node-b", server(), cx);
+    let stg_api = go_live_answering(&fixture, &stg, "node-b", answer, cx);
     fixture
         .shell
         .update(cx, |shell, cx| shell.show_screen(screen, cx));
@@ -130,7 +140,7 @@ impl FormTest {
         self.t
             .fixture
             .shell
-            .read_with(cx, |shell, _| shell.last_secret_form.clone())
+            .read_with(cx, |shell, _| shell.secret_form.clone())
             .and_then(|form| form.upgrade())
     }
 
@@ -369,4 +379,104 @@ fn the_form_asks_for_the_permissions_of_secrets_when_a_pod_opens_it(cx: &mut Tes
     assert!(asked_for_secrets(&t));
     let form = t.wait_for_form(cx);
     assert_eq!(form.read_with(cx, |form, cx| form.name_text(cx)), "regcred");
+}
+
+/// The server of `server()`, except that a create of a Secret is refused as already there: on its
+/// dry-run, or, with `is_refused_on_commit`, only on the commit.
+fn refusing_server(
+    is_refused_on_commit: bool,
+) -> impl Fn(&RecordedRequest) -> (u16, String) + Send + Sync + 'static {
+    let answer = server();
+    move |request| {
+        let is_create = request.method == "POST" && request.path == SECRETS_PATH;
+        if is_create && request.has_query_key("dryRun") != is_refused_on_commit {
+            return (
+                409,
+                json!({
+                    "kind": "Status", "apiVersion": "v1", "status": "Failure",
+                    "message": "secrets \"regcred\" already exists",
+                    "reason": "AlreadyExists", "code": 409,
+                })
+                .to_string(),
+            );
+        }
+        answer(request)
+    }
+}
+
+fn is_dialog_open(t: &FormTest, cx: &mut TestAppContext) -> bool {
+    t.t.fixture
+        .with_window(cx, |window, cx| window.has_active_dialog(cx))
+}
+
+fn fill_and_review(t: &FormTest, form: &Entity<SecretForm>, cx: &mut TestAppContext) {
+    t.t.fixture.with_window(cx, |window, cx| {
+        form.update(cx, |form, cx| {
+            form.fill_registry("me", "hunter2-pw", window, cx);
+        });
+    });
+    t.review(form, cx);
+}
+
+#[gpui_kit::test]
+fn a_refused_dry_run_keeps_the_form_open_with_the_server_message(cx: &mut TestAppContext) {
+    let t = form_test_serving(
+        "secret-form-dry-run-refused",
+        Screen::Kind(ResourceKind::Secrets),
+        refusing_server(false),
+        cx,
+    );
+    t.open_new(registry_start(), cx);
+    let form = t.wait_for_form(cx);
+    fill_and_review(&t, &form, cx);
+    t.t.wait_for("the refusal", cx, |cx| {
+        form.read_with(cx, |form, _| form.refusal().is_some())
+    });
+    assert_eq!(
+        form.read_with(cx, |form, _| form.refusal()).as_deref(),
+        Some(
+            "Dry-run failed: the change is invalid: Secret regcred already exists (metadata.name)"
+        )
+    );
+    assert!(is_dialog_open(&t, cx), "the form is still open");
+    // The fields are kept, so Review… again needs no retyping and sends a new check.
+    t.review(&form, cx);
+    t.t.wait_for("the second check", cx, |_| writes(&t.t.stg_api).len() == 2);
+}
+
+#[gpui_kit::test]
+fn a_refused_commit_keeps_the_form_open_with_the_server_message(cx: &mut TestAppContext) {
+    let t = form_test_serving(
+        "secret-form-commit-refused",
+        Screen::Kind(ResourceKind::Secrets),
+        refusing_server(true),
+        cx,
+    );
+    t.open_new(registry_start(), cx);
+    let form = t.wait_for_form(cx);
+    fill_and_review(&t, &form, cx);
+    t.t.wait_for_dry_run(cx);
+    t.t.confirm(cx);
+    t.t.wait_for("the refusal", cx, |cx| {
+        form.read_with(cx, |form, _| form.refusal().is_some())
+    });
+    let text = form.read_with(cx, |form, _| form.refusal());
+    assert!(
+        text.is_some_and(|text| text.contains("Secret regcred already exists")),
+        "the form says what the server said"
+    );
+    assert!(is_dialog_open(&t, cx), "the form is still open");
+}
+
+#[gpui_kit::test]
+fn a_commit_that_went_through_closes_the_form(cx: &mut TestAppContext) {
+    let t = form_test("secret-form-closes", cx);
+    t.open_new(registry_start(), cx);
+    let form = t.wait_for_form(cx);
+    fill_and_review(&t, &form, cx);
+    t.t.wait_for_dry_run(cx);
+    assert!(is_dialog_open(&t, cx));
+    t.t.confirm(cx);
+    t.t.wait_for("the commit", cx, |_| writes(&t.t.stg_api).len() == 2);
+    t.t.wait_for("the dialogs to close", cx, |cx| !is_dialog_open(&t, cx));
 }
