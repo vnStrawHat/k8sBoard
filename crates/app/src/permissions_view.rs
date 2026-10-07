@@ -96,6 +96,8 @@ struct GrantedBy {
     role: Option<ResourceKey>,
     role_text: String,
     via: String,
+    /// The binding or its role is a `system:` object: listed after the ones an engineer made.
+    is_system: bool,
 }
 
 struct ShownTable {
@@ -213,7 +215,7 @@ fn masters_answer() -> Answer {
     }
 }
 
-/// One row per contributing binding, in rule order.
+/// One row per contributing binding, in rule order, the `system:` ones after the rest.
 fn granted_by(rules: &[EffectiveRule<'_>]) -> Vec<GrantedBy> {
     let mut rows: Vec<GrantedBy> = Vec::new();
     for effective in rules {
@@ -227,9 +229,27 @@ fn granted_by(rules: &[EffectiveRule<'_>]) -> Vec<GrantedBy> {
             role: role_key(effective.binding),
             role_text: role_text(&effective.binding.role),
             via: subject_text(effective.subject),
+            is_system: effective.binding.name.starts_with("system:")
+                || effective.binding.role.name.starts_with("system:"),
         });
     }
+    rows.sort_by_key(|row| row.is_system);
     rows
+}
+
+/// The roles a denied Ask can be fixed in: the ones bound to the subject that are not `system:`
+/// roles, each once, with the row an `Edit role/x…` link opens.
+fn editable_roles(granted_by: &[GrantedBy]) -> Vec<(&str, &ResourceKey)> {
+    let mut roles: Vec<(&str, &ResourceKey)> = Vec::new();
+    for row in granted_by.iter().filter(|row| !row.is_system) {
+        let Some(key) = &row.role else {
+            continue;
+        };
+        if roles.iter().all(|(text, _)| *text != row.role_text) {
+            roles.push((row.role_text.as_str(), key));
+        }
+    }
+    roles
 }
 
 /// The client-side table of `identity` in `namespace` (`None`: ClusterRoleBindings only).
@@ -776,13 +796,17 @@ impl PermissionsView {
             Some(Ok(request)) => {
                 let target = question_text(request);
                 match &self.answer {
-                    RequestState::Ready(answer) => rows.push(
-                        div()
-                            .font_semibold()
-                            .text_color(tone_color(answer.tone, cx))
-                            .child(format!("{target}: {}", answer.text))
-                            .into_any_element(),
-                    ),
+                    RequestState::Ready(answer) => {
+                        rows.push(
+                            div()
+                                .font_semibold()
+                                .text_color(tone_color(answer.tone, cx))
+                                .child(format!("{target}: {}", answer.text))
+                                .into_any_element(),
+                        );
+                        let is_denied = answer.tone == StatusTone::Bad;
+                        rows.extend(self.render_bound_roles(is_denied, cx));
+                    }
                     RequestState::Loading { .. } => {
                         rows.push(self.muted("Asking the API server…", cx));
                     }
@@ -795,6 +819,62 @@ impl PermissionsView {
             None => {}
         }
         rows
+    }
+
+    /// Under a denied answer for another subject: the roles bound to it, each with a link that opens
+    /// the role in Edit YAML, so the fix is one click away. Nothing for You, whose rules the API
+    /// server owns, or while the table is not ready.
+    fn render_bound_roles(&mut self, is_denied: bool, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        let is_other = matches!(
+            &self.checked,
+            Some(Ok(Checked {
+                subject: SubjectQuery::Other { .. },
+                ..
+            }))
+        );
+        let RequestState::Ready(shown) = &self.table else {
+            return Vec::new();
+        };
+        if !is_denied || !is_other || shown.is_masters {
+            return Vec::new();
+        }
+        let roles: Vec<(String, ResourceKey)> = editable_roles(&shown.granted_by)
+            .into_iter()
+            .map(|(text, key)| (text.to_owned(), key.clone()))
+            .collect();
+        if roles.is_empty() {
+            return vec![self.muted("No role of its own is bound to this subject.", cx)];
+        }
+        let mut rows = vec![self.muted("Roles bound to this subject:", cx)];
+        for (text, key) in roles {
+            rows.push(self.edit_link(&text, key, cx));
+        }
+        rows
+    }
+
+    /// `Edit role/ci-bot…`: closes the dialog and opens the role's YAML editor.
+    fn edit_link(
+        &mut self,
+        role_text: &str,
+        key: ResourceKey,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        self.link_count += 1;
+        let theme = cx.theme();
+        div()
+            .id(("permissions-edit-role", self.link_count))
+            .cursor_pointer()
+            .pl_4()
+            .text_sm()
+            .font_family(theme.mono_font_family.clone())
+            .text_color(theme.link)
+            .underline()
+            .on_click(cx.listener(move |view, _, window, cx| {
+                window.close_dialog(cx);
+                view.origin.edit(key.clone(), cx);
+            }))
+            .child(format!("Edit {role_text}…"))
+            .into_any_element()
     }
 
     fn render_table(&mut self, shown: &ShownTable, cx: &mut Context<Self>) -> Vec<AnyElement> {

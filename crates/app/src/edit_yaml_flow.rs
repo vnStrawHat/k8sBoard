@@ -31,8 +31,8 @@ use crate::kind_row::KindObject;
 use crate::object_create_view::ObjectCreateView;
 use crate::object_templates::{template_namespace, template_text};
 use crate::resource_actions::{
-    ActionAvailability, ResourceAction, RowAction, action_availability, action_label,
-    subject_action, unavailable_text,
+    ActionAvailability, CHECKING_PERMISSIONS, ResourceAction, RowAction, action_availability,
+    action_label, subject_action, unavailable_text,
 };
 use crate::resource_kind::ResourceKind;
 use crate::revision_history::HistoryInputs;
@@ -40,6 +40,9 @@ use crate::table_selection::ClusterObject;
 use crate::values_edit::ValuesEditView;
 use crate::yaml_edit::{EditFailure, EditSubject, YamlEditView, edit_failure_of};
 use crate::yaml_view::object_ref;
+/// How long `reveal_and_edit` waits for the permission review of a kind, in polls of this length.
+const EDIT_GATE_POLL: std::time::Duration = std::time::Duration::from_millis(200);
+const EDIT_GATE_POLLS: u32 = 25;
 
 /// What runs once the user agreed to throw the unsaved text away.
 type AfterDiscard = Box<dyn FnOnce(&mut AppShell, &mut Context<AppShell>)>;
@@ -152,6 +155,48 @@ impl OpenEdit {
 }
 
 impl AppShell {
+    /// Shows `object` on its screen with its drawer, then opens Edit YAML on it: the `Edit role/x…`
+    /// link of Check permissions. The gate is read by `open_edit`, so a denied edit says why.
+    pub(crate) fn reveal_and_edit(&mut self, object: ClusterObject, cx: &mut Context<Self>) {
+        let subject = object.clone();
+        self.reveal_then(object, cx, move |shell, cx| {
+            let handle = shell.window;
+            cx.spawn(async move |weak, cx| {
+                // The screen the reveal showed has just asked for the write permissions of its
+                // kind: edit once the answer is in, not on the `Checking permissions…` gate.
+                for _ in 0..EDIT_GATE_POLLS {
+                    let is_checking = weak
+                        .read_with(cx, |shell, cx| shell.is_edit_gate_checking(&subject, cx))
+                        .unwrap_or(false);
+                    if !is_checking {
+                        break;
+                    }
+                    cx.background_executor().timer(EDIT_GATE_POLL).await;
+                }
+                let _ = cx.update_window(handle, |_, window, cx| {
+                    let _ = weak.update(cx, |shell, cx| shell.open_edit(subject, window, cx));
+                });
+            })
+            .detach();
+        });
+    }
+
+    /// Whether the permissions of Edit YAML on `subject` are still being asked.
+    fn is_edit_gate_checking(&self, subject: &ClusterObject, cx: &App) -> bool {
+        let Some(ResourceAction::EditYaml(kind)) =
+            subject_action(RowAction::EditYaml, &subject.key)
+        else {
+            return false;
+        };
+        let Some(guard) = self.guard_for(&subject.cluster, cx) else {
+            return false;
+        };
+        matches!(
+            action_availability(ResourceAction::EditYaml(kind), &guard),
+            ActionAvailability::Disabled { reason } if reason == CHECKING_PERMISSIONS
+        )
+    }
+
     /// Opens Edit YAML on `subject`, the cursor row, in its own cluster. The key, the menu item, and
     /// the palette entry all end here, after the gate said yes; the gate is read again because they
     /// may be a moment old.

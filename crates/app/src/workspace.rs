@@ -525,6 +525,8 @@ impl AppShell {
         Some(
             h_flex()
                 .ml_auto()
+                // The drawer is drawn over the right of the header: the buttons stop left of it.
+                .mr(self.open_drawer_width())
                 .gap_2()
                 .children(buttons)
                 .into_any_element(),
@@ -1067,7 +1069,11 @@ fn paused_text(count: &str, has_held: bool) -> String {
 }
 
 /// A header toggle: primary when on, outline when off, like Warnings only.
-pub(crate) fn toggle_button(id: &'static str, label: &'static str, is_on: bool) -> Button {
+pub(crate) fn toggle_button(
+    id: &'static str,
+    label: impl Into<SharedString>,
+    is_on: bool,
+) -> Button {
     Button::new(id)
         .label(label)
         .small()

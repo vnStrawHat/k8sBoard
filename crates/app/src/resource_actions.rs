@@ -1013,6 +1013,9 @@ fn before_lock_reason(
     }
 }
 
+/// What the gate says while the permissions of an action are being asked.
+pub(crate) const CHECKING_PERMISSIONS: &str = "Checking permissions…";
+
 /// Why the permissions do not allow the action: the state while they are not known, else the
 /// first check of `checks` that is not allowed. A denied verb with its sibling verb on the same
 /// resource in the list names both (`get and create pods/exec`), because the user needs both.
@@ -1031,7 +1034,7 @@ fn permission_reason(
             | AccessCheck::Patch(kind)
             | AccessCheck::Create(kind) => match kind_access.get(*kind) {
                 None | Some(KindAccess::Checking { .. }) => {
-                    return Some("Checking permissions…".into());
+                    return Some(CHECKING_PERMISSIONS.into());
                 }
                 Some(KindAccess::Unknown) => {
                     return Some("Permissions could not be checked".into());
@@ -1039,7 +1042,7 @@ fn permission_reason(
                 Some(KindAccess::Known(report)) => report,
             },
             _ => match access {
-                AccessState::Checking { .. } => return Some("Checking permissions…".into()),
+                AccessState::Checking { .. } => return Some(CHECKING_PERMISSIONS.into()),
                 AccessState::Unknown => {
                     return Some("Permissions could not be checked".into());
                 }

@@ -210,6 +210,50 @@ fn granted_by_has_one_row_per_binding() {
 }
 
 #[test]
+fn granted_by_lists_system_bindings_after_the_rest_and_roles_skip_them() {
+    let subject = Subject {
+        kind: SubjectKind::ServiceAccount,
+        name: "ci-bot".to_owned(),
+        namespace: Some("lab-house".to_owned()),
+    };
+    let system_binding = binding("system:basic-user", "system:basic-user");
+    let system_role = binding("discovery", "system:discovery");
+    let mine = binding("ci-bot", "ci-bot");
+    let rule = RbacRule {
+        api_groups: vec![String::new()],
+        resources: vec!["pods".to_owned()],
+        resource_names: Vec::new(),
+        verbs: vec!["get".to_owned()],
+        non_resource_urls: Vec::new(),
+    };
+    let effective = |binding| EffectiveRule {
+        rule: &rule,
+        binding,
+        subject: &subject,
+    };
+    let rules = [
+        effective(&system_binding),
+        effective(&system_role),
+        effective(&mine),
+    ];
+    let rows = granted_by(&rules);
+    let texts: Vec<_> = rows.iter().map(|row| row.binding_text.as_str()).collect();
+    assert_eq!(
+        texts,
+        [
+            "clusterrolebinding/ci-bot",
+            "clusterrolebinding/system:basic-user",
+            "clusterrolebinding/discovery"
+        ]
+    );
+    let roles: Vec<_> = editable_roles(&rows)
+        .into_iter()
+        .map(|(text, _)| text)
+        .collect();
+    assert_eq!(roles, ["clusterrole/ci-bot"]);
+}
+
+#[test]
 fn question_reads_the_request_in_words() {
     let request = AccessRequest {
         verb: "get".to_owned(),

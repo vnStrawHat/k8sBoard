@@ -131,6 +131,14 @@ impl DialogOrigin {
             .shell
             .update(cx, |shell, cx| shell.reveal_object(object, cx));
     }
+
+    /// `reveal`, then Edit YAML on the object.
+    pub(crate) fn edit(&self, key: ResourceKey, cx: &mut App) {
+        let object = ClusterObject::new(self.cluster.clone(), key);
+        let _ = self
+            .shell
+            .update(cx, |shell, cx| shell.reveal_and_edit(object, cx));
+    }
 }
 
 /// The index of the item `is_target` picks in `list`, whatever the filter shows. `None` while
