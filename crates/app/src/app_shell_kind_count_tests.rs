@@ -46,12 +46,27 @@ fn the_sidebar_counts_run_again_every_thirty_seconds_without_a_navigation(cx: &m
         }
         std::thread::sleep(Duration::from_millis(10));
     }
-    let first = count_lists(&api);
+    // The first list is only the start of the run: one list per kind follows on the tokio thread, so
+    // wait until the count holds still before treating it as the whole run.
+    let mut first = count_lists(&api);
+    let mut quiet_polls = 0;
+    for _ in 0..1_500 {
+        cx.run_until_parked();
+        std::thread::sleep(Duration::from_millis(10));
+        let now = count_lists(&api);
+        quiet_polls = if now == first { quiet_polls + 1 } else { 0 };
+        first = now;
+        if quiet_polls >= 30 {
+            break;
+        }
+    }
     assert!(first > 0, "the review counts once");
     // A moment later nothing counts again.
     cx.executor().advance_clock(Duration::from_secs(20));
-    cx.run_until_parked();
-    std::thread::sleep(Duration::from_millis(100));
+    for _ in 0..30 {
+        cx.run_until_parked();
+        std::thread::sleep(Duration::from_millis(10));
+    }
     assert_eq!(count_lists(&api), first);
     // Past 30 seconds the ticker counts again, with no screen change in between.
     cx.executor().advance_clock(Duration::from_secs(15));
