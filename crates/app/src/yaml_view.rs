@@ -2,7 +2,7 @@
 //! read-only code editor. The cluster crate masks secrets before the text reaches this module,
 //! and nothing here logs or writes it.
 
-use cluster::{ClusterConnection, EnvValues, ObjectRef};
+use cluster::{ClusterConnection, EnvValues, ObjectRef, clean_yaml};
 use gpui_kit::assets::IconName;
 use gpui_kit::component::alert::Alert;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
@@ -22,6 +22,7 @@ use crate::cluster_registry::ClusterRef;
 use crate::cluster_runtime::ClusterRuntime;
 use crate::cluster_session::error_text;
 use crate::drawer::{DRAWER_SUBJECT_DELAY, DrawerTab, drawer_tabs, shown_tab};
+use crate::file_export::{ExportState, export_file_name, start_export};
 use crate::resource_kind::ResourceKind;
 use crate::table_selection::ResourceKey;
 
@@ -38,6 +39,13 @@ pub(crate) struct YamlView {
     fetched_at: Option<jiff::Timestamp>,
     hidden_env_values: usize,
     request: YamlRequest,
+    /// What the last Copy or Save said, until the next fetch.
+    notice: Option<String>,
+    /// Save as…: the save dialog, the write, and what they ended in.
+    export: ExportState,
+    _export: Option<Task<()>>,
+    /// The hidden values the saved manifest left out, said once the file is written.
+    saved_left_out: String,
 }
 
 enum YamlRequest {
@@ -82,6 +90,10 @@ impl YamlView {
             fetched_at: None,
             hidden_env_values: 0,
             request: YamlRequest::Idle,
+            notice: None,
+            export: ExportState::Idle,
+            _export: None,
+            saved_left_out: String::new(),
         };
         view.fetch(EnvValues::Hidden, FetchStart::Debounced, window, cx);
         view
@@ -143,6 +155,7 @@ impl YamlView {
         self.fetched_at = Some(jiff::Timestamp::now());
         self.hidden_env_values = hidden_env_values;
         self.request = YamlRequest::Idle;
+        self.notice = None;
         cx.notify();
     }
 
@@ -173,10 +186,63 @@ impl YamlView {
         cx.write_to_clipboard(ClipboardItem::new_string(text));
     }
 
+    /// The manifest for Git: what the editor shows without `status`, the server's metadata, and
+    /// the `<hidden>` values, with how many of those went. `Err` is the line to show.
+    fn clean_text(&self, cx: &Context<Self>) -> Result<(String, String), String> {
+        let shown = self.editor.read(cx).text().to_string();
+        let clean =
+            clean_yaml(&shown).map_err(|error| format!("Could not clean the YAML: {error}"))?;
+        let left_out = hidden_note(clean.hidden_dropped);
+        Ok((clean.text, left_out))
+    }
+
+    /// Copy clean YAML: the manifest for Git on the clipboard.
+    fn copy_clean(&mut self, cx: &mut Context<Self>) {
+        self.notice = Some(match self.clean_text(cx) {
+            Ok((text, left_out)) => {
+                cx.write_to_clipboard(ClipboardItem::new_string(text));
+                format!("Copied clean YAML{left_out}")
+            }
+            Err(message) => message,
+        });
+        cx.notify();
+    }
+
+    /// Save as…: the save dialog first, then the manifest for Git is written to the chosen path.
+    fn save_clean(&mut self, cx: &mut Context<Self>) {
+        if self.export.is_busy() || self.fetched_at.is_none() {
+            return;
+        }
+        let label = format!(
+            "{}-{}",
+            self.object.kind_name().to_ascii_lowercase(),
+            self.object.name()
+        );
+        let name = export_file_name(&label, "yaml", jiff::Timestamp::now());
+        self.export = ExportState::Choosing;
+        self._export = Some(start_export(
+            name,
+            "YAML",
+            |view: &mut Self, cx| view.clean_text(cx),
+            Self::set_export,
+            |view, left_out| view.saved_left_out = left_out,
+            cx,
+        ));
+        cx.notify();
+    }
+
+    fn set_export(&mut self, state: ExportState, cx: &mut Context<Self>) {
+        if let ExportState::Saved { file_name } = &state {
+            self.notice = Some(format!("Saved to {file_name}{}", self.saved_left_out));
+        }
+        self.export = state;
+        cx.notify();
+    }
+
     fn render_toolbar(&self, cx: &Context<Self>) -> AnyElement {
         let theme = cx.theme();
         let is_running = self.is_running();
-        let status = fetch_status(self.fetched_at, &self.request, jiff::Timestamp::now());
+        let status = self.status_text();
         let is_shown = self.env == EnvValues::Shown;
         let env_tooltip = if is_shown {
             "Hide env values"
@@ -222,6 +288,24 @@ impl YamlView {
                     .on_click(cx.listener(|view, _, _, cx| view.copy(cx))),
             )
             .child(
+                Button::new("yaml-copy-clean")
+                    .ghost()
+                    .small()
+                    .icon(Icon::new(IconName::ClipboardCheck))
+                    .disabled(self.fetched_at.is_none())
+                    .tooltip(CLEAN_TOOLTIP)
+                    .on_click(cx.listener(|view, _, _, cx| view.copy_clean(cx))),
+            )
+            .child(
+                Button::new("yaml-save")
+                    .ghost()
+                    .small()
+                    .icon(Icon::new(IconName::Download))
+                    .disabled(self.fetched_at.is_none() || self.export.is_busy())
+                    .tooltip("Save as… (clean YAML)")
+                    .on_click(cx.listener(|view, _, _, cx| view.save_clean(cx))),
+            )
+            .child(
                 Button::new("yaml-refresh")
                     .ghost()
                     .small()
@@ -233,7 +317,27 @@ impl YamlView {
             .into_any_element()
     }
 
+    /// The line left of the buttons: what the last Copy or Save said, else how fresh the YAML is.
+    fn status_text(&self) -> SharedString {
+        match &self.notice {
+            Some(notice) => notice.clone().into(),
+            None => fetch_status(self.fetched_at, &self.request, jiff::Timestamp::now()),
+        }
+    }
+
     fn render_alert(&self) -> Option<AnyElement> {
+        if let ExportState::Failed { message } = &self.export {
+            let alert =
+                Alert::error("yaml-save-error", message.clone()).title("Cannot save the YAML");
+            return Some(
+                div()
+                    .flex_shrink_0()
+                    .px_3()
+                    .py_2()
+                    .child(alert)
+                    .into_any_element(),
+            );
+        }
         let YamlRequest::Failed { message } = &self.request else {
             return None;
         };
@@ -332,6 +436,17 @@ fn fetch_status(
     text.into()
 }
 
+const CLEAN_TOOLTIP: &str = "Copy clean YAML: no status, no server metadata, no hidden values";
+
+/// What the hidden values said when they left the manifest: ` · 2 hidden values left out`.
+fn hidden_note(count: usize) -> String {
+    match count {
+        0 => String::new(),
+        1 => " \u{b7} 1 hidden value left out".to_owned(),
+        count => format!(" \u{b7} {count} hidden values left out"),
+    }
+}
+
 /// The toggle appears when it has something to do: env values are hidden, or shown.
 pub(crate) fn shows_env_toggle(env: EnvValues, hidden_env_values: usize) -> bool {
     env == EnvValues::Shown || hidden_env_values > 0
@@ -340,6 +455,7 @@ pub(crate) fn shows_env_toggle(env: EnvValues, hidden_env_values: usize) -> bool
 #[cfg(test)]
 mod tests {
     use cluster::ObjectKind;
+    use gpui_kit::Entity;
 
     use super::*;
     use crate::resource_kind::ResourceKind;
@@ -458,6 +574,129 @@ mod tests {
         assert_eq!(status(Some(at(88)), failed()), "Fetched 12s ago");
         assert_eq!(status(None, failed()), "");
         assert_eq!(status(None, YamlRequest::Idle), "");
+    }
+
+    #[test]
+    fn the_clean_note_counts_the_hidden_values_that_left() {
+        assert_eq!(hidden_note(0), "");
+        assert_eq!(hidden_note(1), " \u{b7} 1 hidden value left out");
+        assert_eq!(hidden_note(3), " \u{b7} 3 hidden values left out");
+    }
+
+    const SECRET_JSON: &str = r#"{"apiVersion":"v1","kind":"Secret","metadata":{"name":"db","namespace":"shop","uid":"u-1","resourceVersion":"7","creationTimestamp":"2026-10-01T08:00:00Z","labels":{"app":"db"}},"type":"Opaque","data":{"password":"c2VjcmV0LXZhbHVl"}}"#;
+
+    /// A YAML view of the Secret `shop/db` over a fake server, with its first fetch done.
+    fn fetched_view(
+        runtime: &tokio::runtime::Runtime,
+        cx: &mut gpui_kit::TestAppContext,
+    ) -> Entity<YamlView> {
+        use cluster::WritePolicy;
+        use cluster::fake_api::FakeApi;
+        cx.executor().allow_parking();
+        cx.update(|cx| cx.set_global(ClusterRuntime::new(runtime.handle().clone())));
+        let (connection, _api) = {
+            let _guard = runtime.enter();
+            FakeApi::connection(WritePolicy::Blocked, |_| (200, SECRET_JSON.to_owned()))
+        };
+        let cluster = ClusterRef {
+            kubeconfig: std::path::PathBuf::from("test.yaml"),
+            context: "stg-b".to_owned(),
+        };
+        let object = ObjectRef::new(
+            cluster::ObjectKind::Secret,
+            Some("shop".to_owned()),
+            "db".to_owned(),
+        )
+        .expect("a secret has a namespace");
+        let view = cx.update(|cx| {
+            gpui_kit::init(cx);
+            gpui_kit::open_window(gpui_kit::WindowOptions::default(), cx, |window, cx| {
+                cx.new(|cx| YamlView::new(connection, cluster, object, window, cx))
+            })
+            .expect("open the test window")
+            .1
+        });
+        cx.executor().advance_clock(DRAWER_SUBJECT_DELAY * 2);
+        for _ in 0..200 {
+            cx.run_until_parked();
+            if view.read_with(cx, |view, _| view.fetched_at.is_some()) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        view
+    }
+
+    #[gpui_kit::test]
+    fn copy_clean_puts_the_manifest_without_server_fields_or_hidden_values_on_the_clipboard(
+        cx: &mut gpui_kit::TestAppContext,
+    ) {
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .expect("a tokio runtime");
+        let view = fetched_view(&runtime, cx);
+        view.update(cx, |view, cx| view.copy_clean(cx));
+        let copied = cx
+            .read_from_clipboard()
+            .and_then(|item| item.text())
+            .expect("the manifest is on the clipboard");
+        assert!(copied.contains("name: db"), "{copied}");
+        assert!(copied.contains("app: db"), "{copied}");
+        for left_out in [
+            "uid",
+            "resourceVersion",
+            "creationTimestamp",
+            "hidden",
+            "password",
+        ] {
+            assert!(!copied.contains(left_out), "{left_out} in {copied}");
+        }
+        let notice = view.read_with(cx, |view, _| view.notice.clone());
+        assert_eq!(
+            notice.as_deref(),
+            Some("Copied clean YAML \u{b7} 1 hidden value left out")
+        );
+    }
+
+    #[gpui_kit::test]
+    fn save_as_writes_the_clean_manifest_to_the_chosen_path_and_says_so(
+        cx: &mut gpui_kit::TestAppContext,
+    ) {
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .expect("a tokio runtime");
+        let view = fetched_view(&runtime, cx);
+        let dir = std::env::temp_dir().join(format!("k8sboard-yaml-save-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("temp folder");
+        let target = dir.join("secret-db.yaml");
+        view.update(cx, |view, cx| view.save_clean(cx));
+        cx.run_until_parked();
+        // Nothing is written before the dialog returns a path.
+        assert!(!target.exists());
+        let chosen = target.clone();
+        cx.simulate_new_path_selection(move |_| Some(chosen.clone()));
+        for _ in 0..200 {
+            cx.run_until_parked();
+            if target.exists() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        let written = std::fs::read_to_string(&target).expect("the manifest is written");
+        assert!(written.contains("name: db"), "{written}");
+        assert!(!written.contains("uid"), "{written}");
+        cx.run_until_parked();
+        let notice = view.read_with(cx, |view, _| view.notice.clone());
+        assert_eq!(
+            notice.as_deref(),
+            Some("Saved to secret-db.yaml \u{b7} 1 hidden value left out")
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

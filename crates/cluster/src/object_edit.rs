@@ -9,7 +9,7 @@ use serde_json::Value;
 
 use crate::config_values::is_helm_managed;
 use crate::connection::{ClusterConnection, ClusterError};
-use crate::edit_placeholders::{self, Unrestorable};
+use crate::edit_placeholders::{self, HIDDEN, Unrestorable};
 use crate::edit_preview::{FieldPath, copy_path, field_paths, has_last_applied};
 use crate::object_yaml::{EnvValues, ObjectKind, ObjectRef, mask_object, to_yaml_text};
 
@@ -315,6 +315,74 @@ pub fn format_yaml(text: &str) -> Result<String, EditError> {
         .collect();
     let header = (!header.is_empty()).then(|| header.join("\n"));
     to_yaml_text(&value, header.as_deref()).map_err(serialization_error)
+}
+
+/// What the cluster adds to an object that a manifest in Git does not carry.
+const SERVER_METADATA_FIELDS: [&str; 6] = [
+    "creationTimestamp",
+    "generation",
+    "resourceVersion",
+    "uid",
+    "managedFields",
+    "selfLink",
+];
+
+/// An object's YAML as a manifest for Git: the text with `status` and the server's metadata
+/// (`creationTimestamp`, `generation`, `resourceVersion`, `uid`, `managedFields`, `selfLink`)
+/// dropped, keys sorted like kubectl. A `<hidden>` placeholder stands for a value this app never
+/// had, so it is dropped with its key: `hidden_dropped` counts them, for the caller to say so.
+/// Comments (the hidden-count header) are not kept.
+pub fn clean_yaml(text: &str) -> Result<CleanYaml, EditError> {
+    let mut value = parse_mapping(text)?;
+    if let Some(object) = value.as_object_mut() {
+        object.remove("status");
+        if let Some(metadata) = object.get_mut("metadata").and_then(Value::as_object_mut) {
+            for field in SERVER_METADATA_FIELDS {
+                metadata.remove(field);
+            }
+        }
+    }
+    let hidden_dropped = drop_hidden(&mut value);
+    value.sort_all_objects();
+    let text = to_yaml_text(&value, None).map_err(serialization_error)?;
+    Ok(CleanYaml {
+        text,
+        hidden_dropped,
+    })
+}
+
+/// The manifest `clean_yaml` made.
+#[derive(Clone, PartialEq, Eq)]
+pub struct CleanYaml {
+    pub text: String,
+    /// How many `<hidden>` values were dropped with their keys.
+    pub hidden_dropped: usize,
+}
+
+/// Removes every map entry whose value is the `<hidden>` placeholder, at any depth, and returns
+/// how many; a list item that is the placeholder goes too.
+fn drop_hidden(value: &mut Value) -> usize {
+    match value {
+        Value::Object(map) => {
+            let before = map.len();
+            map.retain(|_, child| child.as_str() != Some(HIDDEN));
+            let mut dropped = before - map.len();
+            for child in map.values_mut() {
+                dropped += drop_hidden(child);
+            }
+            dropped
+        }
+        Value::Array(items) => {
+            let before = items.len();
+            items.retain(|item| item.as_str() != Some(HIDDEN));
+            let mut dropped = before - items.len();
+            for item in items {
+                dropped += drop_hidden(item);
+            }
+            dropped
+        }
+        _ => 0,
+    }
 }
 
 /// The text of the failure is a fixed message of the serializer.

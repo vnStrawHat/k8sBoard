@@ -851,3 +851,43 @@ fn the_managed_by_label_marks_a_helm_object() {
     other["metadata"]["labels"] = json!({"app.kubernetes.io/managed-by": "Tiller"});
     assert!(!base(ObjectKind::Deployment, "api", other).is_helm_managed());
 }
+
+const SHOWN_SECRET: &str = "# k8sBoard hid 2 values as <hidden>.\napiVersion: v1\ndata:\n  password: <hidden>\n  username: <hidden>\nkind: Secret\nmetadata:\n  creationTimestamp: 2026-10-01T08:00:00Z\n  labels:\n    app: db\n  managedFields:\n    - manager: kubectl\n  name: db-credentials\n  namespace: payments\n  resourceVersion: \"100\"\n  uid: uid-1\ntype: Opaque\n";
+
+#[test]
+fn clean_yaml_drops_the_status_and_the_servers_metadata() {
+    let shown = "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  creationTimestamp: 2026-10-01T08:00:00Z\n  generation: 4\n  labels:\n    app: api\n  managedFields:\n    - manager: kubectl\n  name: api\n  namespace: payments\n  resourceVersion: \"100\"\n  selfLink: /apis/apps/v1/namespaces/payments/deployments/api\n  uid: uid-1\nspec:\n  replicas: 3\nstatus:\n  readyReplicas: 3\n";
+    let clean = clean_yaml(shown).expect("a manifest");
+    assert_eq!(
+        clean.text,
+        "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  labels:\n    app: api\n  name: api\n  namespace: payments\nspec:\n  replicas: 3\n"
+    );
+    assert_eq!(clean.hidden_dropped, 0);
+}
+
+#[test]
+fn clean_yaml_drops_hidden_values_with_their_keys_and_counts_them() {
+    let clean = clean_yaml(SHOWN_SECRET).expect("a manifest");
+    assert_eq!(
+        clean.text,
+        "apiVersion: v1\ndata: {}\nkind: Secret\nmetadata:\n  labels:\n    app: db\n  name: db-credentials\n  namespace: payments\ntype: Opaque\n"
+    );
+    assert_eq!(clean.hidden_dropped, 2);
+    assert!(!clean.text.contains("hidden"));
+}
+
+#[test]
+fn clean_yaml_drops_a_hidden_env_value_wherever_it_sits() {
+    let shown = "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: api\nspec:\n  template:\n    spec:\n      containers:\n        - env:\n            - name: DB_PASS\n              value: <hidden>\n            - name: MODE\n              value: fast\n          name: api\n";
+    let clean = clean_yaml(shown).expect("a manifest");
+    assert_eq!(clean.hidden_dropped, 1);
+    assert!(clean.text.contains("- name: DB_PASS\n"), "{}", clean.text);
+    assert!(clean.text.contains("value: fast"), "{}", clean.text);
+    assert!(!clean.text.contains("<hidden>"), "{}", clean.text);
+}
+
+#[test]
+fn clean_yaml_refuses_text_that_is_no_mapping() {
+    assert!(matches!(clean_yaml("a: ["), Err(EditError::Syntax { .. })));
+    assert!(matches!(clean_yaml("- a"), Err(EditError::NotAnObject)));
+}

@@ -101,3 +101,7 @@ pub(crate) struct DrawerState { /* step 2 fields */ pub(crate) yaml: Option<Enti
 ## Kinds (`resource_kind.rs`)
 
 `KindSpec.object_kind: &'static str` (0006) becomes `object: ObjectKind`. `ResourceKind::object()` is new; `object_kind()` returns `self.object().name()`, so 0006's `from_object_kind` and events code are unchanged.
+
+## Clean YAML and Save as… (UX round 3, P32)
+
+The toolbar has two more buttons beside Copy. **Copy clean YAML** puts a manifest for Git on the clipboard: what the editor shows without `status`, without `metadata.creationTimestamp`, `generation`, `resourceVersion`, `uid`, `managedFields`, and `selfLink`, keys sorted like kubectl, and without the `<hidden>` placeholders, which are dropped with their key (a Secret's `data` keys, a hidden env `value`). The line left of the buttons says how many left (`Copied clean YAML · 2 hidden values left out`). **Save as…** opens the save dialog on `{kind}-{name}-{time}.yaml`, then writes the same clean manifest to the chosen path (C9: nothing is written before a path is chosen; no path is traced); the line then reads `Saved to {file}`, and a failure is an alert under the toolbar. Both use `cluster::clean_yaml`; plain Copy still copies the text as shown.
