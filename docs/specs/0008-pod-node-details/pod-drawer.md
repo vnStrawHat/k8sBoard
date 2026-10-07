@@ -49,7 +49,7 @@ Text builders (pure, `container_detail.rs`):
 | Fn | Example |
 |---|---|
 | `resource_text(&ContainerResource)` | `request 250m · limit 1`, `request 250m · no limit`, `no request · limit 512Mi` |
-| `probe_text(ProbeKind, Option<&ProbeSummary>)` | `Readiness · HTTP GET :8080/ready · every 5s`, `Liveness · TCP :5432 · every 10s`, `Startup · gRPC :9090 · every 10s`, `Liveness · exec command · every 10s`, `Startup` (not set). HTTPS → `HTTPS GET` |
+| `probe_text(ProbeKind, Option<&ProbeSummary>)` | `Readiness · HTTP GET :8080/ready · every 5s`, `Liveness · TCP :5432 · every 10s`, `Startup · gRPC :9090 · every 10s`, `Liveness · exec `test -f /tmp/ready` · every 10s` (`exec command` when the argv is empty), `Startup` (not set). HTTPS → `HTTPS GET` |
 | `env_summary(&ContainerSummary)` | `14 env vars · 6 from configmap/api-config · 3 from secret/api-db · all of secret/extra`; sources in first-seen order, at most 3, then ` · +{n} more`; `1 env var`; None when both lists are empty |
 | `mount_summary(&ContainerSummary)` | `/etc/api ← configmap/api-config (read-only) · +3 more`; first mount in spec order; None when empty |
 | `last_run_text(&Termination, now)` | `ran 4m, ended 2m ago` |

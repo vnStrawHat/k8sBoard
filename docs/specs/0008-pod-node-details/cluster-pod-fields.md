@@ -57,7 +57,7 @@ pub enum ProbeAction {
     HttpGet { scheme: String /* default "HTTP" */, port: String, path: String /* default "/" */ },
     TcpSocket { port: String },
     Grpc { port: u16 },
-    Exec,     // the command is never kept
+    Exec { command: Vec<String> }, // the argv as written (N23); shown, never logged
     Unknown,  // no handler set
 }
 pub struct EnvEntry { pub name: String, pub source: EnvSource }
@@ -114,6 +114,6 @@ Pure `fn field_path_container(path: &str) -> Option<String>`; the kubelet's `imp
 ## Secret rules (C1)
 
 - Env: names and source references only. `EnvVar.value` is never read into any summary.
-- Probes: no exec command, no HTTP headers, no query string.
+- Probes: no HTTP headers, no query string; the exec argv is kept (README decision 9).
 - Terminated `message` (the termination log, possibly app output) is never kept (decision 8).
 - Annotations are never read. Mount paths, volume, ConfigMap, Secret, and PVC names are kept (names, not contents).

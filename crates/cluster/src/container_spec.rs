@@ -62,8 +62,10 @@ pub enum ProbeAction {
     Grpc {
         port: u16,
     },
-    /// The command is never kept: it can hold credentials.
-    Exec,
+    /// `exec.command`, the argv as written. It can hold credentials, so nothing logs it.
+    Exec {
+        command: Vec<String>,
+    },
     /// No handler is set, or the gRPC port is out of range.
     Unknown,
 }
@@ -247,8 +249,10 @@ fn probe_action(probe: &Probe) -> ProbeAction {
         return u16::try_from(grpc.port)
             .map_or(ProbeAction::Unknown, |port| ProbeAction::Grpc { port });
     }
-    if probe.exec.is_some() {
-        return ProbeAction::Exec;
+    if let Some(exec) = &probe.exec {
+        return ProbeAction::Exec {
+            command: exec.command.clone().unwrap_or_default(),
+        };
     }
     ProbeAction::Unknown
 }

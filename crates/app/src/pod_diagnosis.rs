@@ -4,7 +4,7 @@
 
 use cluster::{
     ContainerKind, ContainerState, ContainerSummary, EventSummary, EventType, NodeSummary,
-    PodStatus, PodSummary, ProbeSummary, StatusReason, Termination,
+    PodStatus, PodSummary, ProbeAction, ProbeSummary, StatusReason, Termination,
 };
 use jiff::{SignedDuration, Timestamp};
 
@@ -479,6 +479,7 @@ fn running_problem(
         let mut text = "Startup probe has not passed yet.".to_owned();
         if let Some(event) = newest(ProbeKind::Startup) {
             text.push_str(&event_suffix(event, now));
+            text.push_str(&exec_probe_note(container.probes.startup.as_ref()));
         }
         return Some(Problem {
             tone: StatusTone::Warn,
@@ -495,7 +496,10 @@ fn running_problem(
         newest(ProbeKind::Readiness),
         container.probes.readiness.as_ref(),
     ) {
-        (Some(event), _) => text.push_str(&event_suffix(event, now)),
+        (Some(event), probe) => {
+            text.push_str(&event_suffix(event, now));
+            text.push_str(&exec_probe_note(probe));
+        }
         (None, Some(probe)) => text.push_str(&format!(
             " The readiness probe ({}) has not passed.",
             probe_summary_text(probe)
@@ -507,6 +511,17 @@ fn running_problem(
         text,
         cause: DiagnosisCause::NotReady,
     })
+}
+
+/// `. Probe: exec `cmd` · every 5s` for an exec probe, whose failure event never says what ran; other
+/// probes name their target in the event message.
+fn exec_probe_note(probe: Option<&ProbeSummary>) -> String {
+    match probe {
+        Some(probe) if matches!(probe.action, ProbeAction::Exec { .. }) => {
+            format!(". Probe: {}", probe_summary_text(probe))
+        }
+        _ => String::new(),
+    }
 }
 
 /// ` {message} (×N, {age} ago)` for the newest failure event. A probe that failed without output

@@ -600,10 +600,26 @@ pub(crate) fn probe_summary_text(probe: &ProbeSummary) -> String {
         ProbeAction::HttpGet { scheme, port, path } => format!("{scheme} GET :{port}{path}"),
         ProbeAction::TcpSocket { port } => format!("TCP :{port}"),
         ProbeAction::Grpc { port } => format!("gRPC :{port}"),
-        ProbeAction::Exec => "exec command".to_owned(),
+        ProbeAction::Exec { command } => exec_text(command),
         ProbeAction::Unknown => "unknown action".to_owned(),
     };
     format!("{action} · every {}s", probe.period_seconds)
+}
+
+/// The longest exec argv the probe text quotes.
+const EXEC_TEXT_CHARS: usize = 100;
+
+/// ``exec `test -f /tmp/ready` ``: the argv joined by spaces and cut, or `exec command` for none.
+fn exec_text(command: &[String]) -> String {
+    if command.is_empty() {
+        return "exec command".to_owned();
+    }
+    let joined = command.join(" ");
+    let mut cut: String = joined.chars().take(EXEC_TEXT_CHARS).collect();
+    if cut.len() < joined.len() {
+        cut.push('…');
+    }
+    format!("exec `{cut}`")
 }
 
 /// `Readiness · HTTP GET :8080/ready · every 5s`, or just the kind when the probe is not set.

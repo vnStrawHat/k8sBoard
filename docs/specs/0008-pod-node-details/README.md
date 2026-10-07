@@ -45,7 +45,7 @@ Usage numbers and bars (0010), Monitor and Logs sub-tabs (0010, 0019), live port
 | 6 | Node `lastHeartbeatTime` and pod condition probe/transition times are not kept | heartbeats would emit a snapshot on every kubelet status update |
 | 7 | Messages (waiting, condition, pod, node condition) are cut like event messages (1 KiB) | bounded memory; same rule as 0006 |
 | 8 | Terminated `message` (termination log) is never kept. Cost: the WHY box loses the line that names the cause (e.g. a panic); it shows reason and exit code only. Revisit in 0019: the WHY box links to the container's previous logs | it can be application output, including secrets |
-| 9 | Env: names and sources only; probes: no exec command, no HTTP headers, HTTP query string dropped | C1; these are the places literal credentials appear |
+| 9 | Env: names and sources only; probes: no HTTP headers, HTTP query string dropped. The exec argv is kept since round 3 (N23: `exec `test -f /tmp/ready``, cut at 100 chars; it is shown, never logged), so a credential written into a probe command is visible in the drawer, as in the YAML tab | C1; these are the places literal credentials appear |
 | 10 | Links only where a screen exists: Node, owner (ReplicaSet, Job, StatefulSet, DaemonSet), ConfigMap sources. ServiceAccount, Secret, PVC are text | no dead links; 0014–0016 turn them into links via `ResourceKey::of_object` |
 | 11 | One shared `ResourceKey::of_object` (from 0006's `object_key`) | one kind → screen mapping for events, owners, and sources |
 | 12 | WHY box uses the kit `gpui_kit::component::Alert` (error/warning); the "Open container →" link is its sibling (no child slot) | theme colors with no new styling code |
@@ -68,7 +68,7 @@ Known ceilings: memory ≈ 3 × 3–6 KiB per container for the new fields (roug
 - [x] 1. The quality gate passes, and so does `cargo clippy -p k8sboard --features screenshot --all-targets -- -D warnings`. No new `#[allow]`.
 - [x] 2. Every test of the step in [test-plan.md](test-plan.md) exists under that name and passes, offline.
 - [ ] 3. No kube or k8s-openapi type in a public signature; the app gains no kube or serde dependency; no `Cargo.lock` package change; the 0001 read-only grep still finds only the SSAR `create`. — superseded by 0030 (write allow-list and named connect files replace the read-only grep)
-- [ ] 4. Secret safety: no summary field holds an env literal, exec command, HTTP header, query string, termination message, or annotation (tests prove distinctive values are absent from `Debug`). `container_spec.rs` and `pod_diagnosis.rs` contain no `tracing::` call.
+- [ ] 4. Secret safety: no summary field holds an env literal, HTTP header, query string, termination message, or annotation (tests prove distinctive values are absent from `Debug`). `container_spec.rs` and `pod_diagnosis.rs` contain no `tracing::` call.
 - [x] 5. Node summaries ignore `lastHeartbeatTime` (`node_conditions_ignore_heartbeat`).
 - [ ] 6. On UAT, a pod drawer shows working Node and owner links, Info sections, Env and Mounts names with sources, and Copy kubectl command; no env value is visible outside the YAML tab toggle.
 - [ ] 7. The WHY box appears only when `pod_diagnosis` is Some, and its container link opens that container on the Containers tab.

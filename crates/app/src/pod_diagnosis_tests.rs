@@ -998,3 +998,24 @@ fn scheduling_hints_follow_the_bullets_and_leave_the_issue_text_alone() {
     // Only the drawer asks for hints; the issue rules read the plain one-line text.
     assert!(!plain.text.contains('\n'));
 }
+
+#[test]
+fn an_exec_probe_failure_names_the_command() {
+    let mut idle = main_container("api", running());
+    idle.probes.readiness = Some(ProbeSummary {
+        action: ProbeAction::Exec {
+            command: vec!["test".to_owned(), "-f".to_owned(), "/tmp/ready".to_owned()],
+        },
+        period_seconds: 5,
+        failure_threshold: 3,
+        initial_delay_seconds: 0,
+    });
+    let pod = running_pod(vec![idle]);
+    let events = [unhealthy("api", "Readiness probe failed:", 12, 9_700)];
+    let diagnosis = pod_diagnosis(&pod, Some(&events), at(10_000)).expect("a diagnosis");
+    assert_eq!(
+        diagnosis.text,
+        "Running but not ready. Readiness probe failed (no output) (×12, 5m ago). \
+         Probe: exec `test -f /tmp/ready` · every 5s"
+    );
+}

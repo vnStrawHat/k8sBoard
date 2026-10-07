@@ -152,10 +152,39 @@ fn probe_text_forms() {
         probe_text(ProbeKind::Startup, Some(&grpc)),
         "Startup · gRPC :9090 · every 10s"
     );
-    let exec = probe(ProbeAction::Exec, 10);
+    let exec = probe(
+        ProbeAction::Exec {
+            command: vec![
+                "test".to_owned(),
+                "-f".to_owned(),
+                "/tmp/never-ready".to_owned(),
+            ],
+        },
+        5,
+    );
     assert_eq!(
-        probe_text(ProbeKind::Liveness, Some(&exec)),
+        probe_text(ProbeKind::Readiness, Some(&exec)),
+        "Readiness · exec `test -f /tmp/never-ready` · every 5s"
+    );
+    let bare = probe(
+        ProbeAction::Exec {
+            command: Vec::new(),
+        },
+        10,
+    );
+    assert_eq!(
+        probe_text(ProbeKind::Liveness, Some(&bare)),
         "Liveness · exec command · every 10s"
+    );
+    let long = probe(
+        ProbeAction::Exec {
+            command: vec!["x".repeat(150)],
+        },
+        10,
+    );
+    assert_eq!(
+        probe_summary_text(&long),
+        format!("exec `{}…` · every 10s", "x".repeat(100))
     );
     assert_eq!(probe_text(ProbeKind::Startup, None), "Startup");
 }

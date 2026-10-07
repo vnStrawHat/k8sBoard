@@ -152,7 +152,9 @@ fn probe_actions_map_each_handler() {
     };
     assert_eq!(
         readiness(&container_with_probe(exec)).action,
-        ProbeAction::Exec
+        ProbeAction::Exec {
+            command: Vec::new()
+        }
     );
     assert_eq!(
         readiness(&container_with_probe(Probe::default())).action,
@@ -215,7 +217,7 @@ fn http_probe_path_drops_query_and_headers() {
 }
 
 #[test]
-fn exec_probe_command_is_not_kept() {
+fn exec_probe_keeps_its_argv() {
     let probe = Probe {
         exec: Some(ExecAction {
             command: Some(vec![
@@ -227,8 +229,16 @@ fn exec_probe_command_is_not_kept() {
         ..Default::default()
     };
     let summary = readiness(&container_with_probe(probe));
-    assert_eq!(summary.action, ProbeAction::Exec);
-    assert!(!format!("{summary:?}").contains("SECRETEXEC"));
+    assert_eq!(
+        summary.action,
+        ProbeAction::Exec {
+            command: vec![
+                "sh".to_owned(),
+                "-c".to_owned(),
+                "curl -u admin:SECRETEXEC".to_owned()
+            ]
+        }
+    );
 }
 
 #[test]
