@@ -15,8 +15,8 @@ use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::{ActiveTheme as _, Disableable as _, Icon, Sizable as _};
 use gpui_kit::component::{h_flex, v_flex};
 use gpui_kit::{
-    AnyElement, App, AppContext as _, Context, Entity, Focusable as _, InteractiveElement as _,
-    IntoElement, KeyDownEvent, ParentElement as _, Render, SharedString,
+    AnyElement, App, AppContext as _, Context, Entity, FocusHandle, Focusable as _,
+    InteractiveElement as _, IntoElement, KeyDownEvent, ParentElement as _, Render, SharedString,
     StatefulInteractiveElement as _, Styled as _, Task, WeakEntity, Window, div, px,
 };
 
@@ -83,6 +83,9 @@ pub(crate) struct MetadataEditor {
     /// Review… was pressed on a row with no key: the problem line and the row mark show now, not
     /// while the user is still typing.
     has_tried_review: bool,
+    /// Takes the focus when a row goes, so Enter after × still reviews instead of reaching the
+    /// dialog, which would close it with the edits.
+    focus_handle: FocusHandle,
     _load: Option<Task<()>>,
 }
 
@@ -124,6 +127,7 @@ impl MetadataEditor {
             object,
             state: EditorState::Loading,
             has_tried_review: false,
+            focus_handle: cx.focus_handle(),
             _load: Some(load),
         }
     }
@@ -246,12 +250,21 @@ impl MetadataEditor {
         cx.notify();
     }
 
-    fn remove_row(&mut self, list: MetadataList, index: usize, cx: &mut Context<Self>) {
+    /// Drops a row, and takes the focus: the × that was clicked goes with its row, and an Enter
+    /// with the focus nowhere would reach the dialog and close it with the edits.
+    fn remove_row(
+        &mut self,
+        list: MetadataList,
+        index: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let Some(inputs) = self.inputs_mut(list) else {
             return;
         };
         if index < inputs.len() {
             inputs.remove(index);
+            window.focus(&self.focus_handle, cx);
             cx.notify();
         }
     }
@@ -295,10 +308,12 @@ impl MetadataEditor {
         }
     }
 
-    /// Enter in a row's text field presses Review…, a fresh press only. A focused button keeps its
-    /// own Enter.
+    /// Enter in a row's text field, or with the focus on the editor body after a removal, presses
+    /// Review…, a fresh press only. A focused button keeps its own Enter.
     fn on_key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
-        if !is_enter(event) || !self.is_input_focused(window, cx) {
+        if !is_enter(event)
+            || !(self.is_input_focused(window, cx) || self.focus_handle.is_focused(window))
+        {
             return;
         }
         window.prevent_default();
@@ -377,9 +392,9 @@ impl MetadataEditor {
                         .xsmall()
                         .icon(Icon::new(IconName::X))
                         .tooltip("Remove")
-                        .on_click(
-                            cx.listener(move |editor, _, _, cx| editor.remove_row(list, index, cx)),
-                        ),
+                        .on_click(cx.listener(move |editor, _, window, cx| {
+                            editor.remove_row(list, index, window, cx)
+                        })),
                 )
         });
         let add_id = match list {
@@ -517,6 +532,7 @@ impl Render for MetadataEditor {
         };
         v_flex()
             .key_context(FORWARD_FORM)
+            .track_focus(&self.focus_handle)
             .on_key_down(cx.listener(Self::on_key_down))
             .w_full()
             .gap_3()
@@ -686,9 +702,9 @@ impl MetadataEditor {
     pub(crate) fn remove_label_for_test(
         &mut self,
         index: usize,
-        _: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.remove_row(MetadataList::Labels, index, cx);
+        self.remove_row(MetadataList::Labels, index, window, cx);
     }
 }

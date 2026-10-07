@@ -293,3 +293,53 @@ fn an_unreadable_object_shows_the_error_and_no_rows(cx: &mut TestAppContext) {
     );
     assert_eq!(reads_of(&t.t.stg_api, GHOST_PATH), 1);
 }
+
+fn enter() -> gpui_kit::KeyDownEvent {
+    gpui_kit::KeyDownEvent {
+        keystroke: gpui_kit::Keystroke::parse("enter").expect("a valid keystroke"),
+        is_held: false,
+        prefer_character_input: false,
+    }
+}
+
+#[gpui_kit::test]
+fn enter_after_removing_a_row_still_presses_review(cx: &mut TestAppContext) {
+    use gpui_kit::InputEvent as _;
+    let t = metadata_test("metadata-edit-enter-after-remove", cx);
+    t.open(&t.t.stg, deployment_key(), cx);
+    let editor = t.wait_for_editor(cx);
+    // The × that was clicked goes with its row, so the focus is nowhere; the removal takes it.
+    t.t.fixture.with_window(cx, |window, cx| {
+        editor.update(cx, |editor, cx| editor.remove_label_for_test(0, window, cx));
+    });
+    t.t.fixture.draw_twice(cx);
+    t.t.fixture.with_window(cx, |window, cx| {
+        window.dispatch_event(enter().to_platform_input(), cx);
+    });
+    t.t.wait_for_dry_run(cx);
+    assert_eq!(
+        writes(&t.t.stg_api).len(),
+        1,
+        "the review dry-ran the patch instead of the dialog closing"
+    );
+}
+
+#[gpui_kit::test]
+fn a_key_the_write_path_refuses_keeps_the_editor_open_with_its_rows(cx: &mut TestAppContext) {
+    let t = metadata_test("metadata-edit-refused-key", cx);
+    t.open(&t.t.stg, deployment_key(), cx);
+    let editor = t.wait_for_editor(cx);
+    // An applied manifest is never edited here: the key is refused, and Review… names the row.
+    t.add_row(&editor, MetadataList::Annotations, APPLIED, "{}", cx);
+    t.review(&editor, cx);
+    let is_open =
+        t.t.fixture
+            .with_window(cx, |window, cx| window.has_active_dialog(cx));
+    assert!(is_open, "the editor stays open");
+    editor.read_with(cx, |editor, cx| {
+        let problem = editor.current_intent(cx).err().expect("a problem");
+        assert!(problem.contains("not a valid Kubernetes key"), "{problem}");
+        assert_eq!(editor.rows_of(MetadataList::Annotations, cx).len(), 2);
+    });
+    assert!(writes(&t.t.stg_api).is_empty());
+}
