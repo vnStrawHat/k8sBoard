@@ -3,7 +3,7 @@
 
 use std::rc::Rc;
 
-use cluster::{EventSummary, HelmRevisionRef, ObjectKind};
+use cluster::{EventSummary, HelmRevisionRef, ObjectKind, StorageClassSummary};
 use gpui_kit::component::alert::Alert;
 use gpui_kit::component::menu::DropdownMenu as _;
 use gpui_kit::component::progress::Progress;
@@ -409,6 +409,16 @@ fn missing_claim_class<'a>(
     missing_storage_class(claim, loaded_events(kind, row, live)?)
 }
 
+/// The StorageClasses a Pending claim row is explained with, once they have loaded.
+fn claim_classes_of(kind: ResourceKind, live: &LiveCluster) -> Option<&[StorageClassSummary]> {
+    if kind != ResourceKind::PersistentVolumeClaims {
+        return None;
+    }
+    live.related_of(&RelatedSubject::ClaimClasses)
+        .and_then(RelatedList::storage_classes)?
+        .ready_items()
+}
+
 /// The Services and pods an Ingress row's backends are checked against, once both have loaded.
 fn ingress_backends_of<'a>(row: &KindRow, live: &'a LiveCluster) -> Option<IngressBackends<'a>> {
     let namespace = row.namespace.clone()?;
@@ -473,6 +483,7 @@ fn row_diagnosis(
             .and_then(|list| list.ready_items()),
         events: loaded_events(kind, row, live),
         backends: ingress_backends_of(row, live),
+        storage_classes: claim_classes_of(kind, live),
         now,
     };
     let problem = kind_diagnosis(&row.object, &inputs);

@@ -205,6 +205,7 @@ fn run(
             tls_secrets: None,
             events: None,
             backends: None,
+            storage_classes: None,
             now: at(1_000),
         },
     )
@@ -665,6 +666,7 @@ fn progress(deployment: DeploymentSummary, pods: Option<&[PodSummary]>) -> Optio
             tls_secrets: None,
             events: None,
             backends: None,
+            storage_classes: None,
             now: at(1_000),
         },
     )
@@ -768,6 +770,7 @@ fn run_service(health: ServiceHealth, pods: &[PodSummary]) -> Option<KindDiagnos
             tls_secrets: None,
             events: None,
             backends: None,
+            storage_classes: None,
             now: at(1_000),
         },
     )
@@ -845,6 +848,7 @@ fn service_no_ready_endpoints_waits_for_the_pods() {
             tls_secrets: None,
             events: None,
             backends: None,
+            storage_classes: None,
             now: at(1_000),
         },
     );
@@ -884,6 +888,7 @@ fn budget_diagnosis(budget: PodDisruptionBudgetSummary) -> Option<KindDiagnosis>
             tls_secrets: None,
             events: None,
             backends: None,
+            storage_classes: None,
             now: at(1_000),
         },
     )
@@ -985,6 +990,7 @@ fn autoscaler_diagnosis(hpa: HorizontalPodAutoscalerSummary) -> Option<KindDiagn
             tls_secrets: None,
             events: None,
             backends: None,
+            storage_classes: None,
             now: at(1_000),
         },
     )
@@ -1130,6 +1136,7 @@ fn quota_at_limit() {
                 tls_secrets: None,
                 events: None,
                 backends: None,
+                storage_classes: None,
                 now: at(1_000),
             },
         )
@@ -1173,6 +1180,7 @@ fn quota_status_and_box_name_the_same_item() {
             tls_secrets: None,
             events: None,
             backends: None,
+            storage_classes: None,
             now: at(1_000),
         },
     )
@@ -1193,6 +1201,7 @@ fn storage_inputs() -> DiagnosisInputs<'static> {
         tls_secrets: None,
         events: None,
         backends: None,
+        storage_classes: None,
         now: at(1_000),
     }
 }
@@ -1789,6 +1798,7 @@ fn secret_box(object: KindObject, now: i64) -> Option<KindDiagnosis> {
             tls_secrets: None,
             events: None,
             backends: None,
+            storage_classes: None,
             now: at(now),
         },
     )
@@ -1917,6 +1927,7 @@ fn ingress_box(
             tls_secrets: secrets,
             events: None,
             backends: None,
+            storage_classes: None,
             now: at(now),
         },
     )
@@ -2529,6 +2540,7 @@ fn an_ingress_names_the_rule_whose_backend_has_no_such_port() {
                 tls_secrets: None,
                 events: None,
                 backends,
+                storage_classes: None,
                 now: at(1_000),
             },
         )
@@ -2577,5 +2589,116 @@ fn cron_job_forbid_with_a_long_active_job_says_it_is_skipping_runs() {
             .expect("a box")
             .text
             .starts_with("reconcile-2894 and 1 more still active")
+    );
+}
+
+fn storage_class(name: &str, binding_mode: &str, is_default: bool) -> StorageClassSummary {
+    StorageClassSummary {
+        name: name.to_owned(),
+        created_at: None,
+        labels: Vec::new(),
+        provisioner: "rancher.io/local-path".to_owned(),
+        reclaim_policy: "Delete".to_owned(),
+        binding_mode: binding_mode.to_owned(),
+        allows_expansion: false,
+        is_default,
+        parameters: Vec::new(),
+        mount_options: Vec::new(),
+    }
+}
+
+fn pending_with_classes(
+    storage_class_name: Option<&str>,
+    classes: &[StorageClassSummary],
+    events: Option<&[EventSummary]>,
+) -> Option<KindDiagnosis> {
+    let mut pending = claim("Pending");
+    pending.storage_class = storage_class_name.map(str::to_owned);
+    let inputs = DiagnosisInputs {
+        events,
+        storage_classes: Some(classes),
+        ..storage_inputs()
+    };
+    kind_diagnosis(&KindObject::PersistentVolumeClaim(pending), &inputs)
+}
+
+#[test]
+fn a_pending_claim_names_the_missing_class_and_the_default() {
+    let classes = [storage_class("standard", "Immediate", true)];
+    let diagnosis = pending_with_classes(Some("fast-ssd"), &classes, None).expect("a box");
+    assert_eq!(
+        (diagnosis.tone, diagnosis.title.as_str()),
+        (StatusTone::Bad, "PENDING")
+    );
+    assert_eq!(
+        diagnosis.text,
+        "No StorageClass named fast-ssd; the default class is standard."
+    );
+    let none_default = [storage_class("standard", "Immediate", false)];
+    assert_eq!(
+        pending_with_classes(Some("fast-ssd"), &none_default, None)
+            .expect("a box")
+            .text,
+        "No StorageClass named fast-ssd; the cluster has no default class."
+    );
+    // The class text wins over the provisioner's raw event about the same class.
+    let events = [claim_event(
+        EventType::Warning,
+        "ProvisioningFailed",
+        NO_CLASS_MESSAGE,
+        200,
+    )];
+    assert_eq!(
+        pending_with_classes(Some("fast-ssd"), &classes, Some(&events))
+            .expect("a box")
+            .text,
+        "No StorageClass named fast-ssd; the default class is standard."
+    );
+}
+
+#[test]
+fn a_claim_without_a_class_uses_the_default_or_has_none() {
+    let waiting = [storage_class("standard", "WaitForFirstConsumer", true)];
+    assert_eq!(
+        pending_with_classes(None, &waiting, None)
+            .expect("a box")
+            .text,
+        "No storageClassName, so the default class applies. Class standard binds on first \
+         consumer: Pending until a pod uses it."
+    );
+    assert_eq!(
+        pending_with_classes(None, &[], None).expect("a box").text,
+        "No storageClassName and the cluster has no default class: only a matching \
+         PersistentVolume can bind it."
+    );
+}
+
+#[test]
+fn a_claim_of_a_wait_for_first_consumer_class_says_it_waits() {
+    let classes = [storage_class("standard", "WaitForFirstConsumer", true)];
+    let diagnosis = pending_with_classes(Some("standard"), &classes, None).expect("a box");
+    assert_eq!(diagnosis.tone, StatusTone::Warn);
+    assert_eq!(
+        diagnosis.text,
+        "Class standard binds on first consumer: Pending until a pod uses it."
+    );
+    // A real failure event is more urgent than the wait.
+    let events = [claim_event(
+        EventType::Warning,
+        "ProvisioningFailed",
+        "boom",
+        5,
+    )];
+    assert_eq!(
+        pending_with_classes(Some("standard"), &classes, Some(&events))
+            .expect("a box")
+            .text,
+        "ProvisioningFailed: boom"
+    );
+    // An Immediate class that exists says nothing by itself.
+    let immediate = [storage_class("standard", "Immediate", true)];
+    assert_eq!(
+        pending_with_classes(Some("standard"), &immediate, None),
+        None
     );
 }

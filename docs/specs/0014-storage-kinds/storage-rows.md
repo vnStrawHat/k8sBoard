@@ -27,7 +27,7 @@ Status: `phase_label`; for a Bound claim, condition `Resizing` true → Info "Re
 
 WHY **VOLUME LOST** (Bad), phase `Lost`: `The bound volume {volume} no longer exists. The data on it is gone or unreachable.`
 
-WHY **PENDING** (Warn), phase `Pending`: `{reason}: {message}` of the newest Warning event of the open drawer (`ProvisioningFailed`); no Warning event (a claim waiting for its first consumer) means no box. When that message says the claim's class is `"{class}" not found`, the Class row reads `{class} (not found)` as plain text instead of a link (the StorageClasses list is not loaded on the claim screens, so the event is the evidence).
+WHY **PENDING** (Warn), phase `Pending`: `{reason}: {message}` of the newest Warning event of the open drawer (`ProvisioningFailed`); no Warning event (a claim waiting for its first consumer) means no box. When that message says the claim's class is `"{class}" not found`, the Class row reads `{class} (not found)` as plain text instead of a link (the StorageClasses list is not loaded on the claim screens, so the event is the evidence). Round 3 (P16): the open claim drawer also watches the StorageClasses (`RelatedSubject::ClaimClasses`). A class the claim names that does not exist reads `No StorageClass named fast-ssd; the default class is standard.` (or `the cluster has no default class`; Bad, and it wins over the raw event); a claim with no class reads `No storageClassName, so the default class applies.` and, with no default, `... only a matching PersistentVolume can bind it.`; a class that exists with `WaitForFirstConsumer` and no Warning event reads `Class standard binds on first consumer: Pending until a pod uses it.` (Warn). The Issues rule and Topology never read the classes.
 
 | Section | Rows |
 |---|---|

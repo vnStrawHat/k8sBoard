@@ -38,6 +38,9 @@ pub(crate) enum RelatedSubject {
     PodServices { namespace: String },
     /// Every Ingress of a Service drawer's namespace; the drawer keeps those that route to it.
     ServiceIngresses { namespace: String },
+    /// Every StorageClass, for the WHY box of a claim: the named class, the default, and when a
+    /// volume binds.
+    ClaimClasses,
 }
 
 /// The related subject a drawer key names without a row: a Pod or a Service. These drawers also
@@ -105,6 +108,9 @@ pub(crate) fn related_subject(kind: ResourceKind, row: &KindRow) -> Option<Relat
         // The Services of the namespace, for the backend checks of the WHY box.
         (ResourceKind::Ingresses, KindObject::Ingress(_)) => {
             Some(RelatedSubject::PodServices { namespace })
+        }
+        (ResourceKind::PersistentVolumeClaims, KindObject::PersistentVolumeClaim(_)) => {
+            Some(RelatedSubject::ClaimClasses)
         }
         (ResourceKind::HelmReleases, KindObject::HelmRelease(release)) => {
             Some(RelatedSubject::HelmHistory {
@@ -270,6 +276,31 @@ mod tests {
             Some(RelatedSubject::PodServices {
                 namespace: "team-a".to_owned(),
             })
+        );
+    }
+
+    #[test]
+    fn a_claim_row_watches_the_storage_classes() {
+        let row = crate::storage_rows::persistent_volume_claim_row(
+            &cluster::PersistentVolumeClaimSummary {
+                namespace: "team-a".to_owned(),
+                name: "data".to_owned(),
+                created_at: None,
+                labels: Vec::new(),
+                phase: "Pending".to_owned(),
+                is_terminating: false,
+                volume: None,
+                capacity: None,
+                requested: None,
+                access_modes: Vec::new(),
+                storage_class: None,
+                volume_mode: None,
+                conditions: Vec::new(),
+            },
+        );
+        assert_eq!(
+            related_subject(ResourceKind::PersistentVolumeClaims, &row),
+            Some(RelatedSubject::ClaimClasses)
         );
     }
 

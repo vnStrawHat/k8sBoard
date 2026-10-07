@@ -12,7 +12,8 @@ use cluster::{
     NamespaceSummary, NodeReadiness, NodeSummary, PersistentVolumeClaimSummary,
     PersistentVolumeSummary, PodDisruptionBudgetSummary, PodStatus, PodSummary,
     ResourceQuotaSummary, RoleSummary, SecretDetails, SecretSummary, ServiceAccountSummary,
-    ServiceSummary, StatusReason, Subject, SubjectKind, Termination, WorkloadCondition,
+    ServiceSummary, StatusReason, StorageClassSummary, Subject, SubjectKind, Termination,
+    WorkloadCondition,
 };
 use jiff::Timestamp;
 
@@ -76,6 +77,8 @@ pub(crate) struct DiagnosisInputs<'a> {
     pub(crate) events: Option<&'a [EventSummary]>,
     /// Ingresses: the Services of the namespace and the pods, once both lists have loaded.
     pub(crate) backends: Option<IngressBackends<'a>>,
+    /// PVCs: the StorageClasses of a ready related list; `None` while it is not ready or denied.
+    pub(crate) storage_classes: Option<&'a [StorageClassSummary]>,
     pub(crate) now: Timestamp,
 }
 
@@ -94,7 +97,7 @@ pub(crate) fn kind_diagnosis(
         KindObject::PodDisruptionBudget(budget) => pod_disruption_budget_diagnosis(budget),
         KindObject::HorizontalPodAutoscaler(hpa) => horizontal_pod_autoscaler_diagnosis(hpa),
         KindObject::ResourceQuota(quota) => resource_quota_diagnosis(quota),
-        KindObject::PersistentVolumeClaim(claim) => claim_diagnosis(claim, inputs.events),
+        KindObject::PersistentVolumeClaim(claim) => claim_diagnosis(claim, inputs),
         KindObject::PersistentVolume(volume) => volume_diagnosis(volume),
         KindObject::Role(role) => role_diagnosis(role, inputs.bindings),
         KindObject::Binding(binding) => binding_diagnosis(binding),
@@ -391,28 +394,102 @@ fn resource_quota_diagnosis(quota: &ResourceQuotaSummary) -> Option<KindDiagnosi
 
 // ---- Storage ----
 
-/// VOLUME LOST: the volume a claim was bound to is gone (reads only the claim). PENDING: the
-/// newest Warning event of a claim nothing provisions.
+/// VOLUME LOST: the volume a claim was bound to is gone (reads only the claim). PENDING: a class
+/// that does not exist, else the newest Warning event of a claim nothing provisions, else a class
+/// that waits for its first consumer.
 fn claim_diagnosis(
     claim: &PersistentVolumeClaimSummary,
-    events: Option<&[EventSummary]>,
+    inputs: &DiagnosisInputs,
 ) -> Option<KindDiagnosis> {
     match claim.phase.as_str() {
         "Lost" => Some(lost_claim_diagnosis(claim)),
-        "Pending" => pending_claim_diagnosis(events?),
+        "Pending" => pending_claim_diagnosis(claim, inputs),
         _ => None,
     }
 }
 
-/// A claim that waits for its first consumer has only Normal events, so it gets no box.
-fn pending_claim_diagnosis(events: &[EventSummary]) -> Option<KindDiagnosis> {
-    let newest = newest_warning(events)?;
-    Some(KindDiagnosis {
-        tone: StatusTone::Warn,
+fn pending_claim_diagnosis(
+    claim: &PersistentVolumeClaimSummary,
+    inputs: &DiagnosisInputs,
+) -> Option<KindDiagnosis> {
+    let class_cause = inputs
+        .storage_classes
+        .and_then(|classes| claim_class_cause(claim, classes));
+    // The provisioner's own event repeats a missing class in raw form, so the class text wins.
+    if let Some(ClassCause::Missing(text)) = &class_cause {
+        return Some(pending_box(StatusTone::Bad, text.clone()));
+    }
+    let warning = inputs.events.and_then(newest_warning);
+    match (warning, class_cause) {
+        (Some(newest), _) => Some(pending_box(
+            StatusTone::Warn,
+            format!("{}: {}", newest.reason, message_line(&newest.message)),
+        )),
+        (None, Some(ClassCause::WaitsForConsumer(text))) => {
+            Some(pending_box(StatusTone::Warn, text))
+        }
+        (None, _) => None,
+    }
+}
+
+fn pending_box(tone: StatusTone, text: String) -> KindDiagnosis {
+    KindDiagnosis {
+        tone,
         title: "PENDING".to_owned(),
-        text: format!("{}: {}", newest.reason, message_line(&newest.message)),
+        text,
         link: None,
-    })
+    }
+}
+
+/// What the StorageClasses say about a Pending claim.
+enum ClassCause {
+    /// The claim names no class that exists, or names none and the cluster has no default.
+    Missing(String),
+    /// Its class provisions a volume only when a pod uses the claim.
+    WaitsForConsumer(String),
+}
+
+fn claim_class_cause(
+    claim: &PersistentVolumeClaimSummary,
+    classes: &[StorageClassSummary],
+) -> Option<ClassCause> {
+    let default = classes.iter().find(|class| class.is_default);
+    let class = match claim.storage_class.as_deref() {
+        Some(name) => match classes.iter().find(|class| class.name == name) {
+            Some(class) => class,
+            None => {
+                let default_text = default.map_or_else(
+                    || "the cluster has no default class".to_owned(),
+                    |class| format!("the default class is {}", class.name),
+                );
+                return Some(ClassCause::Missing(format!(
+                    "No StorageClass named {name}; {default_text}."
+                )));
+            }
+        },
+        None => match default {
+            Some(class) => class,
+            None => {
+                return Some(ClassCause::Missing(
+                    "No storageClassName and the cluster has no default class: only a matching \
+                     PersistentVolume can bind it."
+                        .to_owned(),
+                ));
+            }
+        },
+    };
+    if class.binding_mode != "WaitForFirstConsumer" {
+        return None;
+    }
+    let via_default = if claim.storage_class.is_none() {
+        "No storageClassName, so the default class applies. "
+    } else {
+        ""
+    };
+    Some(ClassCause::WaitsForConsumer(format!(
+        "{via_default}Class {} binds on first consumer: Pending until a pod uses it.",
+        class.name
+    )))
 }
 
 fn newest_warning(events: &[EventSummary]) -> Option<&EventSummary> {

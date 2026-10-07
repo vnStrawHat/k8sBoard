@@ -705,6 +705,8 @@ pub(crate) enum RelatedList {
     Services(LiveList<ServiceSummary>),
     /// The Ingresses of one namespace, for a Service drawer.
     Ingresses(LiveList<IngressSummary>),
+    /// Every StorageClass, for a claim drawer.
+    StorageClasses(LiveList<StorageClassSummary>),
 }
 
 /// One related watch update, typed on tokio so one subscription serves every subject.
@@ -719,6 +721,7 @@ enum RelatedUpdate {
     CustomFields(WatchUpdate<CustomObjectFields>),
     Services(WatchUpdate<ServiceSummary>),
     Ingresses(WatchUpdate<IngressSummary>),
+    StorageClasses(WatchUpdate<StorageClassSummary>),
 }
 
 impl RelatedList {
@@ -738,6 +741,7 @@ impl RelatedList {
             RelatedSubject::CustomFields { .. } => Self::CustomFields(LiveList::Loading),
             RelatedSubject::PodServices { .. } => Self::Services(LiveList::Loading),
             RelatedSubject::ServiceIngresses { .. } => Self::Ingresses(LiveList::Loading),
+            RelatedSubject::ClaimClasses => Self::StorageClasses(LiveList::Loading),
         }
     }
 
@@ -760,6 +764,9 @@ impl RelatedList {
             (Self::CustomFields(list), RelatedUpdate::CustomFields(update)) => list.apply(update),
             (Self::Services(list), RelatedUpdate::Services(update)) => list.apply(update),
             (Self::Ingresses(list), RelatedUpdate::Ingresses(update)) => list.apply(update),
+            (Self::StorageClasses(list), RelatedUpdate::StorageClasses(update)) => {
+                list.apply(update);
+            }
             // A stale update of another subject's kind.
             _ => {}
         }
@@ -782,6 +789,7 @@ impl RelatedList {
             Self::CustomFields(list) => list.mark_stopped(),
             Self::Services(list) => list.mark_stopped(),
             Self::Ingresses(list) => list.mark_stopped(),
+            Self::StorageClasses(list) => list.mark_stopped(),
         }
     }
 
@@ -805,6 +813,14 @@ impl RelatedList {
     pub(crate) fn ingresses(&self) -> Option<&LiveList<IngressSummary>> {
         match self {
             Self::Ingresses(list) => Some(list),
+            _ => None,
+        }
+    }
+
+    /// The StorageClasses of a claim drawer, when this list holds them.
+    pub(crate) fn storage_classes(&self) -> Option<&LiveList<StorageClassSummary>> {
+        match self {
+            Self::StorageClasses(list) => Some(list),
             _ => None,
         }
     }
@@ -857,6 +873,7 @@ impl RelatedList {
             Self::CustomFields(list) => list.is_loading(),
             Self::Services(list) => list.is_loading(),
             Self::Ingresses(list) => list.is_loading(),
+            Self::StorageClasses(list) => list.is_loading(),
         }
     }
 }
@@ -944,6 +961,7 @@ pub(crate) fn denied_related_check(
         RelatedSubject::QuotaRejections { .. } => AccessCheck::ListEvents,
         RelatedSubject::PodServices { .. } => AccessCheck::ListServices,
         RelatedSubject::ServiceIngresses { .. } => AccessCheck::ListIngresses,
+        RelatedSubject::ClaimClasses => AccessCheck::ListStorageClasses,
         // Its two lists are gated each by its own check: see `namespace_list_gates`.
         RelatedSubject::NamespaceQuotas { .. } => return None,
         // The history reads the same Secrets the Releases kind lists, which its access check gates.
@@ -4058,6 +4076,10 @@ impl RelatedObjects {
             RelatedSubject::ServiceIngresses { namespace } => connection
                 .watch_ingresses(NamespaceScope::Named(namespace.clone()))
                 .map(RelatedUpdate::Ingresses)
+                .boxed(),
+            RelatedSubject::ClaimClasses => connection
+                .watch_storage_classes()
+                .map(RelatedUpdate::StorageClasses)
                 .boxed(),
         };
         let applied = subject.clone();

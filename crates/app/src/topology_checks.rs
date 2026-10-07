@@ -485,6 +485,7 @@ fn diagnosis_check(
             tls_secrets,
             events: None,
             backends: None,
+            storage_classes: None,
             now: inputs.now,
         },
     )?;
