@@ -50,6 +50,7 @@ The raw `fresh` and `response` are dropped at the end of the function.
 | Check | Text |
 |---|---|
 | `Rollout` | `Pods will be replaced ({strategy})`, or `Pods change only when they are deleted (OnDelete)` |
+| `RolloutPaused` | `Rollout is paused: pods change after Resume` (the template changed while `spec.paused` is true; replaces `Rollout`) |
 | `StaleLastApplied` | `kubectl apply users: the last-applied annotation is not updated, so a later kubectl apply can revert this change` |
 | `Moved` | `{path}: a hidden value was matched by position; check it belongs to this item` |
 | `LeadingZero` | `Line {n}: 0755 is read as 755 (YAML 1.2); write 493 or 0o755` |

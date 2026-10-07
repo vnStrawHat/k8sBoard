@@ -3111,7 +3111,23 @@ fn row_action_item(
         ActionAvailability::Enabled => PopupMenuItem::new(label),
         ActionAvailability::Disabled { reason } => disabled_menu_item(label, reason),
     };
-    keyed(item, action)
+    let item = keyed(item, action);
+    match state_icon(action, object) {
+        Some(icon) => item.menu_icon(icon),
+        None => item,
+    }
+}
+
+/// The icon a row state flips, as `state_label` flips the text: Resume of a paused Deployment plays.
+fn state_icon(action: ResourceAction, object: &KindObject) -> Option<IconName> {
+    match (action, object) {
+        (ResourceAction::PauseRollout, KindObject::Deployment(deployment))
+            if deployment.is_paused =>
+        {
+            Some(IconName::Play)
+        }
+        _ => None,
+    }
 }
 
 /// `item` with the key hint and the icon of `row`. `.action()` is a no-op on a submenu, and the

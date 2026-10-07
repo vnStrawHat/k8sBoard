@@ -6,7 +6,7 @@ use std::cell::Cell;
 
 use cluster::{
     CronJobSummary, DeploymentSummary, HELM_MANAGED_WARNING, ObjectKind, ObjectRef,
-    ReplicaSetSummary, WriteOperation, WriteRequest, terms_are_helm_managed,
+    ReplicaSetSummary, TemplateContainer, WriteOperation, WriteRequest, terms_are_helm_managed,
 };
 use gpui_kit::SharedString;
 use jiff::tz::TimeZone;
@@ -558,6 +558,102 @@ pub(crate) fn state_label(
             "Resume"
         }
         _ => label,
+    }
+}
+
+/// What a Resume tells before it is confirmed: the image changes made while the rollout was paused,
+/// read from the ReplicaSet that runs now. Summaries keep no env or resources (they can hold
+/// secrets), so those changes cannot be listed; the line says so.
+pub(crate) fn pending_changes_note(
+    deployment: &DeploymentSummary,
+    replica_sets: Option<&[ReplicaSetSummary]>,
+) -> SharedString {
+    let running = replica_sets.and_then(|sets| running_replica_set(deployment, sets));
+    let Some(running) = running else {
+        return "Rolls out the pod template changes made while paused".into();
+    };
+    let changes = image_changes(&running.containers, &deployment.containers);
+    if changes.is_empty() {
+        return "Rolls out the pod template changes made while paused; no image changed".into();
+    }
+    let count = changes.len();
+    let plural = if count == 1 { "" } else { "s" };
+    let shown: Vec<_> = changes.iter().take(MAX_PENDING_SHOWN).cloned().collect();
+    let more = count - shown.len();
+    let more = if more > 0 {
+        format!(", +{more} more")
+    } else {
+        String::new()
+    };
+    format!(
+        "Rolls out {count} pending image change{plural}: {}{more}",
+        shown.join(", ")
+    )
+    .into()
+}
+
+/// The ReplicaSet whose pods run now: the newest one of the Deployment that still has replicas. The
+/// Deployment's own revision is not it: while paused, the controller stamps it on the ReplicaSet of
+/// the pending template when one already exists.
+fn running_replica_set<'a>(
+    deployment: &DeploymentSummary,
+    replica_sets: &'a [ReplicaSetSummary],
+) -> Option<&'a ReplicaSetSummary> {
+    replica_sets
+        .iter()
+        .filter(|set| {
+            set.namespace == deployment.namespace
+                && set.desired > 0
+                && set.owner.as_ref().is_some_and(|owner| {
+                    owner.kind == "Deployment" && owner.name == deployment.name
+                })
+        })
+        .max_by_key(|set| {
+            set.revision
+                .as_deref()
+                .and_then(|text| text.parse::<u64>().ok())
+        })
+}
+
+/// How many image changes the Resume confirm names before it counts the rest.
+const MAX_PENDING_SHOWN: usize = 3;
+
+/// `image web 1.27-alpine → 1.26-alpine` per container whose image differs; a container only one
+/// side has reads `container db added` or `container db removed`.
+fn image_changes(running: &[TemplateContainer], pending: &[TemplateContainer]) -> Vec<String> {
+    let mut changes = Vec::new();
+    for container in pending {
+        match running.iter().find(|old| old.name == container.name) {
+            Some(old) if old.image == container.image => {}
+            Some(old) => changes.push(format!(
+                "image {} {}",
+                container.name,
+                image_change(&old.image, &container.image)
+            )),
+            None => changes.push(format!("container {} added", container.name)),
+        }
+    }
+    for old in running {
+        if !pending.iter().any(|container| container.name == old.name) {
+            changes.push(format!("container {} removed", old.name));
+        }
+    }
+    changes
+}
+
+/// `1.27 → 1.26` when only the tag changed, else the whole references.
+fn image_change(old: &str, new: &str) -> String {
+    let repository = |image: &str| {
+        let tag = image_tag(image);
+        image
+            .strip_suffix(tag)
+            .map(|rest| rest.trim_end_matches(':').to_owned())
+    };
+    match (repository(old), repository(new)) {
+        (Some(old_repo), Some(new_repo)) if old_repo == new_repo => {
+            format!("{} → {}", image_tag(old), image_tag(new))
+        }
+        _ => format!("{old} → {new}"),
     }
 }
 

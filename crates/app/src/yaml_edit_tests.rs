@@ -32,6 +32,14 @@ fn on_delete_rollout_says_pods_change_only_when_deleted() {
 }
 
 #[test]
+fn a_paused_rollout_says_pods_change_after_resume() {
+    assert_eq!(
+        check_text(&EditCheck::RolloutPaused, ""),
+        "Rollout is paused: pods change after Resume"
+    );
+}
+
+#[test]
 fn stale_last_applied_warns_kubectl_apply_users() {
     let text = check_text(&EditCheck::StaleLastApplied, "");
     assert!(text.starts_with("kubectl apply users:"), "{text}");

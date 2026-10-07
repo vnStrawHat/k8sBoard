@@ -247,6 +247,18 @@ async fn preview_checks() {
 }
 
 #[tokio::test]
+async fn a_template_change_of_a_paused_deployment_says_the_rollout_waits() {
+    let mut fresh = deployment();
+    fresh["spec"]["paused"] = json!(true);
+    let base = base_of(ObjectKind::Deployment, "api", fresh.clone()).await;
+    let preview = preview_of(&fresh, &edit_of(&base, "image: api:1", "image: api:2"));
+    assert_eq!(
+        preview.checks,
+        [EditCheck::RolloutPaused, EditCheck::StaleLastApplied]
+    );
+}
+
+#[tokio::test]
 async fn a_plain_config_map_has_no_checks() {
     let fresh = config_map();
     let base = base_of(ObjectKind::ConfigMap, "settings", fresh.clone()).await;

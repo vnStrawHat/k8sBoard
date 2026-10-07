@@ -39,18 +39,20 @@ use crate::cluster_runtime::ClusterRuntime;
 use crate::cluster_session::AccessState;
 use crate::confirm_dialog::{ConfirmDialog, DialogInputs, DialogKind};
 use crate::kind_row::KindObject;
+use crate::live_sections::loaded_replica_sets;
 use crate::port_forwards::LocalPortSpec;
 use crate::resource_actions::{
     ActionAvailability, NOT_PERMITTED, ResourceAction, action_availability, action_label,
     action_risk, unavailable_text,
 };
+use crate::resource_kind::ResourceKind;
 use crate::revision_diff::RollBackOffer;
 use crate::settings::AppSettings;
 use crate::table_selection::{ClusterObject, ResourceKey};
 use crate::value_popover::ValuePopover;
 use crate::workload_actions::{
     PAUSED_REASON, RevisionTarget, ScaleTarget, WorkloadScope, named_restart_intent,
-    roll_back_intent, row_block, scale_intent, state_label, workload_intent,
+    pending_changes_note, roll_back_intent, row_block, scale_intent, state_label, workload_intent,
 };
 use crate::write_guard::{ActionRisk, ClusterGuard, DialogConfirm, WriteLock, confirm_step};
 
@@ -890,7 +892,19 @@ impl AppShell {
                         notify(window, cx, unavailable_text(label, &reason));
                         return;
                     }
-                    workload_intent(action, &scope, &row.object, now)
+                    let mut intent = workload_intent(action, &scope, &row.object, now);
+                    // A Resume rolls out what was changed while paused: the confirm lists it.
+                    if let (
+                        Some(intent),
+                        ResourceAction::PauseRollout,
+                        KindObject::Deployment(deployment),
+                    ) = (intent.as_mut(), action, &row.object)
+                        && deployment.is_paused
+                    {
+                        let sets = loaded_replica_sets(ResourceKind::Deployments, row, live);
+                        intent.warnings.push(pending_changes_note(deployment, sets));
+                    }
+                    intent
                 }
                 // A Restart of a Used by consumer: the drawer of a ConfigMap or Secret is open, so
                 // no list holds the workload, and it is restarted by the name its pods gave.

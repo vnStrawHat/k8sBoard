@@ -1109,3 +1109,70 @@ fn roll_back_warns_when_helm_manages_the_deployment() {
     let plain = roll_back_intent(&scope, &deployment("api"), &target).expect("an intent");
     assert!(plain.warnings.is_empty());
 }
+
+// ---- Resume: pending changes ----
+
+fn web_container(image: &str) -> cluster::TemplateContainer {
+    cluster::TemplateContainer {
+        name: "web".to_owned(),
+        image: image.to_owned(),
+        ports: Vec::new(),
+    }
+}
+
+/// The ReplicaSet that runs now (`desired` 3) and an old one (`desired` 0).
+fn running_and_old(image: &str) -> Vec<ReplicaSetSummary> {
+    let mut running = replica_set("api-7d", Some("7"), Some("api"), image);
+    running.desired = 3;
+    let mut old = replica_set("api-6c", Some("6"), Some("api"), "api:1.0.0");
+    old.desired = 0;
+    vec![old, running]
+}
+
+#[test]
+fn resume_lists_the_image_changes_made_while_paused() {
+    let mut paused = deployment("api");
+    paused.is_paused = true;
+    paused.containers = vec![web_container("repo.example.com/api:2.15.0")];
+    let sets = running_and_old("repo.example.com/api:2.14.0");
+    assert_eq!(
+        pending_changes_note(&paused, Some(&sets)),
+        "Rolls out 1 pending image change: image web 2.14.0 → 2.15.0"
+    );
+    // A new repository names both references.
+    paused.containers = vec![web_container("other.example.com/api:2.14.0")];
+    assert_eq!(
+        pending_changes_note(&paused, Some(&sets)),
+        "Rolls out 1 pending image change: image web repo.example.com/api:2.14.0 → \
+         other.example.com/api:2.14.0"
+    );
+}
+
+#[test]
+fn resume_counts_added_and_removed_containers() {
+    let mut paused = deployment("api");
+    paused.containers = vec![web_container("api:2.14.0"), {
+        let mut sidecar = web_container("proxy:1");
+        sidecar.name = "proxy".to_owned();
+        sidecar
+    }];
+    let sets = running_and_old("api:2.14.0");
+    assert_eq!(
+        pending_changes_note(&paused, Some(&sets)),
+        "Rolls out 1 pending image change: container proxy added"
+    );
+}
+
+#[test]
+fn resume_without_a_running_replica_set_or_an_image_change_stays_general() {
+    let mut paused = deployment("api");
+    paused.containers = vec![web_container("api:2.14.0")];
+    assert_eq!(
+        pending_changes_note(&paused, None),
+        "Rolls out the pod template changes made while paused"
+    );
+    assert_eq!(
+        pending_changes_note(&paused, Some(&running_and_old("api:2.14.0"))),
+        "Rolls out the pod template changes made while paused; no image changed"
+    );
+}

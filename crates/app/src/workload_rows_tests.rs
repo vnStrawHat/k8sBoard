@@ -897,3 +897,48 @@ fn deployment_and_stateful_set_lead_with_rollout_bars_like_a_daemon_set() {
     let rollout = leads(&daemon_set_row(&daemon_set()), "Rollout by node");
     assert!(!repeated(&rollout));
 }
+
+#[test]
+fn a_paused_deployment_row_says_paused_and_is_not_green() {
+    let mut paused = deployment();
+    (paused.desired, paused.ready, paused.is_paused) = (3, 3, true);
+    assert_eq!(
+        deployment_row(&paused).cells.first(),
+        Some(&KindCell::Toned(StatusLabel {
+            text: "3/3 · Paused".into(),
+            tone: StatusTone::Info,
+        }))
+    );
+    // A shortfall keeps its own tone: paused does not hide that pods are missing.
+    paused.ready = 0;
+    assert!(matches!(
+        deployment_row(&paused).cells.first(),
+        Some(KindCell::Toned(StatusLabel { text, tone: StatusTone::Bad }))
+            if text == "0/3 · Paused"
+    ));
+}
+
+#[test]
+fn a_paused_deployment_with_old_pods_says_resume_to_roll_out() {
+    let up_to_date_bar = |deployment: &DeploymentSummary| {
+        deployment_row(deployment)
+            .section("Replicas")
+            .expect("replicas")
+            .rows[1]
+            .clone()
+    };
+    let mut paused = deployment();
+    (paused.desired, paused.up_to_date, paused.is_paused) = (3, 0, true);
+    assert_eq!(
+        up_to_date_bar(&paused),
+        DetailRow::Bar {
+            label: "Up-to-date".into(),
+            percent: 0,
+            text: "Paused · Resume to roll out".into(),
+            tone: Some(StatusTone::Info),
+        }
+    );
+    // Nothing pending: the plain count reads.
+    paused.up_to_date = 3;
+    assert!(matches!(up_to_date_bar(&paused), DetailRow::Bar { text, .. } if text == "3 / 3"));
+}

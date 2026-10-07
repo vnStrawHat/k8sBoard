@@ -245,7 +245,7 @@ static DEPLOYMENTS: KindSpec = KindSpec {
         access_check: AccessCheck::ListDeployments,
     },
     columns: &[
-        column("Ready", 80., Align::Left),
+        column("Ready", 110., Align::Left),
         column("Up-to-date", 100., Align::Right),
         column("Available", 90., Align::Right),
         column("Strategy", 130., Align::Left),

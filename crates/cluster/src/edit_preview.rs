@@ -120,6 +120,8 @@ pub struct FieldChange {
 pub enum EditCheck {
     /// The pod template changed, so pods are replaced (or, with `OnDelete`, not until deleted).
     Rollout { strategy: String },
+    /// The pod template of a paused Deployment changed: no pod changes until Resume.
+    RolloutPaused,
     /// A `kubectl apply` user: a replace leaves `last-applied-configuration` stale.
     StaleLastApplied,
     /// A hidden value was matched by position; it may belong to another item now.
@@ -382,7 +384,11 @@ pub(crate) fn build_preview(
     let (changes, more_changes) = field_changes(&before, &after, &paths);
     let mut checks = Vec::new();
     if let Some(strategy) = rollout_strategy(edit, &paths, &after) {
-        checks.push(EditCheck::Rollout { strategy });
+        let is_paused = after.pointer("/spec/paused").and_then(Value::as_bool) == Some(true);
+        checks.push(match is_paused {
+            true => EditCheck::RolloutPaused,
+            false => EditCheck::Rollout { strategy },
+        });
     }
     if has_last_applied(&fresh) {
         checks.push(EditCheck::StaleLastApplied);

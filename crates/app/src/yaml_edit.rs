@@ -1020,6 +1020,7 @@ pub(crate) fn check_text(check: &EditCheck, text: &str) -> String {
             "Pods change only when they are deleted (OnDelete)".to_owned()
         }
         EditCheck::Rollout { strategy } => format!("Pods will be replaced ({strategy})"),
+        EditCheck::RolloutPaused => "Rollout is paused: pods change after Resume".to_owned(),
         EditCheck::StaleLastApplied => "kubectl apply users: the last-applied annotation is not \
             updated, so a later kubectl apply can revert this change"
             .to_owned(),

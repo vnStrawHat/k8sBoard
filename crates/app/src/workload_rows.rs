@@ -30,10 +30,7 @@ pub(crate) fn replica_tone(ready: u32, desired: u32) -> StatusTone {
 }
 
 pub(crate) fn deployment_row(deployment: &DeploymentSummary) -> KindRow {
-    let ready = StatusLabel {
-        text: format!("{}/{}", deployment.ready, deployment.desired).into(),
-        tone: replica_tone(deployment.ready, deployment.desired),
-    };
+    let ready = ready_label(deployment);
     let cells = vec![
         KindCell::Toned(ready),
         KindCell::count(deployment.up_to_date),
@@ -47,7 +44,7 @@ pub(crate) fn deployment_row(deployment: &DeploymentSummary) -> KindRow {
     // The bars carry Ready and Up-to-date, so the rows below do not repeat them.
     let mut replicas = vec![
         rollout_bar("Ready", deployment.ready, deployment.desired),
-        rollout_bar("Up-to-date", deployment.up_to_date, deployment.desired),
+        up_to_date_bar(deployment),
         DetailRow::field("Desired", KindCell::count(deployment.desired)),
         DetailRow::field("Available", KindCell::count(deployment.available)),
         DetailRow::field(
@@ -93,6 +90,39 @@ pub(crate) fn deployment_row(deployment: &DeploymentSummary) -> KindRow {
         }),
         labels: chips(&deployment.labels),
         object: KindObject::Deployment(deployment.clone()),
+    }
+}
+
+/// `3/3`, and `3/3 · Paused` while the rollout is paused: a paused Deployment is not green, because
+/// its new pods wait for Resume. A shortfall keeps its own tone.
+fn ready_label(deployment: &DeploymentSummary) -> StatusLabel {
+    let tone = replica_tone(deployment.ready, deployment.desired);
+    let counts = format!("{}/{}", deployment.ready, deployment.desired);
+    if !deployment.is_paused {
+        return StatusLabel {
+            text: counts.into(),
+            tone,
+        };
+    }
+    let is_ok = tone == StatusTone::Ok;
+    StatusLabel {
+        text: format!("{counts} · Paused").into(),
+        tone: if is_ok { StatusTone::Info } else { tone },
+    }
+}
+
+/// The Up-to-date bar. A paused Deployment with pods on an older template says what is missing, in
+/// place of a bare red `0 / 3`.
+fn up_to_date_bar(deployment: &DeploymentSummary) -> DetailRow {
+    let is_waiting = deployment.is_paused && deployment.up_to_date < deployment.desired;
+    if !is_waiting {
+        return rollout_bar("Up-to-date", deployment.up_to_date, deployment.desired);
+    }
+    DetailRow::Bar {
+        label: "Up-to-date".into(),
+        percent: percent(f64::from(deployment.up_to_date) / f64::from(deployment.desired)),
+        text: "Paused · Resume to roll out".into(),
+        tone: Some(StatusTone::Info),
     }
 }
 
