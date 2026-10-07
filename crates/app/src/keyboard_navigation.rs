@@ -39,6 +39,7 @@ use crate::resource_actions::{
 use crate::table_selection::{ClusterObject, ResourceKey};
 use crate::table_view::RowCheck as TickChange;
 use crate::workload_actions::{row_block, state_label};
+use crate::yaml_view::object_ref;
 
 /// The key context of the shell root. `ValuesScreen` is added while ConfigMaps or Secrets is shown, so
 /// E opens Edit values there and Edit YAML on every other screen (spec 0047 decision 9).
@@ -648,6 +649,16 @@ impl AppShell {
                         state_label(action, action_label(action), &row.object)
                     });
                 let text = unavailable_text(label, &reason);
+                // `Delete pod x`: what an Unlock right after this would be for.
+                let refused = match object_ref(&subject.key) {
+                    Some(object) => format!(
+                        "{label} {} {}",
+                        object.kind_name().to_ascii_lowercase(),
+                        object.name()
+                    ),
+                    None => label.to_owned(),
+                };
+                self.note_lock_refusal(&subject.cluster, refused, &reason);
                 window.push_notification(Notification::warning(text).id::<RowKeyNotice>(), cx);
             }
             KeyAvailability::Run(action) => self.run_available_row_key(action, subject, window, cx),

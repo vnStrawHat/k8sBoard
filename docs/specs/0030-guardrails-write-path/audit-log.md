@@ -58,3 +58,5 @@ Key allow-list (test `audit_keys_are_the_allow_list`): `at, cluster, context, us
 ## Identity
 
 `user` is the kubeconfig user entry name, not the server-side identity (decision 21, kept). `SelfSubjectReview` (`authentication.k8s.io/v1`, GA in 1.28) would give the real user name; it is a non-mutating POST like SSAR; a later item that needs user approval (README open item 3).
+- **Unlock reason (UX round 3, P13):** when the lock refused a change a moment ago (within two minutes, same cluster), the `Unlock` line records it: `"fields":[{"path":"for","value":"Delete pod x"}]`. Without a recent refusal `fields` stays empty.
+- **Delete of a binding** adds `roleRef` and `subjects` fields (0033); an edit's label changes carry `from` and `value` (0031). An intent's `audit_fields` refine the request's path-only field of the same path, and the rest are appended.

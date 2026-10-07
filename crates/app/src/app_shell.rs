@@ -456,6 +456,9 @@ pub(crate) struct AppShell {
     /// change reopens the editor and tells what changed on the node since. Replaced by the next
     /// review, taken by the retry.
     taint_base: Option<node_editor::TaintBase>,
+    /// The change a read-only lock refused last, so the Unlock that follows can say what it was for
+    /// (`write_lock::UnlockFor`).
+    unlock_for: Option<write_lock::UnlockFor>,
     /// The name in the discard prompt asked last, for the tests that drive it.
     #[cfg(test)]
     last_discard: Option<String>,
@@ -763,6 +766,7 @@ impl AppShell {
             revision_lookup: None,
             values_commit_open: None,
             taint_base: None,
+            unlock_for: None,
             #[cfg(test)]
             last_discard: None,
             #[cfg(test)]

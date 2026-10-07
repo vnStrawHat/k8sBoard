@@ -626,7 +626,15 @@ impl AppShell {
                 action_availability(intent.action, &guard)
             {
                 let (shell, cluster) = (cx.weak_entity(), intent.cluster.clone());
-                notify_unavailable(window, cx, &intent.verb, &reason, shell, cluster);
+                notify_unavailable(
+                    window,
+                    cx,
+                    &intent.verb,
+                    &reason,
+                    &intent.label,
+                    shell,
+                    cluster,
+                );
                 return;
             }
             if let Some(reason) = self.drain_conflict(&intent.cluster, intent.action, cx) {

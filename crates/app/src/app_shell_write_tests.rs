@@ -1225,3 +1225,51 @@ fn renew_intent_refuses_what_the_write_path_refuses() {
         "Renewal requested for shop/tls"
     );
 }
+
+#[gpui_kit::test]
+fn an_unlock_right_after_a_lock_refusal_says_what_it_was_for(cx: &mut TestAppContext) {
+    let t = two_clusters("unlock-for", cx);
+    let dir = t.enable_audit_folder("unlock-for", cx);
+    t.set_lock(&t.stg, WriteLock::Locked, cx);
+    let stg = t.stg.clone();
+    t.fixture.shell.update(cx, |shell, _| {
+        shell.note_lock_refusal(&stg, "Delete pod x".to_owned(), "stg-b is read-only");
+    });
+    t.toggle(&t.stg, cx);
+    t.confirm(cx);
+    assert_eq!(t.lock_of(&t.stg, cx), WriteLock::Unlocked);
+    t.wait_for("the audit line", cx, |_| audit_lines(&dir).len() == 1);
+    let lines = audit_lines(&dir);
+    assert_eq!(lines[0]["action"], "Unlock");
+    assert_eq!(
+        lines[0]["fields"],
+        serde_json::json!([{ "path": "for", "value": "Delete pod x" }])
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[gpui_kit::test]
+fn an_unlock_for_nothing_in_particular_keeps_no_fields(cx: &mut TestAppContext) {
+    let t = two_clusters("unlock-for-none", cx);
+    let dir = t.enable_audit_folder("unlock-for-none", cx);
+    t.set_lock(&t.stg, WriteLock::Locked, cx);
+    let (stg, prod) = (t.stg.clone(), t.prod.clone());
+    t.fixture.shell.update(cx, |shell, _| {
+        // Another reason, or another cluster, is not what this unlock is for.
+        shell.note_lock_refusal(
+            &stg,
+            "Delete pod x".to_owned(),
+            "Not permitted: delete pods",
+        );
+        shell.note_lock_refusal(
+            &prod,
+            "Scale deployment y".to_owned(),
+            "prod-a is read-only",
+        );
+    });
+    t.toggle(&t.stg, cx);
+    t.confirm(cx);
+    t.wait_for("the audit line", cx, |_| audit_lines(&dir).len() == 1);
+    assert_eq!(audit_lines(&dir)[0]["fields"], serde_json::json!([]));
+    let _ = std::fs::remove_dir_all(&dir);
+}

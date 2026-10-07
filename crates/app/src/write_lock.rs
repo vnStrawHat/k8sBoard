@@ -4,17 +4,51 @@
 //! A child of `app_shell`, like `write_flow`. The lock lives on each cluster's own session, so
 //! every function here names the cluster it acts on.
 
+use std::time::{Duration, Instant};
+
 use gpui_kit::component::WindowExt as _;
 use gpui_kit::component::notification::Notification;
 use gpui_kit::{AppContext as _, Context, Window};
 
 use super::AppShell;
-use crate::audit_log::lock_entry;
+use crate::audit_log::{AuditField, lock_entry};
 use crate::cluster_registry::ClusterRef;
 use crate::confirm_dialog::{ConfirmDialog, DialogInputs, DialogKind};
+use crate::resource_actions::is_read_only_reason;
 use crate::write_guard::{ActionRisk, WriteLock, confirm_step};
 
+/// How long a refused change still explains the Unlock that follows it: after that the user is
+/// unlocking for something else.
+const UNLOCK_FOR_WINDOW: Duration = Duration::from_secs(120);
+
+/// A change the lock refused: the Unlock within `UNLOCK_FOR_WINDOW` records it as its reason.
+pub(crate) struct UnlockFor {
+    cluster: ClusterRef,
+    /// `Delete pod x`, as the dialog of the change would title it.
+    text: String,
+    at: Instant,
+}
+
 impl AppShell {
+    /// Notes that the lock of `cluster` refused `text`, when `reason` says it is the lock.
+    pub(crate) fn note_lock_refusal(&mut self, cluster: &ClusterRef, text: String, reason: &str) {
+        if !is_read_only_reason(reason) {
+            return;
+        }
+        self.unlock_for = Some(UnlockFor {
+            cluster: cluster.clone(),
+            text,
+            at: Instant::now(),
+        });
+    }
+
+    /// Takes what the lock refused last on `cluster`, if it was refused a moment ago.
+    fn take_unlock_for(&mut self, cluster: &ClusterRef) -> Option<String> {
+        let refused = self.unlock_for.take()?;
+        (&refused.cluster == cluster && refused.at.elapsed() <= UNLOCK_FOR_WINDOW)
+            .then_some(refused.text)
+    }
+
     /// Ctrl Shift R: the lock of the open cluster, which holds the cursor row and the drawer too.
     pub(crate) fn toggle_open_cluster_lock(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(cluster) = self.active_cluster() {
@@ -124,9 +158,19 @@ impl AppShell {
             return;
         };
         session.update(cx, |session, cx| session.set_lock(lock, cx));
-        let entry = self
-            .guard_for(cluster, cx)
-            .map(|guard| lock_entry(&guard, lock));
+        let unlocked_for = match lock {
+            WriteLock::Unlocked => self.take_unlock_for(cluster),
+            WriteLock::Locked => None,
+        };
+        let entry = self.guard_for(cluster, cx).map(|guard| {
+            let mut entry = lock_entry(&guard, lock);
+            entry.fields.extend(unlocked_for.map(|text| AuditField {
+                path: "for".to_owned(),
+                value: Some(text),
+                from: None,
+            }));
+            entry
+        });
         cx.notify();
         if let Some(entry) = entry {
             self.write_audit_line(entry, cx);

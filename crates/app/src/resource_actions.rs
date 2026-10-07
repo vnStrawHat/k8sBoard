@@ -3230,6 +3230,11 @@ pub(crate) fn with_next_step(reason: &SharedString) -> SharedString {
     }
 }
 
+/// Whether `reason` says the cluster is locked read-only, which the user can lift on the spot.
+pub(crate) fn is_read_only_reason(reason: &str) -> bool {
+    reason.ends_with(READ_ONLY_SUFFIX)
+}
+
 const READ_ONLY_SUFFIX: &str = " is read-only";
 const LOCKED_SUFFIX: &str = " was locked; nothing was changed";
 

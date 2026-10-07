@@ -137,6 +137,7 @@ mod revision_diff;
 mod revision_history;
 mod row_context;
 mod row_selection;
+mod scale_effects;
 mod screenshot;
 #[cfg(any(test, feature = "screenshot"))]
 mod screenshot_script;

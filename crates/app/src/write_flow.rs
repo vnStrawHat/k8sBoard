@@ -1036,6 +1036,7 @@ impl AppShell {
         let row = live.row_of(&subject.key)?;
         ScaleTarget::of(&row.object, live.loaded_hpas())
             .map(|target| target.with_quotas(live.loaded_quotas()))
+            .map(|target| target.with_budgets(live.loaded_pdbs()))
     }
 
     /// Scale on the cursor row: the one popover that the menu, the key, and the palette share.
@@ -1274,7 +1275,15 @@ impl AppShell {
                 action_availability(intent.action, &guard)
             {
                 let (shell, cluster) = (cx.weak_entity(), intent.cluster.clone());
-                notify_unavailable(window, cx, &intent.button, &reason, shell, cluster);
+                notify_unavailable(
+                    window,
+                    cx,
+                    &intent.button,
+                    &reason,
+                    &intent.label,
+                    shell,
+                    cluster,
+                );
                 return;
             }
             if let Some(reason) = self.drain_conflict(&intent.cluster, intent.action, cx) {
@@ -1586,9 +1595,18 @@ pub(super) fn notify_unavailable(
     cx: &mut App,
     label: &str,
     reason: &str,
+    refused: &str,
     shell: WeakEntity<AppShell>,
     cluster: ClusterRef,
 ) {
+    // Deferred: the caller is inside an update of the shell, which cannot be updated again.
+    let (noted_shell, noted_cluster) = (shell.clone(), cluster.clone());
+    let (noted_text, noted_reason) = (refused.to_owned(), reason.to_owned());
+    cx.defer(move |cx| {
+        let _ = noted_shell.update(cx, |shell, _| {
+            shell.note_lock_refusal(&noted_cluster, noted_text, &noted_reason);
+        });
+    });
     let text = unavailable_text(label, reason);
     if !reason.starts_with(NOT_PERMITTED) {
         notify(window, cx, text);
@@ -1665,7 +1683,15 @@ impl AppShell {
                 action_availability(intent.action, &guard)
             {
                 let (shell, cluster) = (cx.weak_entity(), intent.cluster.clone());
-                notify_unavailable(window, cx, &intent.button, &reason, shell, cluster);
+                notify_unavailable(
+                    window,
+                    cx,
+                    &intent.button,
+                    &reason,
+                    &intent.label,
+                    shell,
+                    cluster,
+                );
                 return;
             }
             (

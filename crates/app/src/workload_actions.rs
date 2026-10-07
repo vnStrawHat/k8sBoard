@@ -7,8 +7,7 @@ use std::cell::Cell;
 use cluster::{
     CronJobSummary, DeploymentSummary, HELM_MANAGED_WARNING, HorizontalPodAutoscalerSummary,
     ObjectKind, ObjectRef, ReplicaSetSummary, ResourceQuotaSummary, TemplateContainer,
-    WriteOperation, WriteRequest,
-    terms_are_helm_managed,
+    WriteOperation, WriteRequest, terms_are_helm_managed,
 };
 use gpui_kit::SharedString;
 use jiff::tz::TimeZone;
@@ -25,6 +24,7 @@ use crate::live_sections::run_label;
 use crate::quota_room::quota_scale_warnings;
 use crate::resource_actions::{ResourceAction, action_risk, values_edit_block};
 use crate::resource_edits::{claim_block, class_block};
+use crate::scale_effects::ScaleEffects;
 use crate::write_guard::ActionRisk;
 
 /// Why a paused Deployment cannot restart or roll back: kubectl refuses both.
@@ -689,6 +689,8 @@ pub(crate) struct ScaleTarget {
     pub(crate) template: Vec<TemplateContainer>,
     /// The quotas of the namespace, set by `with_quotas` only when that list is already loaded.
     pub(crate) quotas: Vec<ResourceQuotaSummary>,
+    /// What a scale-down does besides removing pods: claims left behind, budgets that block.
+    pub(crate) effects: ScaleEffects,
 }
 
 impl ScaleTarget {
@@ -726,6 +728,7 @@ impl ScaleTarget {
             is_helm_managed: terms_are_helm_managed(labels),
             template: template.clone(),
             quotas: Vec::new(),
+            effects: ScaleEffects::of(object),
         })
     }
 
@@ -742,6 +745,13 @@ impl ScaleTarget {
             })
             .collect();
         self
+    }
+
+    /// The same target with the budgets among `budgets` that cover its pods (the PDBs the session
+    /// already holds, empty while that list is not loaded).
+    pub(crate) fn with_budgets(self, budgets: &[KindObject]) -> Self {
+        let effects = self.effects.clone().with_budgets(&self.namespace, budgets);
+        Self { effects, ..self }
     }
 
     /// `deployment/api`.
@@ -820,6 +830,7 @@ pub(crate) fn scale_warnings(target: &ScaleTarget, replicas: u32) -> Vec<SharedS
     if replicas < target.desired {
         warnings.push(format!("Scaling down from {} to {replicas}", target.desired).into());
     }
+    warnings.extend(target.effects.lines(target.desired, replicas));
     if let Some(hpa) = &target.hpa {
         // A value inside the range may still move with the load; one outside is always reverted.
         let text = if (hpa.min..=hpa.max).contains(&replicas) {
