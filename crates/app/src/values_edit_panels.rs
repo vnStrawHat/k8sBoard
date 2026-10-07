@@ -362,18 +362,31 @@ impl ValuesEditView {
             ),
             FieldKind::Text { field, .. } => text_field(field, window),
             FieldKind::Secret { field, reveal } => match field_display(*reveal, row.char_count) {
-                FieldDisplay::Masked(text) => div()
-                    .id(("values-mask", index))
-                    .px_2()
-                    .py_1()
-                    .rounded(theme.radius)
-                    .border_1()
-                    .border_color(theme.border)
-                    .text_sm()
-                    .font_family(theme.mono_font_family.clone())
-                    .text_color(theme.muted_foreground)
-                    .child(text)
-                    .into_any_element(),
+                FieldDisplay::Masked(text) => {
+                    let name = row.name.clone();
+                    let is_blocked = self.access == ValueAccess::Blocked;
+                    div()
+                        .id(("values-mask", index))
+                        .debug_selector(move || format!("values-mask-{index}"))
+                        // A click on the mask is the eye: the field opens empty, ready for a new value.
+                        .when(!is_blocked, |mask| {
+                            mask.cursor_pointer().on_click(cx.listener(
+                                move |view, _, window, cx| {
+                                    view.toggle_reveal(&name, window, cx);
+                                },
+                            ))
+                        })
+                        .px_2()
+                        .py_1()
+                        .rounded(theme.radius)
+                        .border_1()
+                        .border_color(theme.border)
+                        .text_sm()
+                        .font_family(theme.mono_font_family.clone())
+                        .text_color(theme.muted_foreground)
+                        .child(text)
+                        .into_any_element()
+                }
                 FieldDisplay::Editor => secret_field(field),
             },
         }

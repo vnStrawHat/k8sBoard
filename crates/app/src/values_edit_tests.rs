@@ -229,6 +229,19 @@ impl ViewTest {
         })
     }
 
+    /// A click at the middle of the mask of row `index`, as the mouse does it.
+    fn click_mask(&self, index: usize, cx: &mut TestAppContext) {
+        self.render(cx);
+        let mut visual = gpui_kit::VisualTestContext::from_window(self.window, cx);
+        // The selector must be `'static`; a test leaks one short string.
+        let selector: &'static str = Box::leak(format!("values-mask-{index}").into_boxed_str());
+        let bounds = visual
+            .debug_bounds(selector)
+            .unwrap_or_else(|| panic!("{selector} is drawn"));
+        visual.simulate_click(bounds.center(), gpui_kit::Modifiers::default());
+        cx.run_until_parked();
+    }
+
     fn render(&self, cx: &mut TestAppContext) {
         cx.update_window(self.window, |_, window, cx| window.render_frame(cx))
             .expect("the window is open");
@@ -877,4 +890,23 @@ fn a_pasted_trailing_line_break_is_flagged_and_trim_removes_it(cx: &mut TestAppC
     assert!(!flagged(&t, cx));
     assert_eq!(t.text("DB_PASSWORD", cx), "a\nb");
     assert_eq!(t.changes(cx), [set("DB_PASSWORD", "a\nb")]);
+}
+
+#[gpui_kit::test]
+fn a_click_on_a_masked_field_opens_it_for_a_new_value(cx: &mut TestAppContext) {
+    let t = secret_view(cx);
+    let index = t.view.read_with(cx, |view, _| {
+        view.rows
+            .iter()
+            .position(|row| row.name == "DB_PASSWORD")
+            .expect("the row exists")
+    });
+    assert!(matches!(t.reveal_of("DB_PASSWORD", cx), Reveal::Masked));
+    t.click_mask(index, cx);
+    assert!(matches!(
+        t.reveal_of("DB_PASSWORD", cx),
+        Reveal::Shown { .. }
+    ));
+    // The field opens empty: the stored value was never loaded.
+    assert_eq!(t.text("DB_PASSWORD", cx), "");
 }

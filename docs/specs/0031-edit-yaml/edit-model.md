@@ -47,7 +47,7 @@ pub enum EditError {
     #[error("YAML error at line {line}, column {column}: {message}")] Syntax { line: u64, column: u64, message: String },
     #[error("the document must be a single YAML mapping")] NotAnObject,
     #[error("{field} cannot change in an edit")] IdentityChanged { field: &'static str },
-    #[error("Secret values cannot be edited here")] SecretValuesChanged,
+    #[error("Secret values cannot be edited here; use Edit values")] SecretValuesChanged,
     #[error("{path} is <hidden> but has no value on the server; replace it or remove it")] UnmatchedPlaceholder { path: String },
     #[error("nothing changed")] NoChanges,
 }

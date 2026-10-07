@@ -104,3 +104,7 @@ pub(crate) type CommitCallback = Box<dyn FnOnce(&Result<WriteOutcome, CheckedWri
 - The **confirm dialog** lists `path: old → new` for each changed scalar, from the masked preview (`edit_change_lines`: `spec.replicas: 3 → 5`, a hidden env value `<hidden> → <hidden, changed>`), the path alone for a map or a list and for the data of a Secret, at most 12 lines then `and N more`. The audit line keeps paths only. The Helm line (`HELM_MANAGED_WARNING`) comes first among its warnings, as in the Scale and Roll back confirms.
 
 **Audit values of labels (UX round 3, P31):** the audit line of an Edit YAML keeps paths only, except for `metadata.labels` paths, which carry the old and new value from the preview (`from`, `value`): `{"path":"metadata.labels.team","value":"shop"}`. Other scalars stay paths because an edit can change a command-line argument or a URL that holds a credential; a Secret or ConfigMap keeps no value at all (`recordable_fields`).
+
+## Secret values (UX round 3, O9)
+
+When the check refuses a Secret value that changed (`Secret values cannot be edited here; use Edit values`), Apply… is off (tooltip `Secret values are changed with Edit values`) and Ctrl S checks nothing, until the text changes. Nothing was sent: the refusal is local.

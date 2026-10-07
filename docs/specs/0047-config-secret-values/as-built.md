@@ -41,3 +41,7 @@ A Secret row whose text ends with `\n` or `\r\n` (usually a paste) shows `ends w
 ## Replace certificate (UX round 3, N16)
 
 A `kubernetes.io/tls` Secret row also offers `Replace certificate…`: a form with the two PEM texts that sends one `SetDataValues` of `tls.crt` and `tls.key` through the same base and `resourceVersion` guard as Edit values (gate `patch secrets`, the same refusals). The key field is hidden by default and Paste and Show are blocked in screenshot builds. Details: [0042 secret-forms.md](../0042-new-from-templates/secret-forms.md).
+
+## Click on a masked field (UX round 3, O10)
+
+A click on the `•••• N chars` mask does what the eye does: the field opens empty for a new value (blocked in screenshot builds, where the mask is not clickable).

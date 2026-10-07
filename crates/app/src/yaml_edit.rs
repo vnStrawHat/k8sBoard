@@ -135,6 +135,9 @@ pub(crate) enum EditBanner {
     OutcomeUnknown,
 }
 
+/// Why Apply is off after the check refused a Secret value: the tooltip of the button.
+const SECRET_VALUES_REASON: &str = "Secret values are changed with Edit values";
+
 /// How a failed write is told in the editor, whichever request failed.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum EditFailure {
@@ -350,6 +353,10 @@ impl YamlEditView {
 
     fn refresh_dirty(&mut self, cx: &gpui_kit::App) {
         let text = self.text(cx);
+        // A Secret value refused as typed is a verdict on that text: Apply is on again for the next.
+        if self.is_secret_values_refused() {
+            self.preview = PreviewState::NotChecked;
+        }
         self.is_dirty = self
             .base
             .as_ref()
@@ -637,6 +644,14 @@ impl YamlEditView {
         matches!(self.preview, PreviewState::Running { .. })
     }
 
+    /// Whether the check refused the text because a Secret value changed: Edit YAML cannot send it.
+    fn is_secret_values_refused(&self) -> bool {
+        matches!(
+            &self.preview,
+            PreviewState::Failed(PreviewFailure::Local(EditError::SecretValuesChanged))
+        )
+    }
+
     /// Why Apply is off, or `None`. Only a running check or an unchanged text switch it off: a quota
     /// warning never does (spec 0041, decision 11).
     pub(super) fn apply_block_reason(&self) -> Option<&'static str> {
@@ -644,6 +659,8 @@ impl YamlEditView {
             Some("Waiting for the dry-run…")
         } else if !self.is_dirty {
             Some("No changes")
+        } else if self.is_secret_values_refused() {
+            Some(SECRET_VALUES_REASON)
         } else {
             None
         }
@@ -685,7 +702,11 @@ impl YamlEditView {
             return false;
         }
         let is_recreated = matches!(self.banner, Some(EditBanner::Recreated));
-        !(self.is_running() || self.base.is_none() || !self.is_dirty || is_recreated)
+        !(self.is_running()
+            || self.base.is_none()
+            || !self.is_dirty
+            || is_recreated
+            || self.is_secret_values_refused())
     }
 
     /// Whether a passed dry-run is for exactly `text`.
@@ -912,6 +933,12 @@ impl YamlEditView {
     #[cfg(test)]
     pub(crate) fn preview_state(&self) -> &PreviewState {
         &self.preview
+    }
+
+    /// The state the check leaves when the text changed a Secret value.
+    #[cfg(test)]
+    pub(crate) fn refuse_secret_values_for_test(&mut self) {
+        self.preview = PreviewState::Failed(PreviewFailure::Local(EditError::SecretValuesChanged));
     }
 
     #[cfg(test)]

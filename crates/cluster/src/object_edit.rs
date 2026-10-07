@@ -219,7 +219,7 @@ pub enum EditError {
     NotAnObject,
     #[error("{field} cannot change in an edit")]
     IdentityChanged { field: &'static str },
-    #[error("Secret values cannot be edited here")]
+    #[error("Secret values cannot be edited here; use Edit values")]
     SecretValuesChanged,
     #[error("{path} is <hidden> but has no value on the server; replace it or remove it")]
     UnmatchedPlaceholder { path: String },

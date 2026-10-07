@@ -2116,3 +2116,25 @@ fn the_confirm_lists_old_and_new_for_each_scalar_and_the_helm_warning(cx: &mut T
     // The values in the dialog are the masked ones of the preview: the env literal stays out.
     assert!(lines.iter().all(|line| !line.contains("s3cr3t-env")));
 }
+
+#[gpui_kit::test]
+fn apply_is_off_after_a_secret_value_is_refused_and_on_again_after_an_edit(
+    cx: &mut TestAppContext,
+) {
+    let t = edit_test("edit-secret-refused", cx);
+    t.open(cx);
+    t.change("replicas: 3", "replicas: 5", cx);
+    assert_eq!(t.with_view(cx, YamlEditView::apply_block_reason), None);
+    t.view(cx)
+        .update(cx, |view, _| view.refuse_secret_values_for_test());
+    assert_eq!(
+        t.with_view(cx, YamlEditView::apply_block_reason),
+        Some("Secret values are changed with Edit values")
+    );
+    // Apply sends nothing while the refusal stands.
+    t.apply(cx);
+    assert!(!t.is_passed(cx));
+    // Any change of the text is a new text: the refusal belonged to the old one.
+    t.change("replicas: 5", "replicas: 6", cx);
+    assert_eq!(t.with_view(cx, YamlEditView::apply_block_reason), None);
+}
