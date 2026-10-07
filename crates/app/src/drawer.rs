@@ -920,7 +920,7 @@ pub(crate) fn open_link(
 }
 
 /// A mono value that opens `target` on its own screen, named like every object in a drawer (see
-/// `object_text`): `pod: web-0`, or `pod: lab-shop/web-0` when the open session's scope covers
+/// `object_text`): `pod:web-0`, or `pod:lab-shop/web-0` when the open session's scope covers
 /// more than one namespace, so two objects of the same name are told apart (UX round 3, P33).
 pub(crate) fn link_text(
     id: usize,
@@ -999,8 +999,8 @@ pub(crate) fn named_object_text(
         name = rest;
     }
     match namespace {
-        Some(namespace) if shows_namespace => format!("{short_kind}: {namespace}/{name}").into(),
-        _ => format!("{short_kind}: {name}").into(),
+        Some(namespace) if shows_namespace => format!("{short_kind}:{namespace}/{name}").into(),
+        _ => format!("{short_kind}:{name}").into(),
     }
 }
 
@@ -1189,30 +1189,27 @@ mod tests {
     #[test]
     fn a_link_reads_short_kind_then_name() {
         let web = pod("web-0");
-        assert_eq!(named_object_text("web-0", &web, false), "pod: web-0");
+        assert_eq!(named_object_text("web-0", &web, false), "pod:web-0");
         let service = kind_key(ResourceKind::Services, Some("lab-shop"), "api");
-        assert_eq!(named_object_text("api", &service, false), "svc: api");
+        assert_eq!(named_object_text("api", &service, false), "svc:api");
         let config = kind_key(ResourceKind::ConfigMaps, Some("lab-shop"), "app");
-        assert_eq!(named_object_text("app", &config, false), "cm: app");
+        assert_eq!(named_object_text("app", &config, false), "cm:app");
         let secret = kind_key(ResourceKind::Secrets, Some("lab-shop"), "tls");
-        assert_eq!(named_object_text("tls", &secret, false), "secret: tls");
+        assert_eq!(named_object_text("tls", &secret, false), "secret:tls");
     }
 
     #[test]
     fn a_namespaced_link_reads_kind_then_namespace_slash_name_once() {
         let web = pod("web-0");
-        assert_eq!(
-            named_object_text("web-0", &web, true),
-            "pod: lab-shop/web-0"
-        );
+        assert_eq!(named_object_text("web-0", &web, true), "pod:lab-shop/web-0");
         // The namespace already in the text is not repeated.
         assert_eq!(
             named_object_text("lab-shop/web-0", &web, true),
-            "pod: lab-shop/web-0"
+            "pod:lab-shop/web-0"
         );
         assert_eq!(
             named_object_text("lab-shop/web-0", &web, false),
-            "pod: web-0"
+            "pod:web-0"
         );
     }
 
@@ -1221,22 +1218,22 @@ mod tests {
         let deployment = kind_key(ResourceKind::Deployments, Some("lab-shop-stg"), "web");
         assert_eq!(
             named_object_text("deployment/web", &deployment, true),
-            "deploy: lab-shop-stg/web"
+            "deploy:lab-shop-stg/web"
         );
         assert_eq!(
             named_object_text("lab-shop-stg/deployment/web", &deployment, true),
-            "deploy: lab-shop-stg/web"
+            "deploy:lab-shop-stg/web"
         );
         let replica_set = kind_key(ResourceKind::ReplicaSets, Some("kube-system"), "coredns-76");
         assert_eq!(
             named_object_text("replicaset/coredns-76", &replica_set, false),
-            "rs: coredns-76"
+            "rs:coredns-76"
         );
         // A path that only looks like a kind prefix stays whole.
         let ingress = kind_key(ResourceKind::Ingresses, Some("shop"), "web");
         assert_eq!(
             named_object_text("shop.example/api", &ingress, false),
-            "ing: shop.example/api"
+            "ing:shop.example/api"
         );
     }
 
@@ -1246,10 +1243,10 @@ mod tests {
             name: "node-1".to_owned(),
         };
         let namespaces = kind_key(ResourceKind::Namespaces, None, "lab-shop");
-        assert_eq!(named_object_text("node-1", &node, true), "node: node-1");
+        assert_eq!(named_object_text("node-1", &node, true), "node:node-1");
         assert_eq!(
             named_object_text("lab-shop", &namespaces, true),
-            "ns: lab-shop"
+            "ns:lab-shop"
         );
     }
 
