@@ -64,6 +64,7 @@ mod persistent_volume_claim;
 mod pinned_volume;
 mod pod;
 mod pod_log;
+mod pod_placement;
 mod pod_shell;
 mod pod_status;
 mod port_forward;
@@ -193,6 +194,7 @@ pub use pod::{
     PodSummary, ReadyCount, Termination,
 };
 pub use pod_log::{LogLine, LogRequest, LogSource, LogUpdate};
+pub use pod_placement::{AffinityRequirement, Misfit, PodPlacement, PodToleration};
 pub use pod_shell::{
     ExecPermit, GridSize, ShellCommand, ShellExit, ShellInput, ShellRequest, ShellUpdate,
 };

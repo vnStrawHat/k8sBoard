@@ -24,6 +24,7 @@ fn pod(name: &str) -> DrainPod {
         is_terminating: false,
         claims: Vec::new(),
         pinned_volume: None,
+        placement: cluster::PodPlacement::default(),
     }
 }
 

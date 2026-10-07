@@ -19,6 +19,7 @@ fn pod(namespace: &str, name: &str) -> DrainPod {
         is_terminating: false,
         claims: Vec::new(),
         pinned_volume: None,
+        placement: cluster::PodPlacement::default(),
     }
 }
 
@@ -642,7 +643,7 @@ fn a_pod_whose_volume_lives_on_the_node_is_counted_apart_and_says_why() {
         ]
     );
     assert_eq!(
-        pinned_note(&plans).as_deref(),
+        pinned_note(&plans, &[]).as_deref(),
         Some(
             "db-0 cannot move: its volume data-db-0 lives on this node, so its replacement stays Pending until the node is back."
         )
@@ -654,7 +655,7 @@ fn several_pinned_pods_share_one_note_and_a_blocked_budget_keeps_its_own_text() 
     let pods = [pinned("db-0", "data-db-0"), pinned("db-1", "data-db-1")];
     let plan = node_plan("wk-04", &pods, &[], &DrainOptions::default());
     assert_eq!(
-        pinned_note(&[plan]).as_deref(),
+        pinned_note(&[plan], &[]).as_deref(),
         Some(
             "db-0 and 1 more cannot move: their volumes live on this node, so their replacements stay Pending until the node is back."
         )

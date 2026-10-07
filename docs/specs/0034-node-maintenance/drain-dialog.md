@@ -79,6 +79,10 @@ Row: `Grace period` select `Pod default` · `10 s` · `30 s` · `60 s` · `120 s
 
 A pod that mounts a PersistentVolumeClaim bound to a volume with a `kubernetes.io/hostname` (or `metadata.name`) node affinity naming this node cannot move: its replacement stays Pending once the node is cordoned. `pin_volumes(node, pods)` (read-only: one node GET and one volume list, only when some pod mounts a claim; a failure leaves the pods unmarked) sets `DrainPod.pinned_volume`. The pod stays an `Evict` verdict (the drain still evicts it) but its row reads `cannot move: volume {claim} lives on this node` (warn; a `Blocked` budget keeps its own text), it sorts after the budget rows, and the counts above and the HEADS UP line name it. Zone affinities and finished pods never pin.
 
+## Placement check (round 3, Q1/Q2)
+
+The dialog also lists the cluster's nodes (read-only) and checks where the replacement of each evicted, controller-owned, unpinned pod can go: a node other than the drained ones that is Ready and schedulable, whose `NoSchedule`/`NoExecute` taints the pod tolerates and whose labels match its `nodeSelector` and required node affinity (`cluster::PodPlacement::misfit`; resources, ports, volumes and pod affinity are not checked). When no node fits, HEADS UP says `No other node fits {pod} (taints on worker2: workload=data): its replacement will stay Pending.` (`{pod} and {k} more` for several). A pinned pod whose own node carries a taint it does not tolerate (the cordon's `unschedulable` taint does not count) reads `... so its replacement stays Pending, and it cannot come back here either until taint workload=data is tolerated.` A node list that cannot be read leaves both out.
+
 ## Dry-runs and confirm
 
 - After loading, one request at a time, each `checked_write(WriteStep { mode: DryRun, .. })` (no audit): 0030 `SetNodeSchedulable { false }` per node not yet cordoned, then `EvictPod` for every `Evict` pod in list order. Ticking an option dry-runs the pods it adds.

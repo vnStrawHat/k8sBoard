@@ -14,7 +14,7 @@ use std::time::Duration;
 
 use cluster::{
     AccessCheck, ClusterConnection, ClusterError, DrainPod, GracePeriod, NamespaceScope,
-    NodeScheduling, ObjectKind, PodDisruptionBudgetSummary,
+    NodeScheduling, NodeSummary, ObjectKind, PodDisruptionBudgetSummary,
 };
 use gpui_kit::component::WindowExt as _;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
@@ -42,6 +42,7 @@ use super::write_flow::{
 use crate::cluster_registry::ClusterRef;
 use crate::cluster_runtime::ClusterRuntime;
 use crate::confirm_dialog::{typed_prompt, typed_prompt_text};
+use crate::drain_placement::placement_note;
 use crate::drain_plan::{
     BudgetPolicy, CordonCheck, DrainOption, DrainOptions, GRACE_CHOICES, NodePlan, OptionCounts,
     PodCheck, PodKey, PreviewLine, TIMEOUT_CHOICES, bypass_note, drain_blocker, drain_dry_run,
@@ -75,6 +76,9 @@ const BODY_MAX_HEIGHT: f32 = 590.;
 struct Reads {
     budgets: Result<Vec<PodDisruptionBudgetSummary>, ClusterError>,
     pods: Vec<Result<Vec<DrainPod>, ClusterError>>,
+    /// Every node of the cluster, to tell where a replacement can go; empty when the list could
+    /// not be read, which leaves the placement check out.
+    cluster_nodes: Vec<NodeSummary>,
 }
 
 /// The pods of `node`, each marked when its volume lives on the node. A volume list the session
@@ -141,7 +145,7 @@ enum DrainButton {
 /// One dry-run to send.
 enum Job {
     Cordon(String),
-    Evict(DrainPod),
+    Evict(PodKey),
 }
 
 /// The body of the drain dialog.
@@ -158,6 +162,7 @@ pub(crate) struct DrainDialog {
     preview_reason: Option<SharedString>,
     nodes: Vec<NodeData>,
     budgets: BudgetsLoad,
+    cluster_nodes: Vec<NodeSummary>,
     options: DrainOptions,
     delete_review: DeleteReview,
     /// The grace the user chose before ticking Skip, put back when it is unticked.
@@ -306,7 +311,15 @@ impl DrainDialog {
                         for node in &names {
                             pods.push(node_pods(&connection, node).await);
                         }
-                        Reads { budgets, pods }
+                        let cluster_nodes = connection.list_nodes().await.unwrap_or_else(|error| {
+                            tracing::debug!(%error, "could not list the nodes for the placement check");
+                            Vec::new()
+                        });
+                        Reads {
+                            budgets,
+                            pods,
+                            cluster_nodes,
+                        }
                     })
                     .await;
                 let _ = this.update(cx, |dialog, cx| dialog.loaded(read, cx));
@@ -322,6 +335,7 @@ impl DrainDialog {
             preview_reason: target.preview_reason,
             nodes,
             budgets: BudgetsLoad::Loading,
+            cluster_nodes: Vec::new(),
             options,
             // The picture has no cluster to ask.
             delete_review: if reviewing.is_some() {
@@ -371,7 +385,12 @@ impl DrainDialog {
     /// start from what could be read.
     fn loaded(&mut self, read: Result<Reads, tokio::task::JoinError>, cx: &mut Context<Self>) {
         match read {
-            Ok(Reads { budgets, pods }) => {
+            Ok(Reads {
+                budgets,
+                pods,
+                cluster_nodes,
+            }) => {
+                self.cluster_nodes = cluster_nodes;
                 self.budgets = match budgets {
                     Ok(budgets) => BudgetsLoad::Ready(budgets),
                     Err(error) => BudgetsLoad::Failed(
@@ -473,7 +492,7 @@ impl DrainDialog {
             .iter()
             .flat_map(|plan| plan.evictions())
             .find(|planned| self.checks.pods.get(&planned.pod.uid) == Some(&PodCheck::Waiting))
-            .map(|planned| planned.pod.clone());
+            .map(|planned| PodKey::of(&planned.pod));
         match pod {
             Some(pod) => {
                 self.checks.pods.insert(pod.uid.clone(), PodCheck::Running);
@@ -521,7 +540,7 @@ impl DrainDialog {
         let job = self.claim_next()?;
         let intent = match &job {
             Job::Cordon(node) => cordon_write(self.scope(), node),
-            Job::Evict(pod) => removal_write(self.scope(), &PodKey::of(pod), &self.options),
+            Job::Evict(key) => removal_write(self.scope(), key, &self.options),
         };
         let Some(intent) = intent else {
             // A name the write path refuses: the check fails here, nothing is sent.
@@ -545,10 +564,10 @@ impl DrainDialog {
                     .cordons
                     .insert(node.clone(), CordonCheck::Failed(text));
             }
-            Job::Evict(pod) => {
+            Job::Evict(key) => {
                 self.checks
                     .pods
-                    .insert(pod.uid.clone(), PodCheck::Failed(text));
+                    .insert(key.uid.clone(), PodCheck::Failed(text));
             }
         }
     }
@@ -581,7 +600,7 @@ impl DrainDialog {
                 };
                 self.checks.cordons.insert(node.clone(), check);
             }
-            Job::Evict(pod) => {
+            Job::Evict(key) => {
                 let check = match &result {
                     Ok(_) => PodCheck::Accepted,
                     Err(CheckedWriteError::Write(WriteError::TooManyRequests {
@@ -589,7 +608,7 @@ impl DrainDialog {
                     })) => PodCheck::Refused(message.clone().into()),
                     Err(error) => PodCheck::Failed(failure(error)),
                 };
-                self.checks.pods.insert(pod.uid.clone(), check);
+                self.checks.pods.insert(key.uid.clone(), check);
             }
         }
         cx.notify();
@@ -1261,7 +1280,12 @@ impl DrainDialog {
             }
             BudgetPolicy::Skip => lines.extend(bypass_note(&self.plans).map(|text| (text, danger))),
         }
-        lines.extend(pinned_note(&self.plans).map(|text| (text, theme.foreground)));
+        lines.extend(
+            placement_note(&self.plans, &self.cluster_nodes).map(|text| (text, theme.foreground)),
+        );
+        lines.extend(
+            pinned_note(&self.plans, &self.cluster_nodes).map(|text| (text, theme.foreground)),
+        );
         if lines.is_empty() {
             return None;
         }
@@ -1759,6 +1783,7 @@ impl DrainDialog {
                 is_terminating: false,
                 claims: Vec::new(),
                 pinned_volume: None,
+                placement: cluster::PodPlacement::default(),
             };
         let budget = |namespace: &str, name: &str, app: &str, expected: u32, allowed: u32| {
             PodDisruptionBudgetSummary {

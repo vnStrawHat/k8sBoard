@@ -6,10 +6,13 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
-use cluster::{BlockCause, DisruptionState, DrainPod, GracePeriod, PodDisruptionBudgetSummary};
+use cluster::{
+    BlockCause, DisruptionState, DrainPod, GracePeriod, NodeSummary, PodDisruptionBudgetSummary,
+};
 use gpui_kit::SharedString;
 
 use crate::app_shell::write_flow::DryRunState;
+use crate::drain_placement::own_taint_text;
 use crate::status_tone::StatusTone;
 
 /// The most a drain waits for one node when the user picks nothing else.
@@ -806,24 +809,39 @@ pub(crate) fn heads_up(plans: &[NodePlan], timeout: Duration) -> Vec<String> {
 }
 
 /// HEADS UP about pods whose volume lives on the node: the drain evicts them, and the replacement
-/// stays Pending until the node is schedulable again. `None` when no pod is pinned.
-pub(crate) fn pinned_note(plans: &[NodePlan]) -> Option<String> {
-    let pinned: Vec<(&PlannedPod, &str)> = plans
+/// stays Pending until the node is schedulable again, and then only if it tolerates the node's own
+/// taints. `None` when no pod is pinned. `nodes` are the cluster's nodes, to read the node's taints.
+pub(crate) fn pinned_note(plans: &[NodePlan], nodes: &[NodeSummary]) -> Option<String> {
+    let pinned: Vec<(&NodePlan, &PlannedPod, &str)> = plans
         .iter()
-        .flat_map(|plan| &plan.pods)
-        .filter_map(|planned| Some((planned, planned.pinned_volume()?)))
+        .flat_map(|plan| plan.pods.iter().map(move |planned| (plan, planned)))
+        .filter_map(|(plan, planned)| Some((plan, planned, planned.pinned_volume()?)))
         .collect();
-    let tail = "so its replacement stays Pending until the node is back";
+    let blocked_by = pinned
+        .iter()
+        .find_map(|(plan, planned, _)| own_taint_text(&planned.pod, &plan.node, nodes));
+    let stays = |plural: bool| match (&blocked_by, plural) {
+        (None, false) => "so its replacement stays Pending until the node is back.".to_owned(),
+        (None, true) => "so their replacements stay Pending until the node is back.".to_owned(),
+        (Some(taints), false) => format!(
+            "so its replacement stays Pending, and it cannot come back here either until {taints} tolerated."
+        ),
+        (Some(taints), true) => format!(
+            "so their replacements stay Pending, and they cannot come back here either until {taints} tolerated."
+        ),
+    };
     Some(match pinned.as_slice() {
         [] => return None,
-        [(planned, claim)] => format!(
-            "{} cannot move: its volume {claim} lives on this node, {tail}.",
-            planned.pod.name
+        [(_, planned, claim)] => format!(
+            "{} cannot move: its volume {claim} lives on this node, {}",
+            planned.pod.name,
+            stays(false)
         ),
-        [(first, _), more @ ..] => format!(
-            "{} and {} more cannot move: their volumes live on this node, so their replacements stay Pending until the node is back.",
+        [(_, first, _), more @ ..] => format!(
+            "{} and {} more cannot move: their volumes live on this node, {}",
             first.pod.name,
-            more.len()
+            more.len(),
+            stays(true)
         ),
     })
 }

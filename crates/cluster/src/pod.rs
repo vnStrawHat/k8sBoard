@@ -16,6 +16,7 @@ use crate::container_spec::{
 use crate::dns_name::is_dns_subdomain;
 use crate::event::optional_message;
 use crate::namespace::NamespaceScope;
+use crate::pod_placement::PodPlacement;
 use crate::pod_status::{PodStatus, StatusReason, is_sidecar, non_negative, pod_display};
 use crate::resource_watch::{WatchUpdate, summary_watch};
 use crate::workload::{
@@ -93,6 +94,8 @@ pub struct DrainPod {
     pub claims: Vec<String>,
     /// The claim whose volume only this node can serve (`pin_volumes`); `None` until asked.
     pub pinned_volume: Option<String>,
+    /// What the scheduler matches the pod against: where its replacement may land.
+    pub placement: PodPlacement,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -385,6 +388,7 @@ pub(crate) fn drain_pod(pod: &Pod) -> DrainPod {
             .map(|claim| claim.claim_name.clone())
             .collect(),
         pinned_volume: None,
+        placement: PodPlacement::of(pod),
     }
 }
 

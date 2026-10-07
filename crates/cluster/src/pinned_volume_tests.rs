@@ -18,6 +18,7 @@ fn pod(namespace: &str, name: &str, claims: &[&str]) -> DrainPod {
         is_terminating: false,
         claims: claims.iter().map(|claim| (*claim).to_owned()).collect(),
         pinned_volume: None,
+        placement: crate::PodPlacement::default(),
     }
 }
 

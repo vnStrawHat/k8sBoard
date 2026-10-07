@@ -32,6 +32,7 @@ mod custom_kind;
 mod custom_rows;
 mod debug_dialogs;
 mod dock;
+mod drain_placement;
 mod drain_plan;
 mod drain_run;
 mod drain_tab;

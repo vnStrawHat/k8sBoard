@@ -348,6 +348,7 @@ impl AppShell {
             is_terminating: false,
             claims: Vec::new(),
             pinned_volume: None,
+            placement: cluster::PodPlacement::default(),
         };
         let mut pods = vec![pod("payments", "api-7d9f8c-m8n2p", "ReplicaSet")];
         pods.extend(
