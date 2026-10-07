@@ -19,16 +19,16 @@ use super::{AppShell, Screen, focus_table};
 use crate::dock::{DockMode, TabStep};
 use crate::drawer::{DrawerScroll, DrawerTab, drawer_tabs};
 use crate::keymap::{
-    Attach, CloseDockTab, CopyName, Cordon, Delete, Dismiss, Drain, EditHpaRange, EditLabels,
-    EditMetadata, EditTaints, EditValues, EditYaml, EvictPod, ExpandClaim, ExtendTickDown,
-    ExtendTickUp, GoBack, GoForward, LeaveInput, NextContainer, NextDockTab, OpenDrawer, OpenShell,
-    PauseRollout, PortForward, PreviousContainer, PreviousDockTab, RecreateClaim, RenewCertificate,
-    ReplaceCertificate, RerunJob, RerunJobWithChanges, RestartPod, RestartRollout, RollBack, Scale,
-    SelectDrawerTab1, SelectDrawerTab2, SelectDrawerTab3, SelectDrawerTab4, SelectDrawerTab5,
-    SelectFirstRow, SelectLastRow, SelectNextPage, SelectNextRow, SelectPreviousPage,
-    SelectPreviousRow, SetDefaultStorageClass, SetImage, SetReclaimPolicy, SuspendCronJob,
-    ToggleAllTicks, ToggleDock, ToggleDockZoom, ToggleReadOnly, ToggleRowTick, TriggerCronJob,
-    ViewLogs, ViewYaml,
+    Attach, CloseDockTab, CompareNamespaces, CopyName, Cordon, Delete, Dismiss, Drain,
+    EditHpaRange, EditLabels, EditMetadata, EditTaints, EditValues, EditYaml, EvictPod,
+    ExpandClaim, ExtendTickDown, ExtendTickUp, GoBack, GoForward, LeaveInput, NextContainer,
+    NextDockTab, OpenDrawer, OpenNamespaceCompare, OpenShell, PauseRollout, PortForward,
+    PreviousContainer, PreviousDockTab, RecreateClaim, RenewCertificate, ReplaceCertificate,
+    RerunJob, RerunJobWithChanges, RestartPod, RestartRollout, RollBack, Scale, SelectDrawerTab1,
+    SelectDrawerTab2, SelectDrawerTab3, SelectDrawerTab4, SelectDrawerTab5, SelectFirstRow,
+    SelectLastRow, SelectNextPage, SelectNextRow, SelectPreviousPage, SelectPreviousRow,
+    SetDefaultStorageClass, SetImage, SetReclaimPolicy, SuspendCronJob, ToggleAllTicks, ToggleDock,
+    ToggleDockZoom, ToggleReadOnly, ToggleRowTick, TriggerCronJob, ViewLogs, ViewYaml,
 };
 use crate::kind_drawer::REVISIONS_TITLE;
 use crate::live_sections::loaded_replica_sets;
@@ -205,6 +205,9 @@ pub(super) fn register_key_handlers(root: Div, cx: &Context<AppShell>) -> Div {
         .on_action(cx.listener(|shell, _: &PreviousContainer, _, cx| {
             shell.step_container_at_cursor(ContainerStep::Previous, cx);
         }))
+        .on_action(cx.listener(|shell, _: &OpenNamespaceCompare, window, cx| {
+            shell.open_namespace_compare_from_scope(window, cx);
+        }))
         .on_action(cx.listener(|shell, _: &GoBack, _, cx| shell.go_back(cx)))
         .on_action(cx.listener(|shell, _: &GoForward, _, cx| shell.go_forward(cx)))
         .on_action(
@@ -234,6 +237,7 @@ pub(super) fn register_key_handlers(root: Div, cx: &Context<AppShell>) -> Div {
         }));
     let root = on_row_key::<ViewLogs>(root, RowAction::ViewLogs, cx);
     let root = on_row_key::<ViewYaml>(root, RowAction::ViewYaml, cx);
+    let root = on_row_key::<CompareNamespaces>(root, RowAction::CompareNamespaces, cx);
     let root = on_row_key::<OpenShell>(root, RowAction::OpenShell, cx);
     let root = on_row_key::<PortForward>(root, RowAction::PortForward, cx);
     let root = on_row_key::<Attach>(root, RowAction::Attach, cx);
@@ -718,6 +722,12 @@ impl AppShell {
             ResourceAction::ViewYaml => self.open_drawer_tab(subject, DrawerTab::Yaml, cx),
             // Copy name never reaches here: `copy_cursor_name` handles it before the gate.
             ResourceAction::CopyName => {}
+            // The Namespaces row under the cursor is the left side of the comparison (spec 0057).
+            ResourceAction::CompareNamespaces => {
+                if let ResourceKey::Kind { name, .. } = &subject.key {
+                    self.open_namespace_compare(name.clone(), window, cx);
+                }
+            }
             // The default container of the cursor pod, in the cursor's own cluster (spec 0036).
             ResourceAction::OpenShell => self.open_default_shell(&subject, window, cx),
             // The node shell options dialog of the cursor node, in the cursor's own cluster (spec 0037).

@@ -166,6 +166,8 @@ mod keyboard_navigation;
 mod leaving_work;
 #[path = "metadata_editor.rs"]
 mod metadata_editor;
+#[path = "namespace_compare_flow.rs"]
+mod namespace_compare_flow;
 #[path = "node_editor.rs"]
 pub(crate) mod node_editor;
 #[path = "node_shell_cleanup.rs"]

@@ -27,9 +27,9 @@ use crate::custom_kind::CustomKind;
 use crate::dock::{Dock, LogOrigin};
 use crate::drawer::DrawerTab;
 use crate::keymap::{
-    Attach, CopyName, Cordon, DebugContainer, Delete, Drain, EditHpaRange, EditLabels,
-    EditMetadata, EditTaints, EditValues, EditYaml, EvictPod, ExpandClaim, OpenShell, PauseRollout,
-    PortForward, RecreateClaim, RenewCertificate, ReplaceCertificate, RerunJob,
+    Attach, CompareNamespaces, CopyName, Cordon, DebugContainer, Delete, Drain, EditHpaRange,
+    EditLabels, EditMetadata, EditTaints, EditValues, EditYaml, EvictPod, ExpandClaim, OpenShell,
+    PauseRollout, PortForward, RecreateClaim, RenewCertificate, ReplaceCertificate, RerunJob,
     RerunJobWithChanges, RestartPod, RestartRollout, RollBack, Scale, SetDefaultStorageClass,
     SetImage, SetReclaimPolicy, SuspendCronJob, TriggerCronJob, ViewLogs, ViewYaml,
 };
@@ -74,6 +74,8 @@ pub(crate) enum ResourceAction {
     EditTaints,
     EditLabels,
     CopyName,
+    /// Opens the namespace comparison with the Namespaces row as the left side (spec 0057).
+    CompareNamespaces,
     ViewYaml,
     /// Carries the kind of the row: only the editable kinds offer it (spec 0031).
     EditYaml(ObjectKind),
@@ -128,6 +130,8 @@ pub(crate) enum RowAction {
     ViewLogs,
     ViewYaml,
     CopyName,
+    /// V on a Namespaces row: Compare with… (spec 0057).
+    CompareNamespaces,
     OpenShell,
     PortForward,
     /// A on a pod: the default container with a terminal (spec 0040).
@@ -259,7 +263,9 @@ impl ResourceAction {
             Self::ViewLogs => ActionGate::ReadOnly {
                 check: Some(AccessCheck::GetPodLogs),
             },
-            Self::CopyName | Self::ViewYaml => ActionGate::ReadOnly { check: None },
+            Self::CopyName | Self::ViewYaml | Self::CompareNamespaces => {
+                ActionGate::ReadOnly { check: None }
+            }
             // A WebSocket exec is authorized as `get` before Kubernetes 1.35 and as `create` too from
             // 1.35 (spec 0036), so a shell needs both.
             Self::OpenShell => ActionGate::Mutating {
@@ -438,6 +444,7 @@ impl ResourceAction {
             Self::EditTaints => RowAction::EditTaints,
             Self::EditLabels => RowAction::EditLabels,
             Self::CopyName => RowAction::CopyName,
+            Self::CompareNamespaces => RowAction::CompareNamespaces,
             Self::ViewYaml => RowAction::ViewYaml,
             Self::EditYaml(_) => RowAction::EditYaml,
             Self::EditValues(_) => RowAction::EditValues,
@@ -482,6 +489,7 @@ impl RowAction {
             Self::EditTaints => Box::new(EditTaints),
             Self::EditLabels => Box::new(EditLabels),
             Self::CopyName => Box::new(CopyName),
+            Self::CompareNamespaces => Box::new(CompareNamespaces),
             Self::ViewYaml => Box::new(ViewYaml),
             Self::EditYaml => Box::new(EditYaml),
             Self::EditValues => Box::new(EditValues),
@@ -514,6 +522,7 @@ impl RowAction {
             Self::ViewLogs => IconName::FileText,
             Self::ViewYaml => IconName::FileCode,
             Self::CopyName => IconName::Copy,
+            Self::CompareNamespaces => IconName::GitCompare,
             Self::OpenShell => IconName::SquareTerminal,
             Self::Attach => IconName::Plug,
             Self::DebugContainer => IconName::Bug,
@@ -582,6 +591,7 @@ pub(crate) fn action_risk(action: ResourceAction) -> ActionRisk {
         | ResourceAction::EditTaints
         | ResourceAction::EditLabels
         | ResourceAction::CopyName
+        | ResourceAction::CompareNamespaces
         | ResourceAction::ViewYaml
         | ResourceAction::EditYaml(_)
         | ResourceAction::EditValues(_)
@@ -620,6 +630,7 @@ pub(crate) fn action_label(action: ResourceAction) -> &'static str {
         ResourceAction::EditTaints => "Edit taints",
         ResourceAction::EditLabels => "Edit labels",
         ResourceAction::CopyName => "Copy name",
+        ResourceAction::CompareNamespaces => "Compare with…",
         ResourceAction::ViewYaml => "View YAML",
         ResourceAction::EditYaml(_) => "Edit YAML",
         ResourceAction::EditValues(_) => "Edit values",
@@ -783,6 +794,14 @@ pub(crate) fn subject_action(row: RowAction, subject: &ResourceKey) -> Option<Re
             ResourceKey::Pod { .. } | ResourceKey::Node { .. } => None,
         },
         RowAction::CopyName => Some(ResourceAction::CopyName),
+        RowAction::CompareNamespaces => matches!(
+            subject,
+            ResourceKey::Kind {
+                kind: ResourceKind::Namespaces,
+                ..
+            }
+        )
+        .then_some(ResourceAction::CompareNamespaces),
         RowAction::Delete => delete_kind(subject).map(ResourceAction::Delete),
     }
 }
@@ -1950,6 +1969,12 @@ pub(crate) fn kind_menu(
             default_namespace_item(context.cluster.clone(), row.name.clone(), is_default, shell),
         ));
     }
+    if kind == ResourceKind::Namespaces {
+        menu = menu.item(guarded(
+            context,
+            compare_namespaces_item(row.name.clone(), shell),
+        ));
+    }
     let change_actions = kind.read_only_actions();
     let edit_yaml = edit_yaml_kind(kind);
     if !change_actions.is_empty() || edit_yaml.is_some() {
@@ -2254,6 +2279,20 @@ fn default_namespace_item(
                 shell.toggle_default_namespace(&cluster, &name, cx)
             });
         })
+}
+
+/// Compare with… on a Namespaces row: the dialog that picks the other namespace and diffs the two
+/// (spec 0057). Read-only, so it needs no gate.
+fn compare_namespaces_item(name: String, shell: &WeakEntity<AppShell>) -> PopupMenuItem {
+    let shell = shell.clone();
+    let item = PopupMenuItem::new(action_label(ResourceAction::CompareNamespaces)).on_click(
+        move |_, window, cx| {
+            let _ = shell.update(cx, |shell, cx| {
+                shell.open_namespace_compare(name.clone(), window, cx);
+            });
+        },
+    );
+    row_keyed(item, RowAction::CompareNamespaces)
 }
 
 /// The custom kind a CRD row opens: the served kind with its name, `None` while the CRD is not

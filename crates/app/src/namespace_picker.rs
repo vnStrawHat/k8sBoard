@@ -267,7 +267,7 @@ fn namespace_list(content: &PickerContent) -> AnyElement {
 }
 
 /// The names that contain `filter`, ignoring case; all of them for a blank filter.
-fn matching_namespaces<'a>(names: &'a [String], filter: &str) -> Vec<&'a String> {
+pub(crate) fn matching_namespaces<'a>(names: &'a [String], filter: &str) -> Vec<&'a String> {
     let needle = filter.trim().to_lowercase();
     names
         .iter()

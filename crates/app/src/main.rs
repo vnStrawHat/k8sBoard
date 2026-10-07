@@ -99,6 +99,8 @@ mod monitor_source;
 mod monitor_tab;
 mod mono_font;
 mod name_index;
+mod namespace_compare_rows;
+mod namespace_compare_view;
 mod namespace_picker;
 mod namespace_rows;
 mod navigation;

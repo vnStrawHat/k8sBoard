@@ -79,6 +79,9 @@ gpui_kit::actions!(
         SetDefaultStorageClass,
         RecreateClaim,
         SetReclaimPolicy,
+        // Compare with another namespace (0057): V on a Namespaces row; the chord needs no row.
+        CompareNamespaces,
+        OpenNamespaceCompare,
         // Certificate Renew now (0018 step 6), unbound like the other resource edits.
         RenewCertificate,
         // The value popover and the palette argument (0032): Escape steps back one level.
@@ -162,6 +165,7 @@ pub(crate) fn bind_keys(cx: &mut App) {
         // Chords.
         KeyBinding::new("secondary-k", OpenPalette, Some(WINDOW)),
         KeyBinding::new("secondary-n", OpenNamespacePicker, Some(WINDOW)),
+        KeyBinding::new("secondary-shift-d", OpenNamespaceCompare, Some(WINDOW)),
         KeyBinding::new("ctrl-`", ToggleDock, Some(WINDOW)),
         KeyBinding::new("secondary-shift-m", ToggleDockZoom, Some(WINDOW)),
         KeyBinding::new("ctrl-tab", NextDockTab, Some(WINDOW)),
@@ -226,6 +230,7 @@ pub(crate) fn bind_keys(cx: &mut App) {
         KeyBinding::new("x", EvictPod, Some(WORKSPACE)),
         KeyBinding::new("shift-s", Scale, Some(WORKSPACE)),
         KeyBinding::new("i", SetImage, Some(WORKSPACE)),
+        KeyBinding::new("v", CompareNamespaces, Some(WORKSPACE)),
         KeyBinding::new("delete", Delete, Some(WORKSPACE)),
         // The table: the kit table binds these keys deeper, so they are taken over here.
         KeyBinding::new("down", SelectNextRow, Some(TABLE)),
@@ -391,6 +396,7 @@ pub(crate) fn shortcut_rows() -> Vec<ShortcutRow> {
         row(General, "Command palette", OpenPalette),
         row(General, "Jump to a resource kind", OpenKindPalette),
         row(General, "Choose namespace", OpenNamespacePicker),
+        row(General, "Compare namespaces", OpenNamespaceCompare),
         row(General, "Open cluster switcher", OpenClusterSwitcher),
         row(General, "Toggle read-only", ToggleReadOnly),
         row(General, "Switch to cluster 1–9", SwitchToCluster1),
@@ -452,6 +458,11 @@ pub(crate) fn shortcut_rows() -> Vec<ShortcutRow> {
         row(SelectedResource, "Evict pod", EvictPod),
         row(SelectedResource, "Scale (Edit min / max on an HPA)", Scale),
         row(SelectedResource, "Set image (workloads)", SetImage),
+        row(
+            SelectedResource,
+            "Compare with another namespace (Namespaces)",
+            CompareNamespaces,
+        ),
         row(SelectedResource, "Delete", Delete),
         row(Dock, "Toggle the dock", ToggleDock),
         row(Dock, "Zoom the dock in or out", ToggleDockZoom),
