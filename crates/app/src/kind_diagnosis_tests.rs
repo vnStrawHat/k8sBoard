@@ -2494,6 +2494,19 @@ fn cron_job_missed_run_names_the_overdue_run() {
 }
 
 #[test]
+fn cron_job_missed_run_without_a_deadline_does_not_invent_one() {
+    let mut cron = cron_job_ran_at_ten();
+    cron.starting_deadline_seconds = None;
+    let now = "2024-10-04T10:20:00Z".parse().expect("timestamp");
+    let diagnosis = cron_job_diagnosis(&cron, now).expect("a box");
+    assert_eq!(diagnosis.title, "SCHEDULE MISSED");
+    assert!(diagnosis.text.starts_with(
+        "No starting deadline set; the controller has not started the run due 15m ago."
+    ));
+    assert!(!diagnosis.text.contains("100"));
+}
+
+#[test]
 fn cron_job_failed_last_run_points_to_recent_jobs() {
     let mut cron = cron_job_ran_at_ten();
     cron.last_success_at = None;

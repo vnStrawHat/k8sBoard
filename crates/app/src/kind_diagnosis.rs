@@ -1030,20 +1030,27 @@ fn cron_job_diagnosis(cron_job: &CronJobSummary, now: Timestamp) -> Option<KindD
             .to_owned(),
         ),
         CronState::Missed { expected_at } => {
-            let deadline = cron_job.starting_deadline_seconds.unwrap_or(100);
-            (
-                StatusTone::Warn,
-                "SCHEDULE MISSED",
-                format!(
+            let late = format_age(Some(expected_at), now);
+            let text = match cron_job.starting_deadline_seconds {
+                Some(deadline) => format!(
                     concat!(
                         "No job started for the run due {} ago, and its starting deadline of ",
                         "{}s has passed. The CronJob controller may be down or too busy, or the ",
                         "deadline too short. Trigger now to run it once."
                     ),
-                    format_age(Some(expected_at), now),
-                    deadline
+                    late, deadline
                 ),
-            )
+                // Without a deadline the controller starts a late run whenever it catches up, so
+                // the 100 s grace the state uses is not a deadline to quote.
+                None => format!(
+                    concat!(
+                        "No starting deadline set; the controller has not started the run due {} ",
+                        "ago. It may be down or too busy. Trigger now to run it once."
+                    ),
+                    late
+                ),
+            };
+            (StatusTone::Warn, "SCHEDULE MISSED", text)
         }
         CronState::LastRunFailed => (
             StatusTone::Warn,
