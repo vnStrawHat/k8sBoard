@@ -1339,6 +1339,19 @@ impl BulkLabelEditor {
         if changes.is_empty() {
             return;
         }
+        // A batch that would not go (a key the kubelet owns, a label a DaemonSet selects by) is
+        // told here, with the rows still in front of the user, not after the editor closed.
+        let refusal = self.shell.upgrade().and_then(|shell| {
+            shell
+                .read(cx)
+                .bulk_label_batch(&self.cluster, &changes, cx)
+                .err()
+        });
+        if let Some(reason) = refusal {
+            self.problem = Some(reason);
+            cx.notify();
+            return;
+        }
         let (shell, cluster) = (self.shell.clone(), self.cluster.clone());
         window.close_dialog(cx);
         // After the close: the flow opens the confirm dialog, which the close must not pop.

@@ -835,7 +835,9 @@ fn bulk_labels_dry_run_every_node_then_commit(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-fn a_review_that_finds_nothing_to_do_says_why_and_sends_nothing(cx: &mut TestAppContext) {
+fn a_review_that_finds_nothing_to_do_keeps_the_editor_open_with_the_reason(
+    cx: &mut TestAppContext,
+) {
     let t = node_test("bulk-labels-noop", cx);
     t.set_nodes(
         &t.t.stg,
@@ -855,15 +857,15 @@ fn a_review_that_finds_nothing_to_do_says_why_and_sends_nothing(cx: &mut TestApp
             Some("All selected nodes already have these labels")
         );
     });
-    let before =
-        t.t.fixture
-            .with_window(cx, |window, cx| window.notifications(cx).len());
     t.review_bulk(&editor, cx);
-    assert!(!t.t.has_dialog(cx), "no batch dialog opens");
-    let after =
-        t.t.fixture
-            .with_window(cx, |window, cx| window.notifications(cx).len());
-    assert!(after > before, "Review says why");
+    // The editor stays open with the reason on its problem line, and no batch dialog opens.
+    assert!(t.has_dialog(cx), "the editor stays open");
+    editor.read_with(cx, |editor, _| {
+        assert_eq!(
+            editor.current_problem().as_deref(),
+            Some("All selected nodes already have these labels")
+        );
+    });
     assert!(writes(&t.t.stg_api).is_empty());
 }
 
@@ -1346,4 +1348,23 @@ fn enter_after_removing_a_bulk_label_row_still_presses_review(cx: &mut TestAppCo
         !writes(&t.t.stg_api).is_empty(),
         "the review dry-ran the batch"
     );
+}
+
+#[gpui_kit::test]
+fn review_with_a_kubelet_key_keeps_the_bulk_editor_open_with_the_problem(cx: &mut TestAppContext) {
+    let t = node_test("bulk-labels-review-kubelet-key", cx);
+    let editor = t.bulk_over_three(cx);
+    t.t.fixture.with_window(cx, |window, cx| {
+        editor.update(cx, |editor, cx| editor.push_row(window, cx));
+    });
+    t.fill(&editor, ("kubernetes.io/os", "linux", false), cx);
+    t.review_bulk(&editor, cx);
+    assert!(t.has_dialog(cx), "the editor stays open with its rows");
+    editor.read_with(cx, |editor, _| {
+        assert_eq!(
+            editor.current_problem().as_deref(),
+            Some("kubernetes.io/os is set by the kubelet")
+        );
+    });
+    assert!(writes(&t.t.stg_api).is_empty());
 }
