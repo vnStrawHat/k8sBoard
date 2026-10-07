@@ -337,3 +337,79 @@ fn only_idle_and_loading_listings_are_awaited() {
     }));
     assert!(!awaits_listing(&RbacState::Failed("no".to_owned())));
 }
+
+fn mixed_subjects() -> RbacSnapshot {
+    snapshot(
+        vec![cluster_role("reader", vec![rule(&["pods"], &[])])],
+        vec![binding(
+            "b",
+            "reader",
+            vec![
+                subject(SubjectKind::User, "system:kube-scheduler", None),
+                subject(
+                    SubjectKind::ServiceAccount,
+                    "replicaset-controller",
+                    Some("kube-system"),
+                ),
+                subject(SubjectKind::ServiceAccount, "ci-bot", Some("lab-house")),
+                subject(SubjectKind::User, "ann", None),
+                subject(SubjectKind::Group, "system:authenticated", None),
+                subject(SubjectKind::Group, "system:masters", None),
+            ],
+        )],
+    )
+}
+
+#[test]
+fn system_subjects_are_listed_after_the_rest() {
+    let groups = groups_of(&mixed_subjects());
+    assert_eq!(
+        texts(&groups.full),
+        [
+            "group system:authenticated",
+            "user ann",
+            "sa lab-house/ci-bot",
+            "user system:kube-scheduler",
+            "group system:masters",
+            "sa kube-system/replicaset-controller",
+        ]
+    );
+    let flags: Vec<bool> = groups.full.iter().map(|group| group.is_system).collect();
+    // A broad group widens who can, so it is never filed as system.
+    assert_eq!(flags, [false, false, false, true, true, true]);
+}
+
+#[test]
+fn hide_system_leaves_the_broad_groups_and_counts_what_it_hides() {
+    let result = evaluate_request(&mixed_subjects(), jiff::Timestamp::UNIX_EPOCH, &get_pods());
+    // The masters row is taken out of the list: the group is counted by the fixed row.
+    assert_eq!(
+        shown(&result.groups.full, true)
+            .map(|group| group.text.as_str())
+            .collect::<Vec<_>>(),
+        [
+            "group system:authenticated",
+            "user ann",
+            "sa lab-house/ci-bot"
+        ]
+    );
+    // The masters row, the scheduler, and the kube-system account.
+    assert_eq!(hidden_system_count(&result), 3);
+}
+
+#[test]
+fn the_copied_answer_is_the_shown_list_as_plain_text() {
+    let result = evaluate_request(&mixed_subjects(), jiff::Timestamp::UNIX_EPOCH, &get_pods());
+    let hidden = answer_text(&result, true);
+    assert_eq!(
+        hidden,
+        "6 subjects can get pods in shop\n\
+         group system:authenticated\n  via clusterrolebinding/b → clusterrole/reader · cluster-wide\n\
+         user ann\n  via clusterrolebinding/b → clusterrole/reader · cluster-wide\n\
+         sa lab-house/ci-bot\n  via clusterrolebinding/b → clusterrole/reader · cluster-wide"
+    );
+    let all = answer_text(&result, false);
+    assert!(all.contains("group system:masters · always allowed (bypasses RBAC)"));
+    assert!(all.contains("user system:kube-scheduler\n"));
+    assert!(all.contains("sa kube-system/replicaset-controller\n"));
+}

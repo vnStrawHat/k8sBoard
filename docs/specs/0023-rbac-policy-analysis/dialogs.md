@@ -29,7 +29,7 @@ Coverage Warn lines (pure `coverage_notes(&RbacCoverage, Option<&str /* request 
 | hint | `AssumedCoreGroup` → muted `Unknown resource: assumed the core group; write resource.group`; `ClusterScoped` → muted `Cluster-scoped resource: namespace ignored`; `QueryError` → Bad text (below) |
 | headline | `{n} subjects can {verb} {target}{ in {ns} | cluster-wide}` ("1 subject"); Warn when a 0015 `broad_group()` subject is among them |
 | fixed row | muted `group system:masters` · `always allowed (bypasses RBAC)` |
-| subjects | ordered: broad groups, users, groups, service accounts; then name. Subject text (0015 `subject_text`, mono; service account → link to its row; broad groups toned Bad for authenticated/unauthenticated, else Warn). Under it one line per grant: `via {binding_text} → {role_text}` (both links via 0015 `binding_key`, `role_key`) · muted `cluster-wide` or `in {ns}` |
+| subjects | ordered: broad groups, users, groups, service accounts; then name; `system:` subjects and kube-system accounts (never a broad group) after the rest (UX round 3, P1). A `Hide system (n)` chip (default on) leaves them and the masters row out of the list; `Copy` puts the listed subjects on the clipboard as plain text (P2). Subject text (0015 `subject_text`, mono; service account → link to its row; broad groups toned Bad for authenticated/unauthenticated, else Warn). Under it one line per grant: `via {binding_text} → {role_text}` (both links via 0015 `binding_key`, `role_key`) · muted `cluster-wide` or `in {ns}` |
 | only named | sub-heading `Only for named objects`, same rows with ` · only {names}` (max 5 names, `+{n}`) |
 | empty | `No RBAC binding grants this.` |
 
@@ -40,11 +40,13 @@ Query errors: `Empty` "Type a verb and a resource, for example get pods"; `Missi
 | Row | Content |
 |---|---|
 | subject | `Input` placeholder `You — or sa ns/name, user name, group name`; Namespace `Select` (You: namespaces only, from the namespaces list, else the scope's namespaces when that list failed, pure `you_namespaces`; others also `All namespaces (cluster-wide grants)`); `Check` |
-| ask | `Can` + request `Input` + `?` + `Ask`; answer: Ok `Yes` / Bad `No`. You (SSAR): the denial reason when given. Others (`decide`): `via {binding_text} → {role_text}` of the first grant, or `No RBAC binding grants this.` |
+| ask | `Can` + request `Input` + `?` + `Ask`; answer: Ok `Yes` / Bad `No`. You (SSAR): the denial reason when given. Others (`decide`): `via {binding_text} → {role_text}` of the first grant, or `No RBAC binding grants this.`; a denied answer for another subject lists the non-`system:` roles bound to it, each as a link `Edit {role_text}…` that opens the role in Edit YAML (`No role of its own is bound to this subject.` when none; P3) |
 | table | header `Resource` · 8 verb columns (`TABLE_VERBS`, short: get list watch create update patch delete delcol) · `Other`. Cells: `✓` (All), `names` (Names, tooltip lists them), empty. Resource cell `{resource}` followed by the muted `.{group}` on one line (the group gives way first), so every row has the same height and the scroll box ends on a row edge; `delcol` carries a `deletecollection` tooltip; the scrollbar is always drawn (`scroll_list.rs`, also on the Who can list); everything rows say `all` in each cell, Warn. Then URL rows `{url}` · verbs. `… {n} more rows` when capped. Empty → `No permissions in {ns}.` |
-| granted by | others only: one row per contributing binding `{binding_text} → {role_text}` (links) · muted `via {subject_text}` |
+| granted by | others only: one row per contributing binding `{binding_text} → {role_text}` (links) · muted `via {subject_text}`; bindings or roles named `system:*` come last (P4) |
 | source | You: `From SelfSubjectRulesReview for {ns}`; `is_incomplete` → Warn `Incomplete: rules shown are granted; others may be missing ({evaluation_error})` (no error text → without the parentheses). Others: the snapshot source line |
 | caveats | You: `The API server's own answer for your credentials. Webhook authorizers can leave it incomplete.` Others: RBAC caveats; a user adds `Only bindings to this user name and system:authenticated count.` |
+
+The header buttons (Check permissions, Who can…) end left of an open drawer, which is drawn over the right of the header (P5).
 
 Table source for others: `permission_table(rules_of(identity, ns).map(|r| r.rule))`; for You: `permission_table(&review.rules)`.
 

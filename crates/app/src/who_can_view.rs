@@ -20,6 +20,8 @@ use gpui_kit::{
 
 use crate::access_bindings::{binding_key, binding_text, role_key, role_text, subject_text};
 use crate::access_query::{ParsedRequest, QueryError, QueryHint, parse_request};
+use crate::app_shell::workspace::toggle_button;
+use crate::clipboard_copy::copy_text;
 use crate::cluster_session::{ClusterSession, RbacState};
 use crate::resource_kind::ResourceKind;
 use crate::scroll_list::scroll_list;
@@ -45,6 +47,10 @@ struct SubjectGroup {
     /// The row of a service account subject.
     account: Option<ResourceKey>,
     is_broad: bool,
+    /// A `system:` subject or a kube-system service account: the control plane's own grants,
+    /// listed after the rest and hidden by the Hide system chip. A broad group is never system:
+    /// it widens who can, which is what the question looks for.
+    is_system: bool,
     lines: Vec<GrantLine>,
 }
 
@@ -92,10 +98,18 @@ fn add_grant(list: &mut Vec<SubjectGroup>, grant: &Grant<'_>, only: Option<Strin
             tone: subject_tone(grant.subject),
             account: account_key(grant.subject),
             is_broad: grant.subject.broad_group().is_some(),
+            is_system: is_system_subject(grant.subject),
             text,
             lines: vec![line],
         }),
     }
+}
+
+/// `system:*` names and the accounts of kube-system, except the broad groups.
+fn is_system_subject(subject: &Subject) -> bool {
+    subject.broad_group().is_none()
+        && (subject.name.starts_with("system:")
+            || subject.namespace.as_deref() == Some("kube-system"))
 }
 
 fn grant_line(binding: &BindingSummary, only: Option<String>) -> GrantLine {
@@ -146,7 +160,8 @@ fn account_key(subject: &Subject) -> Option<ResourceKey> {
     })
 }
 
-/// Broad groups, then users, groups, service accounts; each run by text.
+/// Broad groups, then users, groups, service accounts; each run by text. System subjects come
+/// last, in the same order, so the subjects an engineer added are not below the fold.
 fn sort_subjects(groups: &mut [SubjectGroup]) {
     let rank = |group: &SubjectGroup| {
         if group.is_broad {
@@ -159,7 +174,66 @@ fn sort_subjects(groups: &mut [SubjectGroup]) {
             3
         }
     };
-    groups.sort_by(|a, b| (rank(a), &a.text).cmp(&(rank(b), &b.text)));
+    groups.sort_by(|a, b| (a.is_system, rank(a), &a.text).cmp(&(b.is_system, rank(b), &b.text)));
+}
+
+/// The subjects the answer shows: all of them, or without the system ones.
+fn shown(groups: &[SubjectGroup], hide_system: bool) -> impl Iterator<Item = &SubjectGroup> {
+    groups
+        .iter()
+        .filter(move |group| !(hide_system && group.is_system))
+}
+
+/// How many rows the Hide system chip hides: the always-allowed masters row and every system
+/// subject of both lists.
+fn hidden_system_count(result: &WhoCanResult) -> usize {
+    let system = |groups: &[SubjectGroup]| groups.iter().filter(|group| group.is_system).count();
+    1 + system(&result.groups.full) + system(&result.groups.named_only)
+}
+
+/// The answer as plain text, for the clipboard: what the list shows, one subject per line with
+/// its grants indented below.
+fn answer_text(result: &WhoCanResult, hide_system: bool) -> String {
+    let mut lines = vec![result.headline.clone()];
+    if !hide_system {
+        lines.push(format!(
+            "{MASTERS_SUBJECT} · always allowed (bypasses RBAC)"
+        ));
+    }
+    push_groups(&mut lines, &result.groups.full, hide_system);
+    if shown(&result.groups.named_only, hide_system)
+        .next()
+        .is_some()
+    {
+        lines.push("Only for named objects".to_owned());
+        push_groups(&mut lines, &result.groups.named_only, hide_system);
+    }
+    lines.join("\n")
+}
+
+fn push_groups(lines: &mut Vec<String>, groups: &[SubjectGroup], hide_system: bool) {
+    for group in shown(groups, hide_system) {
+        lines.push(group.text.clone());
+        lines.extend(
+            group
+                .lines
+                .iter()
+                .map(|line| format!("  {}", grant_line_text(line))),
+        );
+    }
+}
+
+/// `via rolebinding/ci-bot → role/ci-bot · in lab-house`, with ` · only a, b` for named objects.
+fn grant_line_text(line: &GrantLine) -> String {
+    let only = line
+        .only
+        .as_ref()
+        .map(|only| format!(" · {only}"))
+        .unwrap_or_default();
+    format!(
+        "via {} → {} · {}{only}",
+        line.binding_text, line.role_text, line.scope
+    )
 }
 
 /// `{n} subjects can {verb} {target}{ in {ns} | cluster-wide}`.
@@ -271,6 +345,8 @@ pub(crate) struct WhoCanView {
     namespace: Entity<SelectState<Vec<String>>>,
     question: Option<Result<Asked, QueryError>>,
     link_count: usize,
+    /// The Hide system chip: system subjects are left out of the list and of the copy.
+    hide_system: bool,
     scroll: ScrollHandle,
     _subscriptions: Vec<Subscription>,
 }
@@ -326,6 +402,7 @@ impl WhoCanView {
             namespace,
             question: None,
             link_count: 0,
+            hide_system: true,
             scroll: ScrollHandle::new(),
             _subscriptions: subscriptions,
         };
@@ -515,6 +592,37 @@ impl WhoCanView {
             .into_any_element()
     }
 
+    /// The Hide system chip, with how many rows it hides, and Copy of the list as it is shown.
+    fn render_answer_tools(&self, result: &WhoCanResult, cx: &mut Context<Self>) -> AnyElement {
+        let hidden = hidden_system_count(result);
+        let text = answer_text(result, self.hide_system);
+        h_flex()
+            .gap_2()
+            .items_center()
+            .child(
+                toggle_button(
+                    "who-can-hide-system",
+                    format!("Hide system ({hidden})"),
+                    self.hide_system,
+                )
+                .tooltip("Leave out system: subjects and kube-system accounts")
+                .on_click(cx.listener(|view, _, _, cx| {
+                    view.hide_system = !view.hide_system;
+                    cx.notify();
+                })),
+            )
+            .child(
+                Button::new("who-can-copy")
+                    .icon(Icon::new(IconName::Copy))
+                    .small()
+                    .outline()
+                    .label("Copy")
+                    .tooltip("Copy the listed subjects as text")
+                    .on_click(cx.listener(move |_, _, _, cx| copy_text(&text, cx))),
+            )
+            .into_any_element()
+    }
+
     fn render_result(&mut self, result: &WhoCanResult, cx: &mut Context<Self>) -> Vec<AnyElement> {
         let mut body = Vec::new();
         let headline = div().font_semibold().child(result.headline.clone());
@@ -525,31 +633,45 @@ impl WhoCanView {
         } else {
             headline.into_any_element()
         });
-        let masters_lines: Vec<AnyElement> = result
-            .masters
-            .iter()
-            .map(|line| self.render_line(line, cx))
-            .collect();
-        body.push(
-            v_flex()
-                .gap_0p5()
-                .py_1()
-                .child(
-                    h_flex()
-                        .gap_2()
-                        .child(self.mono(MASTERS_SUBJECT, cx))
-                        .child(self.muted("· always allowed (bypasses RBAC)", cx)),
-                )
-                .children(masters_lines)
-                .into_any_element(),
-        );
-        for group in &result.groups.full {
+        let hide_system = self.hide_system;
+        if !hide_system {
+            let masters_lines: Vec<AnyElement> = result
+                .masters
+                .iter()
+                .map(|line| self.render_line(line, cx))
+                .collect();
+            body.push(
+                v_flex()
+                    .gap_0p5()
+                    .py_1()
+                    .child(
+                        h_flex()
+                            .gap_2()
+                            .child(self.mono(MASTERS_SUBJECT, cx))
+                            .child(self.muted("· always allowed (bypasses RBAC)", cx)),
+                    )
+                    .children(masters_lines)
+                    .into_any_element(),
+            );
+        }
+        for group in shown(&result.groups.full, hide_system) {
             body.push(self.render_group(group, cx));
         }
-        if result.groups.full.is_empty() {
-            body.push(self.muted("No RBAC binding grants this.", cx));
+        if shown(&result.groups.full, hide_system).next().is_none() {
+            let text = if result.groups.full.is_empty() {
+                "No RBAC binding grants this.".to_owned()
+            } else {
+                format!(
+                    "Only system subjects can do this ({} hidden).",
+                    result.groups.full.len()
+                )
+            };
+            body.push(self.muted(text, cx));
         }
-        if !result.groups.named_only.is_empty() {
+        if shown(&result.groups.named_only, hide_system)
+            .next()
+            .is_some()
+        {
             body.push(
                 div()
                     .pt_2()
@@ -557,7 +679,7 @@ impl WhoCanView {
                     .child("Only for named objects")
                     .into_any_element(),
             );
-            for group in &result.groups.named_only {
+            for group in shown(&result.groups.named_only, hide_system) {
                 body.push(self.render_group(group, cx));
             }
         }
@@ -669,6 +791,7 @@ impl Render for WhoCanView {
                 }
                 match &asked.result {
                     Some(result) => {
+                        body.push(self.render_answer_tools(result, cx));
                         let rows = self.render_result(result, cx);
                         body.push(scroll_list(
                             "who-can-list",
@@ -676,7 +799,9 @@ impl Render for WhoCanView {
                             px(RESULT_MAX_HEIGHT),
                             v_flex().gap_1().children(rows),
                         ));
-                        if result.groups.full.len() > SCROLL_HINT_SUBJECTS {
+                        if shown(&result.groups.full, self.hide_system).count()
+                            > SCROLL_HINT_SUBJECTS
+                        {
                             body.push(self.muted("Scroll the list to see every subject.", cx));
                         }
                         for note in &result.notes {
