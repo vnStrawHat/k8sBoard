@@ -189,7 +189,7 @@ pub use pod_shell::{
 pub use pod_status::{InitStatus, PodStatus, StatusReason};
 pub use port_forward::{
     ForwardControl, ForwardError, ForwardEvent, ForwardRequest, ForwardTarget, ForwardTraffic,
-    ForwardUpdate, LocalPort, PortForwardPermit, default_local_port,
+    ForwardUpdate, LocalPort, PortForwardPermit, default_local_port, free_local_port,
 };
 pub use promql::{
     MAX_POINTS, RANGE_STEPS, RangeError, RangeSpec, UsageMetric, UsageTarget, WorkloadKind,

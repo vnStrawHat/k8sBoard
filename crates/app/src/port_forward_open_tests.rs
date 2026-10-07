@@ -518,6 +518,28 @@ fn a_local_port_typed_in_the_confirm_replaces_the_automatic_one(cx: &mut TestApp
 }
 
 #[gpui_kit::test]
+fn ticking_the_audit_note_moves_the_focus_into_its_field(cx: &mut TestAppContext) {
+    let forwards = two_clusters("note-focus", Answers::Pod, cx);
+    forwards.start(
+        &forwards.stg,
+        pod_spec("api-0", 8080, LocalPortSpec::Auto),
+        cx,
+    );
+    let dialog = forwards.dialog(cx);
+    let is_focused = |forwards: &Forwards, cx: &mut TestAppContext| {
+        forwards
+            .fixture
+            .with_window(cx, |window, cx| dialog.read(cx).is_note_focused(window, cx))
+    };
+    assert!(!is_focused(&forwards, cx));
+    forwards.fixture.with_window(cx, |_, cx| {
+        dialog.update(cx, |dialog, cx| dialog.tick_note(cx));
+    });
+    forwards.fixture.draw_twice(cx);
+    assert!(is_focused(&forwards, cx));
+}
+
+#[gpui_kit::test]
 fn a_local_port_that_is_not_a_port_keeps_the_confirm_open(cx: &mut TestAppContext) {
     let forwards = two_clusters("bad-port", Answers::Pod, cx);
     forwards.start(
@@ -1421,8 +1443,83 @@ fn the_started_notice_names_address_target_and_port() {
         remote_port: 80,
         local_port: LocalPortSpec::Auto,
     };
+    assert_eq!(forward_started_text(19090), "Forwarding localhost:19090");
+    assert_eq!(forward_started_lines(&spec, 10080), ["→ svc/api:80"]);
+}
+
+#[test]
+fn the_started_notice_names_the_port_the_forward_moved_off() {
+    let spec = ForwardSpec {
+        namespace: "shop".to_owned(),
+        target: TargetSpec {
+            kind: crate::port_forwards::TargetKind::Service,
+            name: "api".to_owned(),
+        },
+        remote_port: 8080,
+        local_port: LocalPortSpec::Auto,
+    };
     assert_eq!(
-        forward_started_text(&spec, 19090),
-        "Forwarding localhost:19090 → svc/api:80"
+        forward_started_lines(&spec, 18081),
+        ["→ svc/api:8080", "18080 was in use"]
     );
+}
+
+#[test]
+fn a_long_pod_name_is_cut_in_the_middle_for_the_notice() {
+    let spec = pod_spec(
+        "web-748d84d44b-kxc6x-with-a-long-generated-name",
+        8080,
+        LocalPortSpec::Auto,
+    );
+    let line = forward_target_text(&spec);
+    assert!(line.starts_with("pod/web-"), "{line}");
+    assert!(line.contains('…') && line.ends_with("-name:8080"), "{line}");
+    assert!(line.chars().count() <= "pod/".len() + NOTICE_TARGET_CHARS + ":8080".len());
+}
+
+#[test]
+fn a_busy_automatic_port_names_who_holds_it_and_the_port_used_instead() {
+    let other = pod_spec("web-1", 80, LocalPortSpec::Exact(18080));
+    let held = busy_port(18080, Some(18081), Some(&other)).expect("a busy port");
+    assert_eq!(
+        held.text,
+        "Port 18080 is in use locally (by forward web-1:80): using 18081"
+    );
+    assert_eq!(held.free, Some(18081));
+    let foreign = busy_port(18080, Some(18081), None).expect("a busy port");
+    assert_eq!(
+        foreign.text,
+        "Port 18080 is in use locally (by another program): using 18081"
+    );
+    let crowded = busy_port(18080, None, None).expect("a busy port");
+    assert!(
+        crowded
+            .text
+            .ends_with("the next ports are taken too, the system picks one")
+    );
+    assert!(busy_port(18080, Some(18080), None).is_none());
+}
+
+#[gpui_kit::test]
+fn the_confirm_says_so_when_the_automatic_port_is_taken_on_this_machine(cx: &mut TestAppContext) {
+    let held = TcpListener::bind("127.0.0.1:0").expect("bind a free port");
+    let port = held.local_addr().expect("a local address").port();
+    let forwards = two_clusters("busy-port", Answers::Pod, cx);
+    // The automatic port of remote `p - 10000` is `p`.
+    forwards.start(
+        &forwards.stg,
+        pod_spec("api-0", port - 10_000, LocalPortSpec::Auto),
+        cx,
+    );
+    let dialog = forwards.dialog(cx);
+    let warnings = dialog.read_with(cx, |dialog, _| dialog.warning_lines());
+    assert_eq!(warnings.len(), 1);
+    assert!(
+        warnings[0].starts_with(
+            format!("Port {port} is in use locally (by another program): using ").as_str()
+        ),
+        "{}",
+        warnings[0]
+    );
+    drop(held);
 }

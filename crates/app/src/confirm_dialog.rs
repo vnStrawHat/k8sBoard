@@ -1344,6 +1344,13 @@ impl ConfirmDialog {
         )
     }
 
+    /// The note checkbox: ticking it shows the field and moves the focus into it.
+    fn show_note(&mut self, is_shown: bool, cx: &mut Context<Self>) {
+        self.is_note_shown = is_shown;
+        self.needs_note_focus = is_shown;
+        cx.notify();
+    }
+
     /// Where the line goes when it is not saved.
     fn render_unlogged_note(&self, cx: &App) -> Option<AnyElement> {
         if self.outcome.is_some() || matches!(self.kind, DialogKind::Unlock { .. }) {
@@ -1444,9 +1451,7 @@ impl ConfirmDialog {
                 .label("Add a note to the audit log")
                 .checked(self.is_note_shown)
                 .on_click(cx.listener(|dialog, checked: &bool, _, cx| {
-                    dialog.is_note_shown = *checked;
-                    dialog.needs_note_focus = *checked;
-                    cx.notify();
+                    dialog.show_note(*checked, cx);
                 }))
         });
         h_flex()
@@ -1597,6 +1602,16 @@ impl ConfirmDialog {
     pub(crate) fn type_text(&mut self, text: &str, window: &mut Window, cx: &mut Context<Self>) {
         self.typed
             .update(cx, |input, cx| input.set_value(text.to_owned(), window, cx));
+    }
+
+    /// Ticks the note checkbox.
+    pub(crate) fn tick_note(&mut self, cx: &mut Context<Self>) {
+        self.show_note(true, cx);
+    }
+
+    /// Whether the text cursor is in the note field.
+    pub(crate) fn is_note_focused(&self, window: &Window, cx: &App) -> bool {
+        self.note.read(cx).focus_handle(cx).is_focused(window)
     }
 
     /// Types into the local port field of a forward confirm.

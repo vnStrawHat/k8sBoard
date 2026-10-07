@@ -11,15 +11,15 @@ use std::cell::Cell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use cluster::{ClusterConnection, PortForwardPermit};
+use cluster::{ClusterConnection, PortForwardPermit, free_local_port};
 use futures::channel::mpsc;
 use gpui_kit::component::WindowExt as _;
 use gpui_kit::component::button::Button;
 use gpui_kit::component::notification::Notification;
-use gpui_kit::component::{Sizable as _, h_flex};
+use gpui_kit::component::{ActiveTheme as _, Sizable as _, h_flex, v_flex};
 use gpui_kit::{
     App, AppContext as _, Context, IntoElement as _, ParentElement as _, SharedString, Styled as _,
-    Subscription, Window,
+    Subscription, Window, div,
 };
 
 use super::AppShell;
@@ -27,6 +27,7 @@ use super::write_flow::{ConnectIntent, ConnectOpen, LocalPortChoice, PortForward
 use crate::audit_log::{
     AuditEntry, AuditField, AuditObject, AuditOutcome, append_audit, connect_entry,
 };
+use crate::cell_truncation::middle_truncate;
 use crate::clipboard_copy::copy_text;
 use crate::cluster_registry::ClusterRef;
 use crate::cluster_runtime::ClusterRuntime;
@@ -98,13 +99,17 @@ fn forward_intent(
     cluster: &ClusterRef,
     cluster_name: String,
     spec: &ForwardSpec,
+    busy: Option<BusyPort>,
     open: Rc<PortForwardOpen>,
     chosen: Rc<Cell<Option<LocalPortSpec>>>,
 ) -> ConnectIntent {
     let (object, fields) = forward_audit(spec);
     let local_port = LocalPortChoice {
         initial: spec.local_port,
-        automatic: spec.requested_local_port(),
+        automatic: busy
+            .as_ref()
+            .and_then(|busy| busy.free)
+            .unwrap_or_else(|| spec.requested_local_port()),
         chosen,
     };
     let label = format!(
@@ -120,7 +125,7 @@ fn forward_intent(
         label: label.into(),
         button: "Forward".into(),
         risk: action_risk(ResourceAction::PortForward),
-        warnings: Vec::new(),
+        warnings: busy.map(|busy| busy.text.into()).into_iter().collect(),
         object,
         fields,
         open: ConnectOpen::PortForward(open, local_port),
@@ -138,14 +143,62 @@ fn store_preset_port(cluster: &ClusterRef, spec: &ForwardSpec, cx: &mut App) {
     });
 }
 
-/// `Forwarding localhost:19090 → svc/api:80`.
-fn forward_started_text(spec: &ForwardSpec, local_port: u16) -> String {
-    format!(
-        "Forwarding {} → {}:{}",
-        forward_address_text(local_port),
-        spec.short_target_text(),
-        spec.remote_port
-    )
+/// The automatic local port of a start is taken on this machine: what the dialog says, and the
+/// free port the forward will use instead.
+struct BusyPort {
+    /// `None` when the next 20 ports are taken too, so the OS picks one.
+    free: Option<u16>,
+    text: String,
+}
+
+/// Longest target name the started notice shows whole; a longer one is cut in the middle so the
+/// notice keeps it on one line.
+const NOTICE_TARGET_CHARS: usize = 30;
+
+/// `svc/api:80`, the target cut in the middle when its name is long (a generated pod name).
+fn forward_target_text(spec: &ForwardSpec) -> String {
+    let kind = spec.target.kind.short();
+    let name = middle_truncate(&spec.target.name, NOTICE_TARGET_CHARS);
+    format!("{kind}/{name}:{}", spec.remote_port)
+}
+
+/// What an automatic start finds out before its dialog: `None` when it asked for a typed port or
+/// its first port is free. `holder` is the running forward that has the port, when it is ours.
+fn busy_port(wanted: u16, free: Option<u16>, holder: Option<&ForwardSpec>) -> Option<BusyPort> {
+    if free == Some(wanted) {
+        return None;
+    }
+    let who = holder.map_or_else(
+        || "another program".to_owned(),
+        |holder| {
+            let name = middle_truncate(&holder.target.name, NOTICE_TARGET_CHARS);
+            format!("forward {name}:{}", holder.remote_port)
+        },
+    );
+    let outcome = match free {
+        Some(free) => format!("using {free}"),
+        None => "the next ports are taken too, the system picks one".to_owned(),
+    };
+    Some(BusyPort {
+        free,
+        text: format!("Port {wanted} is in use locally (by {who}): {outcome}"),
+    })
+}
+
+/// `Forwarding localhost:19090`: the port that was bound, which is not the requested one when
+/// that was in use.
+fn forward_started_text(local_port: u16) -> String {
+    format!("Forwarding {}", forward_address_text(local_port))
+}
+
+/// The lines under the title of the started notice, each kept on one line: `→ svc/api:80`, and
+/// `19090 was in use` when the forward moved off the port it asked for.
+fn forward_started_lines(spec: &ForwardSpec, local_port: u16) -> Vec<String> {
+    let requested = spec.requested_local_port();
+    let moved = (requested != local_port).then(|| format!("{requested} was in use"));
+    std::iter::once(format!("→ {}", forward_target_text(spec)))
+        .chain(moved)
+        .collect()
 }
 
 fn warn(window: &mut Window, cx: &mut App, text: String) {
@@ -230,8 +283,37 @@ impl AppShell {
                 shell.open_forward(&start, permit, connection, window, cx);
             })
         };
-        let intent = forward_intent(cluster, cluster_name, &start.spec, open, chosen);
+        let busy = self.busy_port_of(&start.spec, existing, cx);
+        let intent = forward_intent(cluster, cluster_name, &start.spec, busy, open, chosen);
         self.start_connect(intent, window, cx);
+    }
+
+    /// Whether the automatic port of `spec` is taken on this machine, before the dialog opens. A
+    /// typed port is never moved, so it has nothing to say here.
+    fn busy_port_of(
+        &self,
+        spec: &ForwardSpec,
+        existing: Option<ForwardId>,
+        cx: &App,
+    ) -> Option<BusyPort> {
+        if spec.local_port != LocalPortSpec::Auto {
+            return None;
+        }
+        let wanted = spec.requested_local_port();
+        let forwards = self.port_forwards.read(cx);
+        // A restart still holds its own port until the new stream replaces it.
+        let is_own_port = existing
+            .and_then(|id| forwards.get(id))
+            .is_some_and(|forward| {
+                forward.state.is_running() && forward.local.is_some_and(|l| l.port() == wanted)
+            });
+        if is_own_port {
+            return None;
+        }
+        let holder = forwards
+            .port_holder(wanted, existing)
+            .map(|forward| &forward.spec);
+        busy_port(wanted, free_local_port(wanted), holder)
     }
 
     /// The confirmed start: adds or resets the row, opens the stream on the cluster's own
@@ -587,16 +669,16 @@ impl AppShell {
         let Some(local) = forward.local else {
             return;
         };
-        let text = forward_started_text(&forward.spec, local.port());
+        let text = forward_started_text(local.port());
+        let lines = forward_started_lines(&forward.spec, local.port());
         let (address, port) = (forward_address_text(local.port()), local.port());
         let handle = self.window;
         cx.defer(move |cx| {
             let _ = cx.update_window(handle, |_, window, cx| {
                 let notification = Notification::success(text).content(move |_, _, cx| {
                     let address = address.clone();
-                    h_flex()
+                    let buttons = h_flex()
                         .gap_2()
-                        .mt_2()
                         .child(
                             Button::new("forward-started-copy")
                                 .label("Copy")
@@ -616,7 +698,21 @@ impl AppShell {
                                     cx.open_url(&format!("http://127.0.0.1:{port}"));
                                     notification.dismiss(window, cx);
                                 })),
-                        )
+                        );
+                    let theme = cx.theme();
+                    let muted = theme.muted_foreground;
+                    let details = lines.iter().enumerate().map(|(index, line)| {
+                        let color = if index == 0 { theme.foreground } else { muted };
+                        div()
+                            .text_sm()
+                            .whitespace_nowrap()
+                            .text_color(color)
+                            .child(line.clone())
+                    });
+                    v_flex()
+                        .gap_1()
+                        .children(details)
+                        .child(div().mt_1().child(buttons))
                         .into_any_element()
                 });
                 window.push_notification(notification, cx);
@@ -679,6 +775,7 @@ impl AppShell {
             &cluster,
             label.to_owned(),
             &spec,
+            None,
             Rc::new(|_, _, _, _, _| {}),
             Rc::new(Cell::new(None)),
         );

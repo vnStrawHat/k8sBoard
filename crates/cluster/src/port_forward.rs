@@ -214,6 +214,25 @@ pub fn default_local_port(remote: u16) -> u16 {
     remote.checked_add(10_000).unwrap_or(remote)
 }
 
+/// The local port an automatic forward from `preferred` would bind now: `preferred` when it is
+/// free on `127.0.0.1` and `[::1]`, else the next free one. `None` when none of the next 20 is
+/// free (the OS then picks one). A loopback bind and drop takes microseconds, so the confirm
+/// dialog asks before it opens; the forward binds again later, and a port taken in between is
+/// still handled by `bind_local`.
+pub fn free_local_port(preferred: u16) -> Option<u16> {
+    candidate_ports(preferred)
+        .filter(|port| *port != 0)
+        .find(|port| {
+            let v4 = std::net::TcpListener::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, *port)));
+            if v4.is_err() {
+                return false;
+            }
+            // A port held on `[::1]` shadows the forward for `localhost` clients, as in `bind_local`.
+            let v6 = std::net::TcpListener::bind(SocketAddr::from((Ipv6Addr::LOCALHOST, *port)));
+            !matches!(v6, Err(ref error) if error.kind() == io::ErrorKind::AddrInUse)
+        })
+}
+
 /// The two edges of a forward that tests replace: binding a listener and opening a socket to
 /// the pod. Production passes `TcpListener::bind` and the kube `portforward` call.
 struct Seams<B, O> {

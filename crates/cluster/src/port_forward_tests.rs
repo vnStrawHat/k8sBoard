@@ -558,6 +558,16 @@ fn candidate_ports_then_os_assigned() {
 }
 
 #[test]
+fn free_local_port_skips_a_port_another_listener_holds() {
+    let held = std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("a free port");
+    let port = held.local_addr().expect("a local address").port();
+    let next = free_local_port(port).expect("a free port within the next 20");
+    assert!(next > port && next <= port + 20, "{port} -> {next}");
+    drop(held);
+    assert_eq!(free_local_port(port), Some(port));
+}
+
+#[test]
 fn default_local_port_table() {
     assert_eq!(default_local_port(5432), 15_432);
     assert_eq!(default_local_port(8080), 18_080);
