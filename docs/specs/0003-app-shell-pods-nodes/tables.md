@@ -28,7 +28,7 @@ The quick filter searches every image reference of a pod (init containers too), 
 
 ## Nodes columns (W5 without CPU/Memory)
 
-Widths are the base widths of `NODE_COLUMNS`; the sum fits a 1100 px window (Memory and Age stay inside it). Name takes most of the spare width (weight 8, up to 300 px = 28 mono characters), so the lab node names stay whole at 1320 px; Taints (weight 2, up to 420 px) gives way first. Name is cut with the sibling-aware rule of `cell_truncation.rs` (0009), as is the Pods Node column. Roles, Status (84, so `Cordoned` shows whole), Internal IP, Version (90), CPU, Memory, and Age do not grow. The table above lists the original W5 widths.
+Widths are the base widths of `NODE_COLUMNS`; the sum fits a 1100 px window (Memory and Age stay inside it). Taints takes its share of the spare width first (weight 6, up to 150 px: `work…:NoSched` and `main…:NoSched` read apart at 1320 px, the cell cuts the end of the key, never the middle, so the effect stays whole), and Name takes the rest (weight 2, up to 300 px; about 21 mono characters at 1320 px with the default columns). Below the base widths Taints gives way first. Name is cut with the sibling-aware rule of `cell_truncation.rs` (0009), as is the Pods Node column. Roles, Status (84, so `Cordoned` shows whole), Internal IP, Version (90), CPU, Memory, and Age do not grow. The table above lists the original W5 widths.
 
 | Column | Width | Cell |
 |---|---|---|

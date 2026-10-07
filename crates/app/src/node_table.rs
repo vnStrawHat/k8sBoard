@@ -56,13 +56,15 @@ const HIDDEN_BY_DEFAULT: [usize; 3] = [CPU_REQUESTED, MEMORY_REQUESTED, LABELS];
 
 /// The base widths of the default columns add up to what a 1100 px window leaves for the table, so
 /// Memory and Age stay inside it. Name takes most of the spare width, up to 300 px (28 mono characters),
-/// so node names stay whole at 1320 px; Taints is the column that gives way first. Internal IP is fixed
-/// at the width of `255.255.255.255`, and Version at that of `v1.29.5`.
+/// but Taints gets its share first, up to 150 px (`workload:NoSched` and `maintenance:NoSched` stay
+/// apart with the end of the key cut); Name takes the rest. Below the base widths Taints is the column
+/// that gives way first. Internal IP is fixed at the width of `255.255.255.255`, and Version at that of
+/// `v1.29.5`.
 const NODE_COLUMNS: [KindColumn; 12] = [
-    column("Name", 110., Align::Left).grows(8).up_to(300.),
+    column("Name", 110., Align::Left).grows(2).up_to(300.),
     column("Status", 84., Align::Left),
     column("Roles", 106., Align::Left),
-    column("Taints", 52., Align::Left).grows(2).up_to(420.),
+    column("Taints", 52., Align::Left).grows(6).up_to(150.),
     column("Version", 90., Align::Left),
     column("Internal IP", 140., Align::Left),
     column("CPU", 90., Align::Left),
@@ -601,6 +603,25 @@ fn short_taint(taint: &NodeTaint) -> String {
     format!("{key}:{effect}")
 }
 
+/// `key:effect` cut to `max_chars` at the end of the key (`work…:NoSched`): the start of the key tells
+/// taints apart, and the effect after it stays whole. A room too small for the effect cuts in the
+/// middle.
+fn cut_taint_key(text: &str, max_chars: usize) -> Cow<'_, str> {
+    if text.chars().count() <= max_chars {
+        return Cow::Borrowed(text);
+    }
+    let Some((key, effect)) = text.rsplit_once(':') else {
+        return middle_truncate(text, max_chars);
+    };
+    // The effect, its colon, and the ellipsis; at least one character of the key before it.
+    let room = max_chars.saturating_sub(effect.chars().count() + 2);
+    if room == 0 {
+        return middle_truncate(text, max_chars);
+    }
+    let kept: String = key.chars().take(room).collect();
+    Cow::Owned(format!("{kept}…:{effect}"))
+}
+
 fn taints_cell(
     taints: &[NodeTaint],
     mono: gpui_kit::SharedString,
@@ -621,14 +642,14 @@ fn taints_cell(
             .text_color(cx.theme().muted_foreground)
             .child(format!(" +{}", summary.more))
     });
-    // The taint is cut in the middle, so its effect stays visible; the "+N" is never cut.
+    // The end of the key is cut, so its effect stays visible; the "+N" is never cut.
     h_flex()
         .w_full()
         .font_family(mono)
         .child(
             truncated_text_with_tooltip(
                 "taints",
-                middle_truncate(&summary.first, capacity.saturating_sub(more_width)).into_owned(),
+                cut_taint_key(&summary.first, capacity.saturating_sub(more_width)).into_owned(),
                 summary.all,
             )
             .min_w_0(),
@@ -738,6 +759,19 @@ mod tests {
         assert_eq!(spelled("a", None, "NoExecute"), "a:NoExec");
         assert_eq!(spelled("a", None, "PreferNoSchedule"), "a:PreferNoSched");
         assert_eq!(spelled("a", None, "Odd"), "a:Odd");
+    }
+
+    #[test]
+    fn a_long_taint_is_cut_at_the_end_of_its_key_and_keeps_its_effect() {
+        let cut = |text: &str, max| cut_taint_key(text, max).into_owned();
+        assert_eq!(cut("workload:NoSched", 20), "workload:NoSched");
+        assert_eq!(cut("workload:NoSched", 13), "work…:NoSched");
+        assert_eq!(cut("maintenance:NoSched", 13), "main…:NoSched");
+        // Two taints that share their effect read apart by the start of the key.
+        assert_ne!(cut("workload:NoSched", 12), cut("maintenance:NoSched", 12));
+        // No room for the effect: the middle goes, as before.
+        assert_eq!(cut("workload:NoSched", 8), "wo…Sched");
+        assert_eq!(cut("odd", 2), "…d");
     }
 
     #[test]
@@ -870,7 +904,7 @@ mod tests {
     }
 
     #[test]
-    fn the_base_widths_fit_a_1100_px_window_and_name_grows_most() {
+    fn the_base_widths_fit_a_1100_px_window_and_taints_grow_before_name() {
         // The window less the 220 px sidebar, the table gutter, and the checkbox column.
         let room = 1100. - 220. - 28. - 32.;
         // The request columns are hidden by default, so they take no room until asked for.
@@ -889,23 +923,32 @@ mod tests {
         assert!(NODE_COLUMNS[VERSION].width >= 90., "v1.29.5 shows whole");
         assert!(NODE_COLUMNS[STATUS].width >= 84., "Cordoned shows whole");
         let heaviest = NODE_COLUMNS.iter().map(|column| column.weight).max();
-        assert_eq!(heaviest, Some(NODE_COLUMNS[NAME].weight));
+        assert_eq!(heaviest, Some(NODE_COLUMNS[TAINTS].weight));
+        assert!(NODE_COLUMNS[TAINTS].weight > NODE_COLUMNS[NAME].weight);
         assert!(NODE_COLUMNS[TAINTS].width < NODE_COLUMNS[NAME].width);
     }
 
-    /// The mono characters that fit in the Name column of a window `window` px wide: the table
-    /// is the window less the 220 px sidebar, and a mono glyph is about 9.6 px.
-    fn name_capacity(window: f32) -> usize {
+    /// The mono characters that fit in column `column` (a logical index) of a window `window` px
+    /// wide: the table is the window less the 220 px sidebar, and a mono glyph is about 9.6 px.
+    fn capacity_of(column: usize, window: f32) -> usize {
         let plan = node_plan();
         let hidden = BTreeSet::from(HIDDEN_BY_DEFAULT);
         let layout = layout_columns(&plan.specs, plan.flexible, px(window - 220.), &hidden);
-        let name = layout.columns.get(1).expect("a Name column").width;
-        (f32::from(name - px(24.)) / 9.6) as usize
+        // The checkbox column comes first; the columns shown by default are in logical order.
+        let width = layout.columns.get(column + 1).expect("a column").width;
+        (f32::from(width - px(24.)) / 9.6) as usize
+    }
+
+    fn name_capacity(window: f32) -> usize {
+        capacity_of(NAME, window)
     }
 
     #[test]
-    fn the_lab_node_names_stay_whole_at_1320_px() {
-        assert!(name_capacity(1320.) >= 26, "{}", name_capacity(1320.));
+    fn at_1320_px_taints_read_apart_and_a_lab_node_name_still_fits_most_of_itself() {
+        // `work…:NoSched` and `main…:NoSched` are 13 characters: the start of the key tells them apart.
+        let taints = capacity_of(TAINTS, 1320.);
+        assert!(taints >= 13, "{taints}");
+        assert!(name_capacity(1320.) >= 21, "{}", name_capacity(1320.));
     }
 
     #[test]
