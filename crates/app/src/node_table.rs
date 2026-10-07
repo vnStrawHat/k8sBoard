@@ -49,26 +49,27 @@ const LABELS: usize = 11;
 /// Marks a value the node does not have.
 const ABSENT: &str = "—";
 
-const USAGE_BAR_WIDTH: f32 = 46.;
+const USAGE_BAR_WIDTH: f32 = 28.;
 
 /// What the pods request, not what they use, and the labels: shown only when the user asks.
 const HIDDEN_BY_DEFAULT: [usize; 3] = [CPU_REQUESTED, MEMORY_REQUESTED, LABELS];
 
 /// The base widths of the default columns add up to what a 1100 px window leaves for the table, so
-/// Memory and Age stay inside it. Name takes most of the spare width, up to 300 px (28 mono characters),
-/// but Taints gets its share first, up to 150 px (`workload:NoSched` and `maintenance:NoSched` stay
-/// apart with the end of the key cut); Name takes the rest. Below the base widths Taints is the column
-/// that gives way first. Internal IP is fixed at the width of `255.255.255.255`, and Version at that of
-/// `v1.29.5`.
+/// Memory and Age stay inside it. At 1320 px both Name and Taints read whole enough: Taints gets its
+/// share first, up to 150 px (`workload:NoSched` and `maintenance:NoSched` stay apart with the end of
+/// the key cut), Name takes the rest and still holds a 26-character node name. The CPU and Memory
+/// bars are short and Roles is cut early to pay for that. Below the base widths Taints is the column
+/// that gives way first. Internal IP is fixed at the width of `255.255.255.255`, and Version at that
+/// of `v1.29.5`.
 const NODE_COLUMNS: [KindColumn; 12] = [
     column("Name", 110., Align::Left).grows(2).up_to(300.),
     column("Status", 84., Align::Left),
-    column("Roles", 106., Align::Left),
+    column("Roles", 84., Align::Left),
     column("Taints", 52., Align::Left).grows(6).up_to(150.),
     column("Version", 90., Align::Left),
     column("Internal IP", 140., Align::Left),
-    column("CPU", 90., Align::Left),
-    column("Memory", 90., Align::Left),
+    column("CPU", 80., Align::Left),
+    column("Memory", 80., Align::Left),
     column("CPU req", 92., Align::Left),
     column("Mem req", 92., Align::Left),
     column("Age", 56., Align::Right),
@@ -944,11 +945,15 @@ mod tests {
     }
 
     #[test]
-    fn at_1320_px_taints_read_apart_and_a_lab_node_name_still_fits_most_of_itself() {
+    fn at_1320_px_taints_read_apart() {
         // `work…:NoSched` and `main…:NoSched` are 13 characters: the start of the key tells them apart.
         let taints = capacity_of(TAINTS, 1320.);
         assert!(taints >= 13, "{taints}");
-        assert!(name_capacity(1320.) >= 21, "{}", name_capacity(1320.));
+    }
+
+    #[test]
+    fn the_lab_node_names_stay_whole_at_1320_px() {
+        assert!(name_capacity(1320.) >= 26, "{}", name_capacity(1320.));
     }
 
     #[test]
