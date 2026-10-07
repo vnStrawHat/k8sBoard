@@ -52,7 +52,7 @@ pub(crate) enum KindCell { /* … */
 
 ### `Live(Certificate)`
 
-From `SecretDetails::Certificate { chain }`, leaf = `chain[0]`: Subject (Mono), Issuer (Mono), Alt names (`Chips`, at most 20, then `+{n}`), Not before (`YYYY-MM-DD HH:MM UTC`), Not after (`Expiry { leaf.not_after }`, shown as `Dec 25, 2026 (81d left)` or `Sep 1, 2026 (expired 35d ago)`), Intermediate (Warn, only when `intermediate_expires_first`; [tls-expiry.md](tls-expiry.md)), Chain `{n} certificates` when `n > 1`. `NoCertificate(Missing)` → `Note("The secret has no tls.crt.")`; `NoCertificate(Unparsed)` → `Note("tls.crt could not be parsed as an X.509 certificate.")`.
+From `SecretDetails::Certificate { chain }`, leaf = `chain[0]`: Subject (Mono), Issuer (Mono), Alt names (`Chips`, at most 20, then `+{n}`), Not before (`YYYY-MM-DD HH:MM UTC`), Not after (`Expiry { leaf.not_after }`, shown as `2026-12-25 00:00 UTC (81d left)` or `2026-09-01 00:00 UTC (expired 35d ago)`, the same date format as Not before), Intermediate (Warn, only when `intermediate_expires_first`; [tls-expiry.md](tls-expiry.md)), Chain `{n} certificates` when `n > 1`. `NoCertificate(Missing)` → `Note("The secret has no tls.crt.")`; `NoCertificate(Unparsed)` → `Note("tls.crt could not be parsed as an X.509 certificate.")`.
 
 ## Used by (`kind_join.rs`, `live_sections.rs`)
 

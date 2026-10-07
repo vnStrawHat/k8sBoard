@@ -73,11 +73,12 @@ pub(crate) fn expiry_short_label(not_after: Timestamp, now: Timestamp) -> Status
     }
 }
 
-/// The drawer field text: the absolute date, then the relative one, `Dec 25, 2026 (81d left)`.
+/// The drawer field text: the date and time in UTC like Not before, then the relative one,
+/// `2026-12-25 00:00 UTC (81d left)`.
 pub(crate) fn expiry_detail_label(not_after: Timestamp, now: Timestamp) -> StatusLabel {
     let relative = expiry_label(not_after, now);
     StatusLabel {
-        text: format!("{} ({})", date_text(not_after), relative.text).into(),
+        text: format!("{} ({})", date_time_text(not_after), relative.text).into(),
         tone: relative.tone,
     }
 }
@@ -213,11 +214,11 @@ mod tests {
         let now: Timestamp = "2026-10-05T00:00:00Z".parse().expect("timestamp");
         let later: Timestamp = "2026-12-25T00:00:00Z".parse().expect("timestamp");
         let label = expiry_detail_label(later, now);
-        assert_eq!(label.text, "Dec 25, 2026 (81d left)");
+        assert_eq!(label.text, "2026-12-25 00:00 UTC (81d left)");
         assert_eq!(label.tone, StatusTone::Ok);
         let earlier: Timestamp = "2026-09-01T00:00:00Z".parse().expect("timestamp");
         let label = expiry_detail_label(earlier, now);
-        assert_eq!(label.text, "Sep 1, 2026 (expired 34d ago)");
+        assert_eq!(label.text, "2026-09-01 00:00 UTC (expired 34d ago)");
         assert_eq!(label.tone, StatusTone::Bad);
     }
 
