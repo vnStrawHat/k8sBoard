@@ -50,6 +50,7 @@ mod fuzzy_score;
 mod helm_release_view;
 mod helm_rows;
 mod history_rings;
+mod ingress_backends;
 mod issue;
 mod issue_board;
 mod issue_feeds;

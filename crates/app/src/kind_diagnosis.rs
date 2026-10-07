@@ -24,6 +24,7 @@ use crate::batch_rows::{CronState, cron_state_at};
 use crate::certificate_expiry::{ExpiryState, date_text, expiry_state};
 use crate::custom_rows::is_failing;
 use crate::event_rows::message_line;
+use crate::ingress_backends::{IngressBackends, backend_problems};
 use crate::kind_join::{ServiceHealth, tls_secret_names};
 use crate::kind_row::KindObject;
 use crate::namespace_rows::STUCK_AFTER;
@@ -73,6 +74,8 @@ pub(crate) struct DiagnosisInputs<'a> {
     pub(crate) tls_secrets: Option<&'a [SecretSummary]>,
     /// PVCs: the events of the open drawer's object once they have loaded; `None` before that.
     pub(crate) events: Option<&'a [EventSummary]>,
+    /// Ingresses: the Services of the namespace and the pods, once both lists have loaded.
+    pub(crate) backends: Option<IngressBackends<'a>>,
     pub(crate) now: Timestamp,
 }
 
@@ -1215,11 +1218,38 @@ fn secret_diagnosis(secret: &SecretSummary, now: Timestamp) -> Option<KindDiagno
 /// How long an Ingress may lack a load-balancer address before the box says no controller took it.
 const NO_ADDRESS_GRACE: jiff::SignedDuration = jiff::SignedDuration::from_mins(5);
 
-/// An Ingress with no address after `NO_ADDRESS_GRACE` first (nothing serves it), else its
-/// CERTIFICATE box. Only the first needs no list, so it shows while the TLS secrets load.
+/// An Ingress whose rules route to a broken backend first, then one with no address after
+/// `NO_ADDRESS_GRACE` (nothing serves it), else its CERTIFICATE box. NO ADDRESS needs no list, so it
+/// shows while the TLS secrets load.
 fn ingress_diagnosis(ingress: &IngressSummary, inputs: &DiagnosisInputs) -> Option<KindDiagnosis> {
-    no_address_diagnosis(ingress, inputs.now)
+    // A broken backend is the cause of a 502 whatever the controller reports, so it comes first.
+    ingress_backend_diagnosis(ingress, inputs)
+        .or_else(|| no_address_diagnosis(ingress, inputs.now))
         .or_else(|| ingress_certificate_diagnosis(ingress, inputs))
+}
+
+/// BACKEND UNREACHABLE: a rule routes to a Service that is missing, lacks the port, or has no ready
+/// pod. One line per rule, and a link to the Service the first problem is about. Waits for the
+/// Services and the pods.
+fn ingress_backend_diagnosis(
+    ingress: &IngressSummary,
+    inputs: &DiagnosisInputs,
+) -> Option<KindDiagnosis> {
+    let (lines, service) = backend_problems(ingress, inputs.backends.as_ref()?);
+    if lines.is_empty() {
+        return None;
+    }
+    Some(KindDiagnosis {
+        tone: StatusTone::Bad,
+        title: "BACKEND UNREACHABLE".to_owned(),
+        text: lines.join(
+            "
+",
+        ),
+        link: service.and_then(|service| {
+            ResourceKey::of_object("Service", Some(&service.namespace), &service.name)
+        }),
+    })
 }
 
 /// NO ADDRESS: the Ingress has been there for a while and no controller wrote an address into its

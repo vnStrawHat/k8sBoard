@@ -204,6 +204,7 @@ fn run(
             bindings: None,
             tls_secrets: None,
             events: None,
+            backends: None,
             now: at(1_000),
         },
     )
@@ -663,6 +664,7 @@ fn progress(deployment: DeploymentSummary, pods: Option<&[PodSummary]>) -> Optio
             bindings: None,
             tls_secrets: None,
             events: None,
+            backends: None,
             now: at(1_000),
         },
     )
@@ -765,6 +767,7 @@ fn run_service(health: ServiceHealth, pods: &[PodSummary]) -> Option<KindDiagnos
             bindings: None,
             tls_secrets: None,
             events: None,
+            backends: None,
             now: at(1_000),
         },
     )
@@ -841,6 +844,7 @@ fn service_no_ready_endpoints_waits_for_the_pods() {
             bindings: None,
             tls_secrets: None,
             events: None,
+            backends: None,
             now: at(1_000),
         },
     );
@@ -879,6 +883,7 @@ fn budget_diagnosis(budget: PodDisruptionBudgetSummary) -> Option<KindDiagnosis>
             bindings: None,
             tls_secrets: None,
             events: None,
+            backends: None,
             now: at(1_000),
         },
     )
@@ -979,6 +984,7 @@ fn autoscaler_diagnosis(hpa: HorizontalPodAutoscalerSummary) -> Option<KindDiagn
             bindings: None,
             tls_secrets: None,
             events: None,
+            backends: None,
             now: at(1_000),
         },
     )
@@ -1123,6 +1129,7 @@ fn quota_at_limit() {
                 bindings: None,
                 tls_secrets: None,
                 events: None,
+                backends: None,
                 now: at(1_000),
             },
         )
@@ -1165,6 +1172,7 @@ fn quota_status_and_box_name_the_same_item() {
             bindings: None,
             tls_secrets: None,
             events: None,
+            backends: None,
             now: at(1_000),
         },
     )
@@ -1184,6 +1192,7 @@ fn storage_inputs() -> DiagnosisInputs<'static> {
         bindings: None,
         tls_secrets: None,
         events: None,
+        backends: None,
         now: at(1_000),
     }
 }
@@ -1779,6 +1788,7 @@ fn secret_box(object: KindObject, now: i64) -> Option<KindDiagnosis> {
             bindings: None,
             tls_secrets: None,
             events: None,
+            backends: None,
             now: at(now),
         },
     )
@@ -1906,6 +1916,7 @@ fn ingress_box(
             bindings: None,
             tls_secrets: secrets,
             events: None,
+            backends: None,
             now: at(now),
         },
     )
@@ -2475,4 +2486,70 @@ fn cron_job_failed_last_run_points_to_recent_jobs() {
     assert_eq!(diagnosis.title, "LAST RUN FAILED");
     assert!(diagnosis.text.contains("Recent jobs"));
     assert!(diagnosis.text.contains("Trigger now"));
+}
+
+#[test]
+fn an_ingress_names_the_rule_whose_backend_has_no_such_port() {
+    let KindObject::Ingress(mut ingress) = tls_ingress(&[]) else {
+        panic!("an ingress");
+    };
+    ingress.rules = vec![cluster::IngressPath {
+        host: None,
+        path: Some("/v2".to_owned()),
+        backend: "web-v2:9999".to_owned(),
+        service: Some("web-v2".to_owned()),
+    }];
+    let services = [cluster::ServiceSummary {
+        namespace: "team-a".to_owned(),
+        name: "web-v2".to_owned(),
+        created_at: None,
+        labels: Vec::new(),
+        service_type: "ClusterIP".to_owned(),
+        cluster_ips: Vec::new(),
+        is_headless: false,
+        external_addresses: Vec::new(),
+        ports: vec![cluster::ServicePortSummary {
+            name: None,
+            port: 80,
+            target_port: None,
+            node_port: None,
+            protocol: "TCP".to_owned(),
+        }],
+        selector: Vec::new(),
+    }];
+    let object = KindObject::Ingress(ingress);
+    let with = |backends| {
+        kind_diagnosis(
+            &object,
+            &DiagnosisInputs {
+                pods: None,
+                nodes: &[],
+                service: None,
+                bindings: None,
+                tls_secrets: None,
+                events: None,
+                backends,
+                now: at(1_000),
+            },
+        )
+    };
+    let diagnosis = with(Some(crate::ingress_backends::IngressBackends {
+        services: &services,
+        pods: &[],
+    }))
+    .expect("a box");
+    assert_eq!(
+        (diagnosis.tone, diagnosis.title.as_str()),
+        (StatusTone::Bad, "BACKEND UNREACHABLE")
+    );
+    assert_eq!(
+        diagnosis.text,
+        "Rule /v2 → web-v2:9999: Service web-v2 has no port 9999 (has 80)"
+    );
+    assert_eq!(
+        diagnosis.link,
+        ResourceKey::of_object("Service", Some("team-a"), "web-v2")
+    );
+    // The lists have not loaded: no claim is made.
+    assert_eq!(with(None), None);
 }

@@ -75,6 +75,10 @@ The Status column is `KindCell::CronStatus`, read at paint time: Suspended, Runn
 
 ExternalName and selector-less services never get V1.
 
+## Ingresses (round 3, N15)
+
+BACKEND UNREACHABLE (Bad) comes before NO ADDRESS and CERTIFICATE: one line per rule (and the default backend) whose Service is missing (`Service web-v2 does not exist in shop`), lacks the port (`Service web-v2 has no port 9999 (has 80)`, by number or by name), or has no ready pod (`Service web has 0 ready endpoints (no pod matches app=web)`; ready pods from the pods list, so it is an approximation of the endpoint slices; ExternalName and selector-less Services are not checked). Rule lines read `Rule {host}{path} → {backend}: …`. It needs the namespace Services (the related watch of the open Ingress drawer, the same as a Pod drawer's) and the pods; the box links `Open service {name} →`. Issues and Topology do not read it.
+
 ## Not covered (stay without a box)
 
 StatefulSets, ReplicaSets, Ingresses (CERTIFICATE is 0016), ConfigMaps, Namespaces (STUCK is 0018). Pod events are not read here, so probe-failure causes appear only in the pod drawer.

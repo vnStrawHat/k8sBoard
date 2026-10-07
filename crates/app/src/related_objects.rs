@@ -33,7 +33,8 @@ pub(crate) enum RelatedSubject {
         namespace: Option<String>,
         name: String,
     },
-    /// Every Service of a Pod drawer's namespace; the drawer keeps those that select the pod.
+    /// Every Service of a Pod or Ingress drawer's namespace; the Pod drawer keeps those that select
+    /// the pod, the Ingress WHY box those its rules route to.
     PodServices { namespace: String },
     /// Every Ingress of a Service drawer's namespace; the drawer keeps those that route to it.
     ServiceIngresses { namespace: String },
@@ -100,6 +101,10 @@ pub(crate) fn related_subject(kind: ResourceKind, row: &KindRow) -> Option<Relat
                 namespace,
                 quota: quota.name.clone(),
             })
+        }
+        // The Services of the namespace, for the backend checks of the WHY box.
+        (ResourceKind::Ingresses, KindObject::Ingress(_)) => {
+            Some(RelatedSubject::PodServices { namespace })
         }
         (ResourceKind::HelmReleases, KindObject::HelmRelease(release)) => {
             Some(RelatedSubject::HelmHistory {
@@ -243,6 +248,29 @@ mod tests {
             })
         );
         assert_eq!(related_subject(ResourceKind::Services, &row), None);
+    }
+
+    #[test]
+    fn an_ingress_row_watches_the_services_of_its_namespace() {
+        let row = crate::network_rows::ingress_row(&cluster::IngressSummary {
+            namespace: "team-a".to_owned(),
+            name: "shop".to_owned(),
+            created_at: None,
+            labels: Vec::new(),
+            class: None,
+            hosts: Vec::new(),
+            addresses: Vec::new(),
+            rules: Vec::new(),
+            default_backend: None,
+            default_service: None,
+            tls: Vec::new(),
+        });
+        assert_eq!(
+            related_subject(ResourceKind::Ingresses, &row),
+            Some(RelatedSubject::PodServices {
+                namespace: "team-a".to_owned(),
+            })
+        );
     }
 
     #[test]

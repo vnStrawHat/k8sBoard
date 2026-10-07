@@ -484,6 +484,7 @@ fn diagnosis_check(
             bindings: None,
             tls_secrets,
             events: None,
+            backends: None,
             now: inputs.now,
         },
     )?;

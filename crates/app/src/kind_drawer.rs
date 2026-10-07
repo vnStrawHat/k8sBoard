@@ -21,7 +21,7 @@ use crate::batch_rows::cron_state_at;
 use crate::certificate_expiry::expiry_detail_label;
 use crate::clipboard_copy::copyable_mono;
 use crate::cluster_registry::ClusterRef;
-use crate::cluster_session::{CompanionLists, CompanionSource, LiveCluster};
+use crate::cluster_session::{CompanionLists, CompanionSource, LiveCluster, RelatedList};
 use crate::custom_rows::{date_text, date_tone};
 use crate::drawer::{
     DrawerBody, DrawerChrome, DrawerHeader, DrawerSize, DrawerState, DrawerTab, absent_text, chips,
@@ -31,6 +31,7 @@ use crate::drawer::{
 };
 use crate::helm_release_view::HelmReleaseView;
 use crate::helm_rows::VALUES_CHANGE_TITLE;
+use crate::ingress_backends::IngressBackends;
 use crate::kind_diagnosis::{
     DiagnosisInputs, KindDiagnosis, kind_diagnosis, missing_storage_class, rollout_progress,
 };
@@ -45,6 +46,7 @@ use crate::object_events::{event_subject, recent_events};
 use crate::port_forward_menu::{
     ForwardMenu, ForwardSubject, PortButton, PortButtons, PortChoice, row_subject,
 };
+use crate::related_objects::RelatedSubject;
 use crate::related_pods::pods_section;
 use crate::resource_actions::{
     MenuCluster, MenuExtras, OpenUrl, ResourceAction, action_availability, browse_instances_item,
@@ -407,6 +409,23 @@ fn missing_claim_class<'a>(
     missing_storage_class(claim, loaded_events(kind, row, live)?)
 }
 
+/// The Services and pods an Ingress row's backends are checked against, once both have loaded.
+fn ingress_backends_of<'a>(row: &KindRow, live: &'a LiveCluster) -> Option<IngressBackends<'a>> {
+    let namespace = row.namespace.clone()?;
+    if !matches!(row.object, KindObject::Ingress(_)) {
+        return None;
+    }
+    let subject = RelatedSubject::PodServices { namespace };
+    let services = live
+        .related_of(&subject)
+        .and_then(RelatedList::services)?
+        .ready_items()?;
+    Some(IngressBackends {
+        services,
+        pods: live.pods.ready_items()?,
+    })
+}
+
 /// The WHY box of the row, read from its object, its owned pods (a Service's matching pods), and
 /// the nodes. Rules that need pods wait until the pods list has loaded.
 fn row_diagnosis(
@@ -453,6 +472,7 @@ fn row_diagnosis(
             .and_then(CompanionLists::tls_secrets)
             .and_then(|list| list.ready_items()),
         events: loaded_events(kind, row, live),
+        backends: ingress_backends_of(row, live),
         now,
     };
     let problem = kind_diagnosis(&row.object, &inputs);
@@ -489,6 +509,11 @@ fn why_box(diagnosis: &KindDiagnosis, kind: ResourceKind, cx: &Context<AppShell>
             name,
             ..
         } => Some((format!("Open quota {name} →"), key.clone())),
+        ResourceKey::Kind {
+            kind: ResourceKind::Services,
+            name,
+            ..
+        } => Some((format!("Open service {name} →"), key.clone())),
         ResourceKey::Node { .. } | ResourceKey::Kind { .. } => None,
     });
     let logs_key = diagnosis
