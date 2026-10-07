@@ -66,7 +66,8 @@ fn config_maps_and_secrets_also_ask_patch() {
         [
             AccessCheck::Update(ObjectKind::Secret),
             AccessCheck::Patch(ObjectKind::Secret),
-            AccessCheck::Delete(ObjectKind::Secret)
+            AccessCheck::Delete(ObjectKind::Secret),
+            AccessCheck::Create(ObjectKind::Secret)
         ]
     );
     // Only the kinds with a merge patch ask for it: the values of these two, and the labels and

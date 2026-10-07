@@ -22,7 +22,7 @@ fn error_of(kind: ObjectKind, text: &str) -> DraftError {
 }
 
 #[test]
-fn only_five_kinds_are_creatable() {
+fn only_six_kinds_are_creatable() {
     let creatable: Vec<_> = ObjectKind::ALL
         .into_iter()
         .filter(|kind| kind.is_creatable())
@@ -34,6 +34,7 @@ fn only_five_kinds_are_creatable() {
             ObjectKind::ConfigMap,
             ObjectKind::ResourceQuota,
             ObjectKind::PodDisruptionBudget,
+            ObjectKind::Secret,
             ObjectKind::RoleBinding,
         ]
     );
@@ -41,10 +42,11 @@ fn only_five_kinds_are_creatable() {
 
 #[test]
 fn draft_of_other_kind_is_refused() {
-    let text = "apiVersion: v1\nkind: Secret\nmetadata:\n  name: x\n  namespace: payments\n";
+    let text =
+        "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: x\n  namespace: payments\n";
     assert!(matches!(
-        error_of(ObjectKind::Secret, text),
-        DraftError::NotCreatable("Secret")
+        error_of(ObjectKind::Deployment, text),
+        DraftError::NotCreatable("Deployment")
     ));
 }
 
@@ -431,4 +433,71 @@ fn kube_system_accounts_and_system_roles_warn_without_typing_the_name() {
     // A namespaced Role of that name is not a built-in ClusterRole.
     let role = binding("system:x", "Role", SERVICE_ACCOUNT);
     assert!(draft(ObjectKind::RoleBinding, &role).warnings().is_empty());
+}
+
+const SECRET: &str = "apiVersion: v1\nkind: Secret\nmetadata:\n  name: regcred\n  namespace: payments\ntype: Opaque\nstringData:\n  PASSWORD: hunter2\ndata:\n  OLD: b2xk\n";
+
+#[test]
+fn a_secret_folds_string_data_into_base64_data() {
+    let secret = draft(ObjectKind::Secret, SECRET);
+    let body = secret.body();
+    assert!(body.get("stringData").is_none());
+    assert_eq!(body.pointer("/data/PASSWORD"), Some(&json!("aHVudGVyMg==")));
+    assert_eq!(body.pointer("/data/OLD"), Some(&json!("b2xk")));
+}
+
+#[test]
+fn string_data_wins_over_data_of_the_same_key() {
+    let text = SECRET.replace("OLD: b2xk", "PASSWORD: b2xk");
+    let secret = draft(ObjectKind::Secret, &text);
+    assert_eq!(
+        secret.body().pointer("/data/PASSWORD"),
+        Some(&json!("aHVudGVyMg=="))
+    );
+}
+
+#[test]
+fn a_secret_with_a_value_that_is_not_text_is_refused() {
+    let text = SECRET.replace("PASSWORD: hunter2", "PASSWORD: 5");
+    assert!(matches!(
+        error_of(ObjectKind::Secret, &text),
+        DraftError::InvalidSecretData
+    ));
+    let text = SECRET.replace("stringData:\n  PASSWORD: hunter2\n", "stringData: nope\n");
+    assert!(matches!(
+        error_of(ObjectKind::Secret, &text),
+        DraftError::InvalidSecretData
+    ));
+}
+
+#[test]
+fn a_secret_lists_its_type_and_key_names_and_never_a_value() {
+    let secret = draft(ObjectKind::Secret, SECRET);
+    let fields: Vec<(String, Option<String>)> = secret
+        .changed_fields()
+        .into_iter()
+        .map(|field| (field.path.into_owned(), field.value))
+        .collect();
+    assert_eq!(
+        fields,
+        [
+            ("metadata.name".to_owned(), Some("regcred".to_owned())),
+            ("metadata.namespace".to_owned(), Some("payments".to_owned())),
+            ("type".to_owned(), Some("Opaque".to_owned())),
+            ("data[OLD]".to_owned(), None),
+            ("data[PASSWORD]".to_owned(), None),
+        ]
+    );
+    let shown = format!("{:?} {fields:?}", secret);
+    assert!(!shown.contains("hunter2"));
+    assert!(!shown.contains("aHVudGVyMg"));
+}
+
+#[test]
+fn a_secret_needs_a_namespace() {
+    let text = SECRET.replace("  namespace: payments\n", "");
+    assert!(matches!(
+        error_of(ObjectKind::Secret, &text),
+        DraftError::MissingNamespace
+    ));
 }

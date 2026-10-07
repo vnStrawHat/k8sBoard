@@ -428,3 +428,42 @@ fn finalizers_are_listed_and_capped() {
     assert_eq!(paths.len(), 1 + 10 + 1);
     assert_eq!(paths[11], "\u{2026} and 2 more");
 }
+
+const SECRET: &str = "apiVersion: v1\nkind: Secret\nmetadata:\n  name: regcred\n  namespace: payments\ntype: kubernetes.io/dockerconfigjson\nstringData:\n  .dockerconfigjson: payload\n";
+
+#[tokio::test]
+async fn a_secret_is_posted_with_base64_data_and_no_string_data() {
+    let request = request_of(ObjectKind::Secret, SECRET);
+    let (connection, api) = echoing();
+    connection
+        .write(&request, WriteMode::Commit)
+        .await
+        .expect("accepted");
+    let sent = api.requests();
+    assert_eq!(sent[0].method, "POST");
+    assert_eq!(sent[0].path, "/api/v1/namespaces/payments/secrets");
+    assert!(!sent[0].has_query_key("dryRun"));
+    assert_eq!(
+        body_of(&sent[0]),
+        json!({
+            "apiVersion": "v1", "kind": "Secret",
+            "metadata": {"name": "regcred", "namespace": "payments"},
+            "type": "kubernetes.io/dockerconfigjson",
+            "data": {".dockerconfigjson": "cGF5bG9hZA=="},
+        })
+    );
+}
+
+#[test]
+fn a_secret_create_records_names_and_never_a_value() {
+    let request = request_of(ObjectKind::Secret, SECRET);
+    let text = format!("{request:?} {:?}", request.changed_fields());
+    assert!(!text.contains("payload"));
+    assert!(!text.contains("cGF5bG9hZA"));
+    assert!(
+        request
+            .changed_fields()
+            .iter()
+            .any(|field| field.path == "data[.dockerconfigjson]" && field.value.is_none())
+    );
+}

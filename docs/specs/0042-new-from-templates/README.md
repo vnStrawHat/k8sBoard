@@ -10,7 +10,7 @@ Status: built (steps 1-3), 2026-10-04, against main `277759a`; as-built notes in
 
 ## Non-goals
 
-- **Secrets**: W7 Secrets has no `New` (its header is `Reveal all`). Deferred; a Secret create would need 0047's rules (write-only masked values, base64 in `data`, no `stringData`, never in logs, audit, or dialog), not a YAML editor.
+- **Secrets**: deferred here; built later, see [secret-forms.md](secret-forms.md).
 - A form UI per kind: W7 draws only the buttons; the YAML template is the form.
 - Other kinds (Deployments, Services, …), multi-document YAML, `generateName`, import from a file, a template library or user templates, server defaults diff, a palette command or key for New.
 - Snapshot or undo of a create (snapshots dropped by the user, 2026-10-03); Delete (0033) removes a mistake.
@@ -32,6 +32,7 @@ Status: built (steps 1-3), 2026-10-04, against main `277759a`; as-built notes in
 | [create-view.md](create-view.md) | step 2: buttons, gate, templates, view, flow, confirm, audit |
 | [files-to-touch.md](files-to-touch.md) · [test-plan.md](test-plan.md) | files per step; tests and checks |
 | [as-built.md](as-built.md) | what was built, deviations, the live check |
+| [secret-forms.md](secret-forms.md) | New Secret (docker-registry, TLS, Opaque) and Replace certificate |
 
 ## Acceptance criteria
 

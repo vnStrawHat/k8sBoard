@@ -4153,3 +4153,37 @@ fn shift_s_on_an_hpa_row_edits_its_range() {
         Some(ResourceAction::EditHpaRange)
     );
 }
+
+#[test]
+fn replace_certificate_is_a_change_tier_action_with_an_unbound_key() {
+    let action = ResourceAction::ReplaceCertificate;
+    assert_eq!(action.row_action(), Some(RowAction::ReplaceCertificate));
+    assert_eq!(
+        RowAction::ReplaceCertificate.key_action().name(),
+        "k8sboard::ReplaceCertificate"
+    );
+    assert_eq!(action_label(action), "Replace certificate");
+    assert_eq!(action_risk(action), ActionRisk::Change);
+}
+
+#[test]
+fn replace_certificate_resolves_on_secrets_only() {
+    let resolved = |subject: &ResourceKey| subject_action(RowAction::ReplaceCertificate, subject);
+    assert_eq!(
+        resolved(&kind_key(ResourceKind::Secrets)),
+        Some(ResourceAction::ReplaceCertificate)
+    );
+    assert_eq!(resolved(&kind_key(ResourceKind::ConfigMaps)), None);
+    assert_eq!(resolved(&kind_key(ResourceKind::Deployments)), None);
+    assert_eq!(resolved(&pod_key()), None);
+    assert_eq!(resolved(&node_key()), None);
+}
+
+#[test]
+fn only_a_tls_secret_row_has_a_certificate_to_replace() {
+    let row = |secret_type| KindObject::Secret(secret_summary(secret_type, &[], false));
+    assert!(is_tls_secret(&row("kubernetes.io/tls")));
+    assert!(!is_tls_secret(&row("Opaque")));
+    assert!(!is_tls_secret(&row("kubernetes.io/dockerconfigjson")));
+    assert!(!is_tls_secret(&KindObject::Plain));
+}

@@ -188,6 +188,8 @@ mod resource_edit_flow;
 mod revision_change_flow;
 #[path = "rollout_watch.rs"]
 mod rollout_watch;
+#[path = "secret_form.rs"]
+pub(crate) mod secret_form;
 #[path = "shell_open.rs"]
 pub(crate) mod shell_open;
 #[path = "values_edit_flow.rs"]
@@ -259,6 +261,10 @@ mod app_shell_delete_tests;
 #[cfg(test)]
 #[path = "app_shell_metadata_edit_tests.rs"]
 mod app_shell_metadata_edit_tests;
+
+#[cfg(test)]
+#[path = "app_shell_secret_form_tests.rs"]
+mod app_shell_secret_form_tests;
 
 #[cfg(test)]
 #[path = "app_shell_node_edit_tests.rs"]
@@ -480,6 +486,9 @@ pub(crate) struct AppShell {
     /// The labels and annotations editor opened last, for the tests that drive it.
     #[cfg(test)]
     last_metadata_editor: Option<gpui_kit::WeakEntity<metadata_editor::MetadataEditor>>,
+    /// The Secret form opened last, for the tests that drive it.
+    #[cfg(test)]
+    last_secret_form: Option<gpui_kit::WeakEntity<secret_form::SecretForm>>,
     /// The bulk label editor opened last, for the tests that drive it.
     #[cfg(test)]
     last_bulk_label_editor: Option<gpui_kit::WeakEntity<node_editor::BulkLabelEditor>>,
@@ -786,6 +795,8 @@ impl AppShell {
             last_node_editor: None,
             #[cfg(test)]
             last_metadata_editor: None,
+            #[cfg(test)]
+            last_secret_form: None,
             #[cfg(test)]
             last_bulk_label_editor: None,
             #[cfg(test)]

@@ -6,6 +6,7 @@ use gpui_kit::assets::IconName;
 use gpui_kit::base::{ResizeHandleRenderer, ResizeHandleState};
 use gpui_kit::component::alert::Alert;
 use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
 use gpui_kit::component::resizable::{
     ResizableState, resizable_panel, resize_handle_appearance, v_resizable,
 };
@@ -23,6 +24,7 @@ use gpui_kit::{
 
 use cluster::{EVENT_LIMIT, EventFilter, NamespaceScope, ObjectKind};
 
+use super::secret_form::{SecretFormKind, SecretFormStart};
 use super::{AppShell, KubeconfigState, Screen};
 use crate::cluster_session::{FlowState, LiveCluster, SessionPhase};
 use crate::clusters_page::ClustersPage;
@@ -519,7 +521,11 @@ impl AppShell {
             }
             screen => {
                 let (kind, label) = new_button_of(screen)?;
-                vec![self.render_new_button(kind, label, cx)]
+                if kind == ObjectKind::Secret {
+                    vec![self.render_new_secret_button(label, cx)]
+                } else {
+                    vec![self.render_new_button(kind, label, cx)]
+                }
             }
         };
         Some(
@@ -625,6 +631,49 @@ impl AppShell {
                 })),
         }
         .into_any_element()
+    }
+
+    /// `New` on the Secrets screen: a menu of the three ways to start one (UX round 3, N11 and
+    /// N16). Off with the same reasons as every other `New`.
+    fn render_new_secret_button(&self, label: &'static str, cx: &Context<Self>) -> AnyElement {
+        let button = Button::new("new-object")
+            .icon(Icon::new(IconName::Plus))
+            .label(label)
+            .small()
+            .outline();
+        if let Some(reason) = self.new_object_block(ObjectKind::Secret, cx) {
+            return button.disabled(true).tooltip(reason).into_any_element();
+        }
+        let shell = cx.weak_entity();
+        button
+            .dropdown_caret(true)
+            .dropdown_menu(move |menu, _, _| {
+                let form = |text: &'static str, kind: SecretFormKind| {
+                    let shell = shell.clone();
+                    PopupMenuItem::new(text).on_click(move |_, window, cx| {
+                        let start = SecretFormStart {
+                            kind,
+                            namespace: String::new(),
+                            name: String::new(),
+                        };
+                        let _ = shell.update(cx, |shell, cx| {
+                            shell.open_secret_form(start, window, cx);
+                        });
+                    })
+                };
+                let opaque = {
+                    let shell = shell.clone();
+                    PopupMenuItem::new("Opaque…").on_click(move |_, window, cx| {
+                        let _ = shell.update(cx, |shell, cx| {
+                            shell.open_create(ObjectKind::Secret, window, cx);
+                        });
+                    })
+                };
+                menu.item(opaque)
+                    .item(form("docker-registry…", SecretFormKind::DockerRegistry))
+                    .item(form("TLS…", SecretFormKind::Tls))
+            })
+            .into_any_element()
     }
 
     /// Why `New` of `kind` is off on the open cluster, `None` when it is on.
@@ -1330,7 +1379,8 @@ fn new_button_of(screen: Screen) -> Option<(ObjectKind, &'static str)> {
             kind @ (ResourceKind::ConfigMaps
             | ResourceKind::ResourceQuotas
             | ResourceKind::PodDisruptionBudgets
-            | ResourceKind::RoleBindings),
+            | ResourceKind::RoleBindings
+            | ResourceKind::Secrets),
         ) => kind.builtin_object().map(|object| (object, "New")),
         _ => None,
     }
@@ -1341,7 +1391,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn new_buttons_on_the_five_screens() {
+    fn new_buttons_on_the_six_screens() {
         let button = |kind| new_button_of(Screen::Kind(kind));
         assert_eq!(
             button(ResourceKind::Namespaces),
@@ -1355,16 +1405,16 @@ mod tests {
                 ObjectKind::PodDisruptionBudget,
             ),
             (ResourceKind::RoleBindings, ObjectKind::RoleBinding),
+            (ResourceKind::Secrets, ObjectKind::Secret),
         ] {
             assert_eq!(button(kind), Some((object, "New")));
         }
-        // Every other screen has none; Secrets keeps `Reveal all` only.
+        // Every other screen has none.
         let others = ResourceKind::ALL
             .into_iter()
             .filter(|kind| button(*kind).is_none())
             .count();
-        assert_eq!(others, ResourceKind::ALL.len() - 5);
-        assert_eq!(button(ResourceKind::Secrets), None);
+        assert_eq!(others, ResourceKind::ALL.len() - 6);
         assert_eq!(new_button_of(Screen::Pods), None);
     }
 

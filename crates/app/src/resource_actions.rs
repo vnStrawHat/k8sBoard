@@ -29,8 +29,9 @@ use crate::drawer::DrawerTab;
 use crate::keymap::{
     Attach, CopyName, Cordon, DebugContainer, Delete, Drain, EditHpaRange, EditLabels,
     EditMetadata, EditTaints, EditValues, EditYaml, EvictPod, ExpandClaim, OpenShell, PauseRollout,
-    PortForward, RenewCertificate, RerunJob, RestartPod, RestartRollout, RollBack, Scale,
-    SetDefaultStorageClass, SetImage, SuspendCronJob, TriggerCronJob, ViewLogs, ViewYaml,
+    PortForward, RenewCertificate, ReplaceCertificate, RerunJob, RestartPod, RestartRollout,
+    RollBack, Scale, SetDefaultStorageClass, SetImage, SuspendCronJob, TriggerCronJob, ViewLogs,
+    ViewYaml,
 };
 use crate::kind_access::{KindAccess, KindAccessMap};
 use crate::kind_join::last_job_owner;
@@ -80,6 +81,8 @@ pub(crate) enum ResourceAction {
     EditValues(ObjectKind),
     /// Labels and annotations of a Pod or a workload; carries the kind of the row (spec 0032b).
     EditMetadata(ObjectKind),
+    /// Replaces `tls.crt` and `tls.key` of a `kubernetes.io/tls` Secret together (UX round 3, N16).
+    ReplaceCertificate,
     /// Carries the kind of the new object: the `New` header button of its screen (spec 0042). It
     /// has no row and no key.
     CreateObject(ObjectKind),
@@ -135,6 +138,7 @@ pub(crate) enum RowAction {
     EditValues,
     /// Has an unbound unit action only: the pod and workload menus and the palette dispatch it.
     EditMetadata,
+    ReplaceCertificate,
     RestartRollout,
     SetImage,
     /// Have unbound unit actions only: the pod menu and the palette dispatch them (spec 0040).
@@ -347,6 +351,11 @@ impl ResourceAction {
                 checks: vec![AccessCheck::Patch(kind)],
                 is_shipped: true,
             },
+            // The same merge patch as Edit values.
+            Self::ReplaceCertificate => ActionGate::Mutating {
+                checks: vec![AccessCheck::Patch(ObjectKind::Secret)],
+                is_shipped: true,
+            },
             Self::CreateObject(kind) => ActionGate::Mutating {
                 checks: vec![AccessCheck::Create(kind)],
                 is_shipped: true,
@@ -407,6 +416,7 @@ impl ResourceAction {
             Self::EditYaml(_) => RowAction::EditYaml,
             Self::EditValues(_) => RowAction::EditValues,
             Self::EditMetadata(_) => RowAction::EditMetadata,
+            Self::ReplaceCertificate => RowAction::ReplaceCertificate,
             Self::Delete(_) => RowAction::Delete,
             Self::RestartRollout(_) => RowAction::RestartRollout,
             Self::SetImage(_) => RowAction::SetImage,
@@ -447,6 +457,7 @@ impl RowAction {
             Self::EditYaml => Box::new(EditYaml),
             Self::EditValues => Box::new(EditValues),
             Self::EditMetadata => Box::new(EditMetadata),
+            Self::ReplaceCertificate => Box::new(ReplaceCertificate),
             Self::Delete => Box::new(Delete),
             Self::RestartRollout => Box::new(RestartRollout),
             Self::SetImage => Box::new(SetImage),
@@ -482,7 +493,7 @@ impl RowAction {
             Self::EditValues => IconName::Pencil,
             Self::RestartRollout | Self::RestartPod => IconName::RotateCw,
             Self::SetImage => IconName::Package,
-            Self::RenewCertificate => IconName::RefreshCw,
+            Self::RenewCertificate | Self::ReplaceCertificate => IconName::RefreshCw,
             Self::EvictPod => IconName::LogOut,
             Self::Scale | Self::EditHpaRange => IconName::ChevronsUpDown,
             Self::Delete => IconName::Trash,
@@ -539,6 +550,7 @@ pub(crate) fn action_risk(action: ResourceAction) -> ActionRisk {
         | ResourceAction::EditYaml(_)
         | ResourceAction::EditValues(_)
         | ResourceAction::EditMetadata(_)
+        | ResourceAction::ReplaceCertificate
         | ResourceAction::CreateObject(_)
         | ResourceAction::RestartRollout(_)
         | ResourceAction::SetImage(_)
@@ -574,6 +586,7 @@ pub(crate) fn action_label(action: ResourceAction) -> &'static str {
         ResourceAction::EditYaml(_) => "Edit YAML",
         ResourceAction::EditValues(_) => "Edit values",
         ResourceAction::EditMetadata(_) => "Edit labels / annotations",
+        ResourceAction::ReplaceCertificate => "Replace certificate",
         ResourceAction::CreateObject(kind) => create_label(kind),
         ResourceAction::Delete(_) => "Delete",
         ResourceAction::RestartRollout(_) => "Restart rollout",
@@ -674,6 +687,14 @@ pub(crate) fn subject_action(row: RowAction, subject: &ResourceKey) -> Option<Re
         .map(ResourceAction::EditYaml),
         // ConfigMaps and Secrets only (spec 0047 decision 9); a Helm release row, which reads as a
         // Secret by storage, a Pod, and a custom kind have none.
+        // TLS Secrets only; the menu and the opener check the type of the row.
+        RowAction::ReplaceCertificate => match subject {
+            ResourceKey::Kind {
+                kind: ResourceKind::Secrets,
+                ..
+            } => Some(ResourceAction::ReplaceCertificate),
+            _ => None,
+        },
         RowAction::EditMetadata => match subject {
             ResourceKey::Pod { .. } => Some(ObjectKind::Pod),
             ResourceKey::Node { .. } => None,
@@ -1904,6 +1925,9 @@ pub(crate) fn kind_menu(
     if let Some(object) = metadata_edit_kind(kind) {
         menu = menu.item(action_item(ResourceAction::EditMetadata(object), guard));
     }
+    if is_tls_secret(&row.object) {
+        menu = menu.item(replace_certificate_item(&row.object, guard));
+    }
     if let Some(object) = edit_yaml {
         menu = menu.item(action_item(ResourceAction::EditYaml(object), guard));
     }
@@ -1911,6 +1935,28 @@ pub(crate) fn kind_menu(
         .item(copy_name_item(&row.name, access))
         .separator()
         .item(kind_delete_item(kind, row, guard, shell))
+}
+
+/// Whether the row is a `kubernetes.io/tls` Secret: the only one Replace certificate acts on.
+pub(crate) fn is_tls_secret(object: &KindObject) -> bool {
+    matches!(object, KindObject::Secret(secret) if secret.secret_type == "kubernetes.io/tls")
+}
+
+/// Replace certificate… of a TLS Secret: the gate first, then the same reasons Edit values has (an
+/// immutable Secret, a Helm record).
+fn replace_certificate_item(object: &KindObject, guard: &ClusterGuard<'_>) -> PopupMenuItem {
+    let action = ResourceAction::ReplaceCertificate;
+    let label = "Replace certificate…";
+    let item = match (
+        action_availability(action, guard),
+        values_edit_block(object),
+    ) {
+        (ActionAvailability::Disabled { reason }, _) | (_, Some(reason)) => {
+            disabled_menu_item(label, reason)
+        }
+        (ActionAvailability::Enabled, None) => PopupMenuItem::new(label),
+    };
+    keyed(item, action)
 }
 
 /// The Delete item of an explorer kind's menu. Helm releases and custom kinds keep it off with the
@@ -3130,6 +3176,7 @@ fn action_item(action: ResourceAction, guard: &ClusterGuard<'_>) -> PopupMenuIte
         ResourceAction::EditTaints => "Edit taints…",
         ResourceAction::EditLabels => "Edit labels…",
         ResourceAction::EditMetadata(_) => "Edit labels / annotations…",
+        ResourceAction::ReplaceCertificate => "Replace certificate…",
         _ => action_label(action),
     };
     let item = match action_availability(action, guard) {

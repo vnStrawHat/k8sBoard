@@ -17,6 +17,7 @@ use gpui_kit::{
 };
 
 use crate::app_shell::AppShell;
+use crate::app_shell::secret_form::{SecretFormKind, SecretFormStart};
 use crate::clipboard_copy::copyable_mono;
 use crate::cluster_session::{
     ClusterSession, LiveCluster, LiveList, RelatedList, denied_related_check,
@@ -308,7 +309,7 @@ fn overview(
     };
     v_flex()
         .children(diagnosis.map(|diagnosis| {
-            let links = why_pull_links(&diagnosis, &pull, &pod.namespace, cx);
+            let links = why_pull_links(&diagnosis, &pull, &pod.namespace, existing.is_some(), cx);
             why_box(&diagnosis, links, cx)
         }))
         .child(pod_title)
@@ -401,12 +402,51 @@ fn pull_secret_links(
                 Some(target) if !secret.is_missing => {
                     link_text(id_base + index, &secret.name.clone().into(), target, cx)
                 }
-                _ if secret.is_missing => div()
-                    .child(format!("{} (missing)", secret.name))
-                    .into_any_element(),
+                _ if secret.is_missing => missing_secret(index, &secret.name, namespace, cx),
                 _ => div().child(secret.name.clone()).into_any_element(),
             }
         }))
+        .into_any_element()
+}
+
+/// A pull secret that is not in the namespace: its name, and the link that opens New docker-registry
+/// Secret with that name filled in, so the pull can be fixed from the diagnosis.
+fn missing_secret(index: usize, name: &str, namespace: &str, cx: &Context<AppShell>) -> AnyElement {
+    h_flex()
+        .gap_1()
+        .child(format!("{name} (missing)"))
+        .child(create_pull_secret_link(
+            index,
+            name,
+            namespace,
+            "Create it →",
+            cx,
+        ))
+        .into_any_element()
+}
+
+/// The link that opens New docker-registry Secret for `name` in `namespace`.
+fn create_pull_secret_link(
+    index: usize,
+    name: &str,
+    namespace: &str,
+    label: &'static str,
+    cx: &Context<AppShell>,
+) -> AnyElement {
+    let start = SecretFormStart {
+        kind: SecretFormKind::DockerRegistry,
+        namespace: namespace.to_owned(),
+        name: name.to_owned(),
+    };
+    div()
+        .id(("why-create-pull-secret", index))
+        .cursor_pointer()
+        .text_color(cx.theme().link)
+        .underline()
+        .on_click(cx.listener(move |shell, _, window, cx| {
+            shell.open_secret_form(start.clone(), window, cx);
+        }))
+        .child(label)
         .into_any_element()
 }
 
@@ -415,11 +455,24 @@ fn why_pull_links(
     diagnosis: &PodDiagnosis,
     secrets: &[PullSecret],
     namespace: &str,
+    is_list_known: bool,
     cx: &Context<AppShell>,
 ) -> Option<AnyElement> {
-    if !diagnosis.is_pull_failure() || secrets.is_empty() {
+    if !diagnosis.is_pull_failure() {
         return None;
     }
+    let first = secrets.first()?;
+    // While the Secrets of the namespace are not loaded, no name can be called missing: the link to
+    // create the first one is offered anyway, and the server refuses a name that exists.
+    let create = (!is_list_known && !first.is_missing).then(|| {
+        create_pull_secret_link(
+            secrets.len(),
+            &first.name,
+            namespace,
+            "Create pull secret →",
+            cx,
+        )
+    });
     Some(
         h_flex()
             .gap_2()
@@ -431,6 +484,7 @@ fn why_pull_links(
                     .child("Open pull secret:"),
             )
             .child(pull_secret_links(secrets, namespace, 20, cx))
+            .children(create)
             .into_any_element(),
     )
 }

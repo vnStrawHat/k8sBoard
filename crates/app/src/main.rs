@@ -144,6 +144,7 @@ mod screenshot;
 mod screenshot_script;
 mod scroll_list;
 mod secret_clipboard;
+mod secret_forms;
 mod secret_rows;
 mod secret_values;
 mod settings;

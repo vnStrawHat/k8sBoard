@@ -6,6 +6,8 @@
 use std::borrow::Cow;
 use std::fmt;
 
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD as BASE64;
 use kube::api::DynamicObject;
 use serde_json::Value;
 
@@ -35,6 +37,7 @@ impl ObjectKind {
                 | Self::ResourceQuota
                 | Self::PodDisruptionBudget
                 | Self::RoleBinding
+                | Self::Secret
         )
     }
 }
@@ -115,6 +118,9 @@ pub enum DraftError {
     /// A `metadata` field of the wrong type (for example `labels: 5`).
     #[error("metadata is not valid: check labels, annotations, and finalizers")]
     InvalidMetadata,
+    /// A Secret `data` or `stringData` that is not a mapping of text.
+    #[error("data and stringData must be mappings of text values")]
+    InvalidSecretData,
 }
 
 impl ObjectDraft {
@@ -128,7 +134,7 @@ impl ObjectDraft {
         if count > 1 {
             return Err(DraftError::SeveralDocuments { count });
         }
-        let body = parse_mapping(text)?;
+        let mut body = parse_mapping(text)?;
         refuse_leading_zero(text)?;
         if body.get("kind").and_then(Value::as_str) != Some(kind.name()) {
             return Err(DraftError::WrongKind {
@@ -144,6 +150,9 @@ impl ObjectDraft {
         let fields = server_fields(&body);
         if !fields.is_empty() {
             return Err(DraftError::ServerFields { fields });
+        }
+        if kind == ObjectKind::Secret {
+            fold_string_data(&mut body)?;
         }
         let metadata = body.get("metadata");
         if metadata.is_some_and(|value| value.get("generateName").is_some()) {
@@ -219,6 +228,7 @@ impl ObjectDraft {
         match kind {
             Some(ObjectKind::RoleBinding) => fields.extend(self.role_binding_fields()),
             Some(ObjectKind::ConfigMap) => fields.extend(self.config_map_fields()),
+            Some(ObjectKind::Secret) => fields.extend(self.secret_fields()),
             Some(ObjectKind::ResourceQuota) => fields.extend(self.quota_fields()),
             Some(ObjectKind::PodDisruptionBudget) => fields.extend(self.budget_fields()),
             _ => {}
@@ -289,6 +299,25 @@ impl ObjectDraft {
         capped(keys.collect())
     }
 
+    /// The type and the names of the keys, never a value: a Secret's data is credentials.
+    fn secret_fields(&self) -> Vec<ChangedField> {
+        let secret_type = text_at(&self.body, "/type")
+            .map(|text| field(Cow::Borrowed("type"), Some(text.to_owned())));
+        let keys = self
+            .body
+            .get("data")
+            .and_then(Value::as_object)
+            .into_iter()
+            .flat_map(|map| {
+                map.keys()
+                    .map(|key| field(Cow::Owned(format!("data[{key}]")), None))
+            });
+        secret_type
+            .into_iter()
+            .chain(capped(keys.collect()))
+            .collect()
+    }
+
     fn quota_fields(&self) -> Vec<ChangedField> {
         let hard = self.body.pointer("/spec/hard").and_then(Value::as_object);
         let listed = hard.into_iter().flatten().map(|(resource, quantity)| {
@@ -312,6 +341,39 @@ impl ObjectDraft {
         })
         .collect()
     }
+}
+
+/// Moves the text of `stringData` into `data` as base64, the way the API server does, so the body
+/// holds one spelling of a value and the answer of the create compares path for path. `stringData`
+/// wins over a `data` key of the same name.
+fn fold_string_data(body: &mut Value) -> Result<(), DraftError> {
+    let Some(root) = body.as_object_mut() else {
+        return Ok(());
+    };
+    let Some(strings) = root.remove("stringData") else {
+        return Ok(());
+    };
+    let strings = match strings {
+        Value::Null => return Ok(()),
+        Value::Object(map) => map,
+        _ => return Err(DraftError::InvalidSecretData),
+    };
+    let data = root
+        .entry("data")
+        .or_insert_with(|| Value::Object(serde_json::Map::new()));
+    if data.is_null() {
+        *data = Value::Object(serde_json::Map::new());
+    }
+    let Some(data) = data.as_object_mut() else {
+        return Err(DraftError::InvalidSecretData);
+    };
+    for (key, value) in strings {
+        let Value::String(text) = value else {
+            return Err(DraftError::InvalidSecretData);
+        };
+        data.insert(key, Value::String(BASE64.encode(text)));
+    }
+    Ok(())
 }
 
 /// The name rule of the API server per kind (decision 9): the RBAC kinds accept `:`.

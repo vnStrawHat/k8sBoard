@@ -23,6 +23,17 @@ pub(crate) fn template_text(kind: ObjectKind, namespace: &str) -> Option<String>
         ObjectKind::PodDisruptionBudget => format!(
             "apiVersion: policy/v1\nkind: PodDisruptionBudget\nmetadata:\n  name: new-pdb\n  namespace: {namespace}\nspec:\n  minAvailable: 1\n  selector:\n    matchLabels:\n      app: my-app\n"
         ),
+        ObjectKind::Secret => format!(
+            "apiVersion: v1
+kind: Secret
+metadata:
+  name: new-secret
+  namespace: {namespace}
+type: Opaque
+stringData:
+  KEY: value
+"
+        ),
         ObjectKind::RoleBinding => format!(
             "apiVersion: rbac.authorization.k8s.io/v1\nkind: RoleBinding\nmetadata:\n  name: new-binding\n  namespace: {namespace}\nroleRef:\n  apiGroup: rbac.authorization.k8s.io\n  kind: ClusterRole\n  name: view\nsubjects:\n  - kind: ServiceAccount\n    name: default\n    namespace: {namespace}\n"
         ),
@@ -52,7 +63,7 @@ mod tests {
             .into_iter()
             .filter(|kind| kind.is_creatable())
             .collect();
-        assert_eq!(creatable.len(), 5);
+        assert_eq!(creatable.len(), 6);
         for kind in creatable {
             let text = template_text(kind, "payments").expect("a template");
             let draft = ObjectDraft::new(kind, &text);
@@ -62,7 +73,7 @@ mod tests {
 
     #[test]
     fn a_kind_that_is_not_creatable_has_no_template() {
-        assert_eq!(template_text(ObjectKind::Secret, "payments"), None);
+        assert_eq!(template_text(ObjectKind::Service, "payments"), None);
         assert_eq!(template_text(ObjectKind::Deployment, "payments"), None);
     }
 

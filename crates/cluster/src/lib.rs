@@ -75,6 +75,7 @@ mod quota_demand;
 mod rbac_evaluation;
 mod rbac_snapshot;
 mod reason_text;
+mod registry_secret;
 mod replica_set;
 mod resource_metrics;
 mod resource_quota;
@@ -97,7 +98,9 @@ pub use access_review::{
 };
 pub use autoscaler::{HorizontalPodAutoscalerSummary, HpaMetric, MetricSource, MetricValue};
 pub use cadvisor_text::{ContainerDiskIo, DiskIoCounters, DiskIoSample};
-pub use certificate::{CertificateInfo, CertificateIssue};
+pub use certificate::{
+    CertificateInfo, CertificateIssue, KeyCheck, TlsPairInfo, TlsPairIssue, check_tls_pair,
+};
 pub use config_map::{
     ConfigMapKey, ConfigMapSummary, ConfigMapValue, ConfigMapValues, ValuePreview,
 };
@@ -208,6 +211,7 @@ pub use rbac_evaluation::{
     AccessRequest, EffectiveRule, Grant, GrantNames, Identity, RequestTarget, ResourceRequest,
 };
 pub use rbac_snapshot::{NamespaceCoverage, RbacCoverage, RbacSnapshot};
+pub use registry_secret::docker_config_json;
 pub use replica_set::ReplicaSetSummary;
 pub use resource_metrics::{
     ContainerMetrics, METRICS_INTERVAL, NodeMetrics, PodMetrics, ResourceUsage,
