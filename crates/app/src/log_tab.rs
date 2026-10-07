@@ -595,6 +595,11 @@ impl LogTab {
                 }
             }
             LogUpdate::Lines(lines) => {
+                // A stream that sends lines is streaming, whether or not its `Started` was
+                // counted first: the header counts pods by what they send.
+                if let Some(stream) = self.streams.get_mut(usize::from(id.0)) {
+                    stream.state.start();
+                }
                 let lines: Vec<SourcedLine> = lines
                     .into_iter()
                     .map(|line| SourcedLine {

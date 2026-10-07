@@ -481,3 +481,19 @@ fn a_stateful_set_pod_tab_keeps_its_ordinal(cx: &mut TestAppContext) {
     let tab = fixture.open_tab(&pod, "db", cx);
     assert_eq!(tab.read_with(cx, |tab, _| tab.label()), "postgres-1/db");
 }
+
+#[gpui_kit::test]
+fn a_stream_that_sends_lines_counts_as_streaming_before_its_started_is_seen(
+    cx: &mut TestAppContext,
+) {
+    let (_fixture, tab) = open_full_tab(cx);
+    tab.update(cx, |tab, cx| {
+        tab.streams[0].state = LogStreamState::Connecting;
+        let line = cluster::LogLine {
+            timestamp: None,
+            text: "hello".to_owned(),
+        };
+        tab.apply_update(SourceId(0), LogUpdate::Lines(vec![line]), cx);
+    });
+    assert_eq!(tab.read_with(cx, |tab, _| tab.streaming_pod_count()), 1);
+}
