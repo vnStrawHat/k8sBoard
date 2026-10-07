@@ -88,6 +88,8 @@ pub(crate) enum AuditOutcome {
     Cancelled,
     /// The summary line of the node a stopped drain (a lock, a switch, a quit) was working on.
     Stopped,
+    /// The follow-up line of a drained node whose replacement pods are still Pending.
+    Pending,
 }
 
 /// The log file inside the settings folder `dir`.
@@ -286,6 +288,41 @@ pub(crate) fn drain_summary_entry(
             SummaryOutcome::Abandoned => AuditOutcome::Abandoned,
         },
         error: summary.reason.as_ref().map(ToString::to_string),
+        note: note.and_then(clean_note),
+    }
+}
+
+/// The follow-up line of a drained node (spec 0034): how many of the replacements of its evicted
+/// pods are still Pending once the look ends or they start. A summary line says `drained` as soon as
+/// the pods are gone, before anyone knows whether their replacements can run.
+pub(crate) fn drain_replacements_entry(
+    identity: &AuditIdentity,
+    node: &str,
+    pending: usize,
+    note: Option<&str>,
+) -> AuditEntry {
+    AuditEntry {
+        at: timestamp_now(),
+        cluster: identity.cluster.clone(),
+        context: identity.context.clone(),
+        user: identity.user.clone(),
+        action: "Drain".to_owned(),
+        object: Some(AuditObject {
+            kind: "Node".to_owned(),
+            namespace: None,
+            name: node.to_owned(),
+        }),
+        fields: vec![AuditField {
+            path: "pending_replacements".to_owned(),
+            value: Some(pending.to_string()),
+            from: None,
+        }],
+        outcome: if pending > 0 {
+            AuditOutcome::Pending
+        } else {
+            AuditOutcome::Drained
+        },
+        error: None,
         note: note.and_then(clean_note),
     }
 }

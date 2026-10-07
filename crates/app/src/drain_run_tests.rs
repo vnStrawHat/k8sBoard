@@ -993,17 +993,64 @@ fn following_polls_until_a_quiet_spell_or_the_window_ends() {
 }
 
 #[test]
-fn a_pending_replacement_keeps_the_look_going_to_the_end_of_the_window() {
+fn a_pending_replacement_keeps_the_look_going_past_the_window_until_it_starts() {
     let mut run = followed(&["api-1"]);
     run.on_follow(Ok(vec![replacement("api-9", Some(NO_NODE_FITS))]), secs(20));
     assert_eq!(run.next_follow(secs(21)), FollowStep::Sleep(secs(2)));
     assert_eq!(run.next_follow(secs(63)), FollowStep::Poll);
-    assert_eq!(run.next_follow(secs(64)), FollowStep::Done);
+    // Past the window it looks on, every 10 s, while a replacement stays Pending.
+    run.on_follow(Ok(vec![replacement("api-9", Some(NO_NODE_FITS))]), secs(64));
+    assert_eq!(run.next_follow(secs(65)), FollowStep::Sleep(secs(9)));
+    assert_eq!(run.next_follow(secs(74)), FollowStep::Poll);
     // After the window the line keeps the count, without the word `checking`.
     assert_eq!(
         run.status_text(secs(70)),
         format!("Drained · 1 pending replacement{EARLIER}")
     );
+    // It stops when the replacement starts, or after half an hour.
+    run.on_follow(Ok(vec![replacement("api-9", Some(NO_NODE_FITS))]), secs(80));
+    assert_eq!(run.next_follow(secs(4 + 30 * 60)), FollowStep::Done);
+    run.on_follow(Ok(Vec::new()), secs(90));
+    assert_eq!(run.next_follow(secs(91)), FollowStep::Done);
+}
+
+#[test]
+fn the_report_says_once_that_replacements_stay_pending_and_once_that_they_started() {
+    let mut run = followed(&["api-1", "api-2"]);
+    assert_eq!(run.take_replacement_report(secs(10)), None);
+    run.on_follow(Ok(vec![replacement("api-9", Some(NO_NODE_FITS))]), secs(20));
+    // The window is not over yet: nothing to report.
+    assert_eq!(run.take_replacement_report(secs(30)), None);
+    let pending = run.take_replacement_report(secs(64)).expect("a report");
+    assert_eq!(
+        pending,
+        ReplacementReport {
+            notice: "Drain: 1 evicted pod has a replacement that stays Pending".to_owned(),
+            is_clear: false,
+            nodes: vec![("wk-04".to_owned(), 1)],
+        }
+    );
+    assert_eq!(run.take_replacement_report(secs(70)), None);
+    // Uncordon: the replacement starts, and the look says so once.
+    run.on_follow(Ok(Vec::new()), secs(200));
+    let running = run.take_replacement_report(secs(201)).expect("a report");
+    assert_eq!(
+        running,
+        ReplacementReport {
+            notice: "Drain: the replacement pods are running".to_owned(),
+            is_clear: true,
+            nodes: vec![("wk-04".to_owned(), 0)],
+        }
+    );
+    assert_eq!(run.take_replacement_report(secs(202)), None);
+}
+
+#[test]
+fn replacements_that_start_within_the_window_report_nothing() {
+    let mut run = followed(&["api-1"]);
+    run.on_follow(Ok(vec![replacement("api-9", None)]), secs(5));
+    run.on_follow(Ok(Vec::new()), secs(8));
+    assert_eq!(run.take_replacement_report(secs(70)), None);
 }
 
 #[test]

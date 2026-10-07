@@ -29,6 +29,10 @@ const FOLLOW_WINDOW: Duration = Duration::from_secs(60);
 /// A replacement is recreated within seconds; with none Pending for this long, the tab stops
 /// looking before the window ends.
 const FOLLOW_QUIET: Duration = Duration::from_secs(15);
+/// After the window, replacements that stay Pending (a node uncordoned later lets them start) are
+/// looked for this often, and for this long, or until the tab closes.
+const FOLLOW_SLOW_POLL: Duration = Duration::from_secs(10);
+const FOLLOW_LONG: Duration = Duration::from_secs(30 * 60);
 const NOT_SCHEDULED_YET: &str = "not scheduled yet";
 
 /// How long to wait before the `attempt`th retry of a refused eviction (1-based): at least the
@@ -141,6 +145,28 @@ struct Follow {
     /// Run-relative time the look began.
     started: Duration,
     last_poll: Option<Duration>,
+    report: ReportState,
+}
+
+/// How much of the replacements the audit log and the notification were told.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum ReportState {
+    /// Nothing yet: the look has not settled with a replacement Pending.
+    Unreported,
+    /// Told that these nodes have replacements Pending.
+    Pending(Vec<String>),
+    /// Told that the replacements started.
+    Cleared,
+}
+
+/// What the audit log and the notification are told when the replacements settle: some stay Pending
+/// after the window, or, later, they all start.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ReplacementReport {
+    pub(crate) notice: String,
+    pub(crate) is_clear: bool,
+    /// Each node the drain evicted replaceable pods from, with the replacements still Pending.
+    pub(crate) nodes: Vec<(String, usize)>,
 }
 
 /// What the driver does next while it follows the replacements.
@@ -591,28 +617,80 @@ impl DrainRun {
             self.follow = Some(Follow {
                 started: now,
                 last_poll: None,
+                report: ReportState::Unreported,
             });
         }
     }
 
     /// What to do next while following: the Pending pods are listed every poll interval until the
-    /// window ends, or until a quiet spell with none of the evicted pods recreated Pending.
+    /// window ends, or until a quiet spell with none of the evicted pods recreated Pending. A
+    /// replacement still Pending after the window is looked for on, slowly, until it starts or
+    /// `FOLLOW_LONG` passes: a node uncordoned minutes later lets it run.
     pub(crate) fn next_follow(&self, now: Duration) -> FollowStep {
         let Some(follow) = &self.follow else {
             return FollowStep::Done;
         };
         let elapsed = now.saturating_sub(follow.started);
-        let is_quiet = elapsed >= FOLLOW_QUIET && self.pending_replacements() == 0;
-        if elapsed >= FOLLOW_WINDOW || is_quiet {
+        let is_pending = self.pending_replacements() > 0;
+        let is_quiet = elapsed >= FOLLOW_QUIET && !is_pending;
+        let is_window_over = elapsed >= FOLLOW_WINDOW;
+        if is_quiet || (is_window_over && !is_pending) || elapsed >= FOLLOW_LONG {
             return FollowStep::Done;
         }
+        let interval = if is_window_over {
+            FOLLOW_SLOW_POLL
+        } else {
+            POLL_INTERVAL
+        };
         let next_poll = follow
             .last_poll
-            .map_or(Duration::ZERO, |polled| polled + POLL_INTERVAL);
+            .map_or(Duration::ZERO, |polled| polled + interval);
         if next_poll <= now {
             return FollowStep::Poll;
         }
         FollowStep::Sleep(next_poll - now)
+    }
+
+    /// What the audit log and the notification are told now, once each: that replacements stay
+    /// Pending when the window ends with some, and that they started when the last one does.
+    pub(crate) fn take_replacement_report(&mut self, now: Duration) -> Option<ReplacementReport> {
+        let pending = self.pending_replacements();
+        let nodes: Vec<(String, usize)> = self
+            .nodes
+            .iter()
+            .map(|node| {
+                (
+                    node.name.clone(),
+                    node.count(|p| matches!(p, PodProgress::Recreated { .. })),
+                )
+            })
+            .collect();
+        let notice = self.follow_notice();
+        let follow = self.follow.as_mut()?;
+        let is_window_over = now.saturating_sub(follow.started) >= FOLLOW_WINDOW;
+        match (&follow.report, pending) {
+            (ReportState::Unreported, 1..) if is_window_over => {
+                let nodes: Vec<(String, usize)> =
+                    nodes.into_iter().filter(|(_, count)| *count > 0).collect();
+                follow.report =
+                    ReportState::Pending(nodes.iter().map(|(node, _)| node.clone()).collect());
+                Some(ReplacementReport {
+                    notice: notice?,
+                    is_clear: false,
+                    nodes,
+                })
+            }
+            (ReportState::Pending(reported), 0) => {
+                let nodes = reported.iter().map(|node| (node.clone(), 0)).collect();
+                follow.report = ReportState::Cleared;
+                Some(ReplacementReport {
+                    notice: "Drain: the replacement pods are running".to_owned(),
+                    is_clear: true,
+                    nodes,
+                })
+            }
+            _ => None,
+        }
     }
 
     /// Whether the tab still looks for replacements at `now`.

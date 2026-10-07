@@ -925,3 +925,21 @@ fn a_secret_edit_keeps_no_values_even_when_the_intent_knows_them() {
     let recorded = recordable_fields("Secret", fields);
     assert!(recorded[0].value.is_none() && recorded[0].from.is_none());
 }
+
+#[test]
+fn a_replacement_follow_up_line_counts_the_pods_still_pending() {
+    let access = AccessState::Unknown;
+    let guard = test_guard(&access, WriteLock::Unlocked, "stg-b", Environment::STAGING);
+    let identity = AuditIdentity::of(&guard);
+    let pending = serde_json::to_value(drain_replacements_entry(&identity, "wk-04", 2, None))
+        .expect("serializes");
+    assert_eq!(pending["action"], "Drain");
+    assert_eq!(pending["object"]["name"], "wk-04");
+    assert_eq!(pending["outcome"], "pending");
+    assert_eq!(pending["fields"][0]["path"], "pending_replacements");
+    assert_eq!(pending["fields"][0]["value"], "2");
+    let running = serde_json::to_value(drain_replacements_entry(&identity, "wk-04", 0, None))
+        .expect("serializes");
+    assert_eq!(running["outcome"], "drained");
+    assert_eq!(running["fields"][0]["value"], "0");
+}

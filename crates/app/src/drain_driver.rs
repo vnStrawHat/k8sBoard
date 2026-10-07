@@ -22,7 +22,9 @@ use super::write_flow::{
     CheckedWriteError, CommitMode, Confirmed, WriteStep, append_in_background, checked_write,
     notify, notify_with,
 };
-use crate::audit_log::{AuditEntry, AuditIdentity, append_audit, drain_summary_entry};
+use crate::audit_log::{
+    AuditEntry, AuditIdentity, append_audit, drain_replacements_entry, drain_summary_entry,
+};
 use crate::cluster_registry::ClusterRef;
 use crate::cluster_runtime::ClusterRuntime;
 use crate::drain_plan::DrainOptions;
@@ -594,7 +596,7 @@ async fn drive(
                         notify_with(window, cx, notice, is_success);
                     });
                 }
-                follow_replacements(tab, &connection, &runtime, window, cx).await;
+                follow_replacements(shell, tab, &connection, &runtime, window, cx).await;
                 return;
             }
         }
@@ -667,6 +669,7 @@ async fn list_pods(
 /// After a clean end, looks for the replacements of the evicted pods until the tab says it is done:
 /// a pod whose controller recreated it Pending is not gone for good. A closed tab ends the loop.
 async fn follow_replacements(
+    shell: &WeakEntity<AppShell>,
     tab: &WeakEntity<DrainTab>,
     connection: &ClusterConnection,
     runtime: &ClusterRuntime,
@@ -683,6 +686,9 @@ async fn follow_replacements(
         return;
     }
     loop {
+        if !report_replacements(shell, tab, window, cx).await {
+            return;
+        }
         let Ok(step) = tab.read_with(cx, |tab, _| tab.run().next_follow(tab.now())) else {
             return;
         };
@@ -705,19 +711,43 @@ async fn follow_replacements(
                 }
             }
             FollowStep::Done => {
-                let notice = tab.update(cx, |tab, cx| {
-                    cx.notify();
-                    tab.run().follow_notice()
-                });
-                if let Ok(Some(notice)) = notice {
-                    let _ = cx.update_window(window, |_, window, cx| {
-                        notify_with(window, cx, notice, false);
-                    });
-                }
+                let _ = tab.update(cx, |_, cx| cx.notify());
                 return;
             }
         }
     }
+}
+
+/// Tells the notification and the audit log what the replacements came to when they settle: some
+/// stay Pending after the window, and later they started. `false` when the tab is gone.
+async fn report_replacements(
+    shell: &WeakEntity<AppShell>,
+    tab: &WeakEntity<DrainTab>,
+    window: AnyWindowHandle,
+    cx: &mut AsyncApp,
+) -> bool {
+    let Ok(reported) = tab.update(cx, |tab, _| {
+        let now = tab.now();
+        let report = tab.run_mut().take_replacement_report(now)?;
+        let entries: Vec<AuditEntry> = report
+            .nodes
+            .iter()
+            .map(|(node, pending)| {
+                drain_replacements_entry(tab.identity(), node, *pending, tab.note())
+            })
+            .collect();
+        Some((report, entries))
+    }) else {
+        return false;
+    };
+    let Some((report, entries)) = reported else {
+        return true;
+    };
+    let _ = cx.update_window(window, |_, window, cx| {
+        notify_with(window, cx, report.notice, report.is_clear);
+    });
+    write_entries(shell, entries, cx).await;
+    true
 }
 
 /// The Pending pods of the cluster, or the text that says why they could not be listed.
@@ -748,6 +778,11 @@ async fn write_summaries(
     }) else {
         return;
     };
+    write_entries(shell, entries, cx).await;
+}
+
+/// Appends the audit lines, off the main thread.
+async fn write_entries(shell: &WeakEntity<AppShell>, entries: Vec<AuditEntry>, cx: &mut AsyncApp) {
     let dir: Option<PathBuf> = shell
         .read_with(cx, |_, cx| {
             AppSettings::config_dir(cx).map(std::path::Path::to_path_buf)
