@@ -382,6 +382,7 @@ impl TableRow for KindTableRow<'_> {
                 self.row.status.tone == StatusTone::Bad || !self.row.name.starts_with("system:")
             }
             FilterPreset::Nodes(_) => true,
+            FilterPreset::Changes => self.row.event.as_ref().is_some_and(|event| event.is_change),
         }
     }
 }
@@ -1197,6 +1198,33 @@ mod tests {
         // A kind has no use for a Nodes group.
         let group = FilterPreset::Nodes(crate::node_summary::NodeGroup::Ready);
         assert!(in_preset(&at(StatusTone::Done), &group));
+    }
+
+    #[test]
+    fn the_changes_preset_keeps_only_change_events() {
+        let event = |is_change: bool| {
+            let mut row = row(vec![KindCell::Text("x".into())]);
+            row.event = Some(crate::kind_row::EventDetail {
+                title: "t".into(),
+                reason: None,
+                object: None,
+                source: None,
+                message: "m".into(),
+                is_change,
+            });
+            row
+        };
+        let is_kept = |row: &KindRow| {
+            KindTableRow {
+                row,
+                name_column: NameColumn::Flexible,
+            }
+            .in_preset(&FilterPreset::Changes)
+        };
+        assert!(is_kept(&event(true)));
+        assert!(!is_kept(&event(false)));
+        // A row that is no event is no change.
+        assert!(!is_kept(&row(vec![KindCell::Text("x".into())])));
     }
 
     #[test]

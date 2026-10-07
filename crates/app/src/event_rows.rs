@@ -138,10 +138,34 @@ fn event_row(event: &EventSummary) -> KindRow {
             object: object_key,
             source,
             message,
+            is_change: is_change(event),
         }),
         related_pods: None,
         labels: Vec::new(),
         object: KindObject::Plain,
+    }
+}
+
+/// The kinds whose Normal events can mark a change of their spec.
+const CHANGING_KINDS: [&str; 5] = ["Deployment", "StatefulSet", "DaemonSet", "Job", "CronJob"];
+
+/// Whether the event marks a change, not the routine work around it. Only Normal events count;
+/// a Warning is a problem, and the Warnings toggle shows those. A rollout (`ScalingReplicaSet`, and
+/// the `Killing` of the old pods), an HPA rescale, and a node going Ready or NotReady are changes. The
+/// pods a controller creates and removes, the pulls and starts, and the Job bookkeeping are not;
+/// any other Normal event of a workload kind is, since it reports something the controller did to
+/// the workload (a rollback, a pause).
+pub(crate) fn is_change(event: &EventSummary) -> bool {
+    if event.event_type != EventType::Normal {
+        return false;
+    }
+    match event.reason.as_str() {
+        "ScalingReplicaSet" | "SuccessfulRescale" | "NodeReady" | "NodeNotReady" => true,
+        // A probe that failed also says Killing; only the stop of a container is a rollout.
+        "Killing" => event.message.starts_with("Stopping container"),
+        "SuccessfulCreate" | "SuccessfulDelete" | "Pulling" | "Pulled" | "Created" | "Started"
+        | "Scheduled" | "Completed" | "SawCompletedJob" => false,
+        _ => CHANGING_KINDS.contains(&event.object.kind.as_str()),
     }
 }
 

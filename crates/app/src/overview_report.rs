@@ -14,7 +14,7 @@ use crate::issue::Issue;
 use crate::issue_board::IssueBoard;
 use crate::node_heatmap::{HeatCell, heat_cells};
 use crate::overview::{
-    CHANGES_FOOTNOTE, ChangeFeed, capacity_model, change_feed, headline_text, object_line,
+    ChangeFeed, capacity_model, change_feed, changes_footnote, headline_text, object_line,
     stats_text,
 };
 use crate::recent_changes::{ChangeEntry, ChangeInputs, ChangeWindow, recent_changes};
@@ -52,20 +52,26 @@ pub(crate) fn live_report(
     let node_feed = &live.metrics.nodes;
     let usage = crate::overview::is_polling(&node_feed.status).then_some(&node_feed.history);
     let cells = heat_cells(live.nodes.items(), usage);
-    let (rollouts, rescales, changes_note) = match change_feed(live) {
-        ChangeFeed::Ready { rollouts, rescales } => (Some(rollouts), Some(rescales), None),
+    let (rollouts, rescales, replica_sets, changes_note) = match change_feed(live) {
+        ChangeFeed::Ready {
+            rollouts,
+            rescales,
+            replica_sets,
+        } => (Some(rollouts), Some(rescales), replica_sets, None),
         ChangeFeed::Loading => (
+            None,
             None,
             None,
             Some("Changes were still loading when the report was made.".to_owned()),
         ),
-        ChangeFeed::Unavailable(text) => (None, None, Some(text)),
+        ChangeFeed::Unavailable(text) => (None, None, None, Some(text)),
     };
     let changes = recent_changes(&ChangeInputs {
         rollouts,
         rescales,
         nodes: live.nodes.ready_items(),
         namespaces: live.namespaces.ready_items(),
+        replica_sets,
         deployments: live.issue_feeds.deployments(),
         window,
         now,
@@ -194,7 +200,7 @@ fn changes_section(text: &mut String, inputs: &ReportInputs) {
     } else {
         push_changes_table(text, inputs.changes);
     }
-    text.push_str(&format!("\n{CHANGES_FOOTNOTE}\n"));
+    text.push_str(&format!("\n{}\n", changes_footnote(inputs.window)));
 }
 
 fn push_changes_table(text: &mut String, changes: &[ChangeEntry]) {

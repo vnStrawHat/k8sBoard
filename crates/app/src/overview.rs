@@ -7,7 +7,7 @@ use jiff::tz::TimeZone;
 
 use cluster::{
     EventSummary, NamespaceScope, NamespaceSummary, NodeReadiness, NodeSummary, PodStatus,
-    PodSummary, ServerVersion, StatusReason,
+    PodSummary, ReplicaSetSummary, ServerVersion, StatusReason,
 };
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
@@ -38,7 +38,7 @@ use crate::issue_table::{coverage_status, logs_pod, short_kind};
 use crate::kind_row::KindObject;
 use crate::node_heatmap::{UsageState, heat_cells, node_heatmap};
 use crate::recent_changes::{
-    CHANGE_ROWS, ChangeEntry, ChangeInputs, ChangeKind, ChangeWindow, recent_changes,
+    CHANGE_ROWS, ChangeClock, ChangeEntry, ChangeInputs, ChangeKind, ChangeWindow, recent_changes,
 };
 use crate::resource_actions::logs_launch;
 use crate::resource_kind::ResourceKind;
@@ -594,6 +594,8 @@ pub(crate) enum ChangeFeed<'a> {
     Ready {
         rollouts: &'a [EventSummary],
         rescales: &'a [EventSummary],
+        /// The ReplicaSets of the 24 h range, once that list has loaded.
+        replica_sets: Option<&'a [ReplicaSetSummary]>,
     },
     /// A feed has not delivered its first snapshot, or has not started yet.
     Loading,
@@ -616,28 +618,47 @@ pub(crate) fn change_feed(live: &LiveCluster) -> ChangeFeed<'_> {
         return ChangeFeed::Unavailable(format!("Changes unavailable · {message}"));
     }
     match (rollouts.ready_items(), rescales.ready_items()) {
-        (Some(rollouts), Some(rescales)) => ChangeFeed::Ready { rollouts, rescales },
+        (Some(rollouts), Some(rescales)) => ChangeFeed::Ready {
+            rollouts,
+            rescales,
+            replica_sets: live.rollout_history().and_then(LiveList::ready_items),
+        },
         _ => ChangeFeed::Loading,
     }
 }
 
 fn changes_body(live: &LiveCluster, window: ChangeWindow, cx: &Context<AppShell>) -> AnyElement {
-    let (rollouts, rescales) = match change_feed(live) {
-        ChangeFeed::Ready { rollouts, rescales } => (rollouts, rescales),
+    let (rollouts, rescales, replica_sets) = match change_feed(live) {
+        ChangeFeed::Ready {
+            rollouts,
+            rescales,
+            replica_sets,
+        } => (rollouts, rescales, replica_sets),
         ChangeFeed::Loading => return loading_text("Loading changes…", cx),
         ChangeFeed::Unavailable(text) => return state_text(text, cx),
     };
+    // The 24 h range waits for the ReplicaSets, so its first picture is not missing the rollouts.
+    if window.reads_replica_sets() && live.is_rollout_history_loading() {
+        return loading_text("Loading rollouts…", cx);
+    }
+    let now = jiff::Timestamp::now();
     let entries = recent_changes(&ChangeInputs {
         rollouts: Some(rollouts),
         rescales: Some(rescales),
         nodes: live.nodes.ready_items(),
         namespaces: live.namespaces.ready_items(),
+        replica_sets,
         deployments: live.issue_feeds.deployments(),
         window,
-        now: jiff::Timestamp::now(),
+        now,
     });
     let theme = cx.theme();
     let zone = TimeZone::system();
+    let clock = ChangeClock {
+        zone: &zone,
+        now,
+        window,
+    };
     let shown = entries.len().min(CHANGE_ROWS);
     let diffable = diffable_deployments(live);
     let rows = entries
@@ -646,7 +667,7 @@ fn changes_body(live: &LiveCluster, window: ChangeWindow, cx: &Context<AppShell>
         .enumerate()
         .map(|(index, entry)| {
             let opens_diff = opens_diff(entry, &diffable);
-            change_row(index, entry, index + 1 == shown, opens_diff, &zone, cx)
+            change_row(index, entry, index + 1 == shown, opens_diff, clock, cx)
         });
     let empty = entries.is_empty().then(|| {
         let span = window.label().trim_start_matches("Last ");
@@ -661,29 +682,31 @@ fn changes_body(live: &LiveCluster, window: ChangeWindow, cx: &Context<AppShell>
                 .py_2()
                 .text_xs()
                 .text_color(theme.muted_foreground)
-                .child(CHANGES_FOOTNOTE),
+                .child(changes_footnote(window)),
         )
         .into_any_element()
 }
 
-pub(crate) const CHANGES_FOOTNOTE: &str =
-    "Deployment rollouts, HPA rescales, nodes, namespaces · events kept ~1 h by the API server";
+/// What the panel and the report say about where the rows come from.
+pub(crate) fn changes_footnote(window: ChangeWindow) -> &'static str {
+    if window.reads_replica_sets() {
+        "Deployment rollouts from ReplicaSet creation times, HPA rescales, nodes, namespaces · events kept ~1 h by the API server"
+    } else {
+        "Deployment rollouts, HPA rescales, nodes, namespaces · events kept ~1 h by the API server"
+    }
+}
 
 fn change_row(
     index: usize,
     entry: &ChangeEntry,
     is_last: bool,
     opens_diff: bool,
-    zone: &TimeZone,
+    clock: ChangeClock<'_>,
     cx: &Context<AppShell>,
 ) -> AnyElement {
     let theme = cx.theme();
     let mono = theme.mono_font_family.clone();
-    let time = entry
-        .at
-        .to_zoned(zone.clone())
-        .strftime("%H:%M")
-        .to_string();
+    let time = clock.label(entry.at);
     let count = (entry.count > 1).then(|| format!(" ×{}", entry.count));
     let tooltip = SharedString::from(entry.tooltip());
     let row = h_flex()
@@ -698,7 +721,7 @@ fn change_row(
         .tooltip(move |window, cx| Tooltip::new(tooltip.clone()).build(window, cx))
         .child(
             div()
-                .w(px(44.))
+                .w(px(clock.width()))
                 .flex_none()
                 .font_family(mono.clone())
                 .text_color(theme.muted_foreground)

@@ -34,11 +34,13 @@ impl AppShell {
             cx.new(|cx| ClusterSession::new(kubeconfig, &summary, namespace, kind, cache, cx));
         // The new session is still connecting; it keeps the choice for `LiveCluster::start`.
         let is_overview = self.screen == Screen::Overview;
+        let reads_replica_sets = self.overview.window.reads_replica_sets();
         let access_kind = self.screen.access_kind();
         #[cfg(feature = "screenshot")]
         let is_fixture = self.is_monitor_source_fixture;
         session.update(cx, |session, cx| {
             session.set_overview_visible(is_overview, cx);
+            session.set_rollout_history(reads_replica_sets, cx);
             session.request_kind_access(access_kind, cx);
             #[cfg(feature = "screenshot")]
             if is_fixture {

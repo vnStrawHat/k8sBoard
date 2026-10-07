@@ -2013,3 +2013,28 @@ fn i_on_a_row_without_a_pod_template_does_nothing(cx: &mut TestAppContext) {
     assert!(t.popover(cx).is_none());
     assert!(!t.has_dialog(cx));
 }
+
+// ---- Recent changes: View all ----
+
+#[gpui_kit::test]
+fn view_all_opens_the_events_with_the_changes_chip_on(cx: &mut TestAppContext) {
+    let t = workload_clusters("view-all-changes", cx);
+    t.fixture.shell.update(cx, |shell, cx| {
+        shell.set_event_filter(cluster::EventFilter::WarningsOnly, cx);
+        shell.view_all_events(cx);
+    });
+    cx.run_until_parked();
+    let (screen, preset, filter) = t.fixture.shell.read_with(cx, |shell, cx| {
+        (
+            shell.screen,
+            shell.toolkit_state(cx).and_then(|state| state.preset),
+            shell
+                .session()
+                .map(|session| session.read(cx).event_filter()),
+        )
+    });
+    assert_eq!(screen, Screen::Kind(ResourceKind::Events));
+    assert_eq!(preset, Some(crate::table_filter::FilterPreset::Changes));
+    // Changes are Normal events, which a Warnings-only list would not fetch.
+    assert_eq!(filter, Some(cluster::EventFilter::All));
+}

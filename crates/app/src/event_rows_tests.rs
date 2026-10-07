@@ -289,3 +289,102 @@ fn first_seen_is_a_column_before_last_seen() {
     assert_eq!(row.cells.get(5), Some(&KindCell::age(Some(at(100)))));
     assert_eq!(row.cells.get(6), Some(&KindCell::age(Some(at(200)))));
 }
+
+fn normal(kind: &str, reason: &str, message: &str) -> EventSummary {
+    EventSummary {
+        event_type: EventType::Normal,
+        reason: reason.to_owned(),
+        object: object(kind, Some("team-a"), "api"),
+        message: message.to_owned(),
+        ..summary()
+    }
+}
+
+#[test]
+fn a_rollout_a_rescale_and_a_node_state_are_changes() {
+    for (kind, reason, message) in [
+        (
+            "Deployment",
+            "ScalingReplicaSet",
+            "Scaled up replica set api-7d to 3",
+        ),
+        (
+            "HorizontalPodAutoscaler",
+            "SuccessfulRescale",
+            "New size: 4; reason: cpu",
+        ),
+        (
+            "Node",
+            "NodeNotReady",
+            "Node wk-04 status is now: NodeNotReady",
+        ),
+        ("Node", "NodeReady", "Node wk-04 status is now: NodeReady"),
+        ("Pod", "Killing", "Stopping container api"),
+        (
+            "Deployment",
+            "DeploymentRollback",
+            "Rolled back deployment api to revision 3",
+        ),
+        ("CronJob", "SomethingNew", "x"),
+    ] {
+        assert!(is_change(&normal(kind, reason, message)), "{kind} {reason}");
+    }
+}
+
+#[test]
+fn the_routine_work_around_a_rollout_is_not_a_change() {
+    for (kind, reason, message) in [
+        (
+            "ReplicaSet",
+            "SuccessfulCreate",
+            "Created pod: api-7d-x2k4q",
+        ),
+        ("ReplicaSet", "SuccessfulDelete", "Deleted pod: api-6b-q9z"),
+        (
+            "StatefulSet",
+            "SuccessfulCreate",
+            "create Pod db-0 in StatefulSet db successful",
+        ),
+        ("Job", "SawCompletedJob", "Saw completed job: etl-1"),
+        (
+            "Pod",
+            "Pulled",
+            "Container image already present on machine",
+        ),
+        ("Pod", "Started", "Started container api"),
+        (
+            "Pod",
+            "Scheduled",
+            "Successfully assigned team-a/api to wk-04",
+        ),
+        // A failed probe also says Killing.
+        (
+            "Pod",
+            "Killing",
+            "Container api failed liveness probe, will be restarted",
+        ),
+        // Only a workload kind's own Normal events count beyond the named reasons.
+        ("Pod", "SomethingNew", "x"),
+    ] {
+        assert!(
+            !is_change(&normal(kind, reason, message)),
+            "{kind} {reason}"
+        );
+    }
+}
+
+#[test]
+fn a_warning_is_never_a_change() {
+    let warning = EventSummary {
+        event_type: EventType::Warning,
+        ..normal("Deployment", "ScalingReplicaSet", "x")
+    };
+    assert!(!is_change(&warning));
+}
+
+#[test]
+fn the_row_carries_whether_its_event_is_a_change() {
+    let row = event_row(&normal("Deployment", "ScalingReplicaSet", "x"));
+    assert!(detail(&row).is_change);
+    assert!(!detail(&event_row(&summary())).is_change);
+}

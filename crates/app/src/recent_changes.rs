@@ -4,13 +4,17 @@
 
 use std::collections::HashMap;
 
-use cluster::{ConditionStatus, EventSummary, FieldWriter, NamespaceSummary, NodeSummary};
+use cluster::{
+    ConditionStatus, EventSummary, FieldWriter, NamespaceSummary, NodeSummary, ReplicaSetSummary,
+};
+use jiff::tz::TimeZone;
 use jiff::{SignedDuration, Timestamp};
 
 use crate::event_rows::message_line;
 use crate::kind_row::KindObject;
 use crate::port_forwards::is_dns_subdomain;
 use crate::table_selection::ResourceKey;
+use crate::workload_actions::image_tag;
 
 /// The rows the panel shows; the rest stay in the Events screen.
 pub(crate) const CHANGE_ROWS: usize = 8;
@@ -19,22 +23,24 @@ const NODE_READY_CONDITION: &str = "Ready";
 const KUBELET: &str = "kubelet";
 const NODE_CONTROLLER: &str = "node-controller";
 
-/// How far back the panel looks. The API server keeps events about an hour, so that is the
-/// longest range.
+/// How far back the panel looks. The API server keeps events about an hour, so the 24 h range adds
+/// the rollouts that the creation times of the Deployments' ReplicaSets still tell.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) enum ChangeWindow {
     #[default]
     FifteenMinutes,
     OneHour,
+    TwentyFourHours,
 }
 
 impl ChangeWindow {
-    pub(crate) const ALL: [Self; 2] = [Self::FifteenMinutes, Self::OneHour];
+    pub(crate) const ALL: [Self; 3] = [Self::FifteenMinutes, Self::OneHour, Self::TwentyFourHours];
 
     pub(crate) fn label(self) -> &'static str {
         match self {
             Self::FifteenMinutes => "Last 15 min",
             Self::OneHour => "Last 1 h",
+            Self::TwentyFourHours => "Last 24 h",
         }
     }
 
@@ -42,6 +48,45 @@ impl ChangeWindow {
         match self {
             Self::FifteenMinutes => SignedDuration::from_mins(15),
             Self::OneHour => SignedDuration::from_hours(1),
+            Self::TwentyFourHours => SignedDuration::from_hours(24),
+        }
+    }
+
+    /// Whether the range reaches past the events the API server keeps, so the ReplicaSets are read.
+    pub(crate) fn reads_replica_sets(self) -> bool {
+        self == Self::TwentyFourHours
+    }
+}
+
+/// How the rows write their time: the clock time, with the date when a change is not from today
+/// (the 24 h range reaches back to yesterday, where a bare `22:10` would read as tonight).
+#[derive(Clone, Copy)]
+pub(crate) struct ChangeClock<'a> {
+    pub(crate) zone: &'a TimeZone,
+    pub(crate) now: Timestamp,
+    pub(crate) window: ChangeWindow,
+}
+
+impl ChangeClock<'_> {
+    pub(crate) fn label(&self, at: Timestamp) -> String {
+        let (at, now) = (
+            at.to_zoned(self.zone.clone()),
+            self.now.to_zoned(self.zone.clone()),
+        );
+        let format = if at.date() == now.date() || !self.window.reads_replica_sets() {
+            "%H:%M"
+        } else {
+            "%m-%d %H:%M"
+        };
+        at.strftime(format).to_string()
+    }
+
+    /// The width of the time column: room for the date on the 24 h range.
+    pub(crate) fn width(&self) -> f32 {
+        if self.window.reads_replica_sets() {
+            92.
+        } else {
+            44.
         }
     }
 }
@@ -115,6 +160,9 @@ pub(crate) struct ChangeInputs<'a> {
     pub(crate) rescales: Option<&'a [EventSummary]>,
     pub(crate) nodes: Option<&'a [NodeSummary]>,
     pub(crate) namespaces: Option<&'a [NamespaceSummary]>,
+    /// The ReplicaSets of the scope, read only by the 24 h range; `None` while that list has not
+    /// loaded or is not asked for.
+    pub(crate) replica_sets: Option<&'a [ReplicaSetSummary]>,
     /// The Deployments condition feed, for the field manager of a rollout; `None` while the feed is
     /// off or loading, which leaves the event source as the actor.
     pub(crate) deployments: Option<&'a [KindObject]>,
@@ -139,6 +187,14 @@ pub(crate) fn recent_changes(inputs: &ChangeInputs) -> Vec<ChangeEntry> {
                 .flatten()
                 .filter_map(|event| event_entry(event, kind, &writers, &is_recent)),
         );
+    }
+    if inputs.window.reads_replica_sets() {
+        let created = replica_set_entries(inputs.replica_sets.unwrap_or_default(), &is_recent);
+        // The rollout row says what the scale-up event that made its ReplicaSet only hints at, so
+        // that event is dropped. Scale-downs stay, and so does a scale-up long after the creation: a
+        // rollback reuses its old ReplicaSet, and only the event has the time of that rollout.
+        entries.retain(|entry| !is_scale_up_of(entry, &created));
+        entries.extend(created);
     }
     for node in inputs.nodes.into_iter().flatten() {
         entries.extend(node_entry(node, &is_recent));
@@ -166,6 +222,64 @@ pub(crate) fn recent_changes(inputs: &ChangeInputs) -> Vec<ChangeEntry> {
             .then_with(|| left.object.cmp(&right.object))
     });
     entries
+}
+
+/// A rollout from the creation of a Deployment's ReplicaSet: `rev 8 · 1.26-alpine · release test`.
+/// A ReplicaSet without a Deployment owner or a revision number is no rollout of its own.
+fn replica_set_entries(
+    replica_sets: &[ReplicaSetSummary],
+    is_recent: &impl Fn(Timestamp) -> bool,
+) -> Vec<ChangeEntry> {
+    replica_sets
+        .iter()
+        .filter_map(|set| {
+            let owner = set
+                .owner
+                .as_ref()
+                .filter(|owner| owner.kind == "Deployment")?;
+            let revision = set.revision.as_deref()?;
+            let at = set.created_at.filter(|at| is_recent(*at))?;
+            let mut text = format!("rev {revision}");
+            let tag = set
+                .containers
+                .first()
+                .map(|container| image_tag(&container.image))
+                .filter(|tag| !tag.is_empty());
+            if let Some(tag) = tag {
+                text.push_str(&format!(" · {tag}"));
+            }
+            if let Some(cause) = &set.change_cause {
+                text.push_str(&format!(" · {cause}"));
+            }
+            Some(ChangeEntry {
+                at,
+                kind: ChangeKind::Deployment,
+                object: format!("{}/{}", set.namespace, owner.name),
+                text,
+                count: 1,
+                actor: None,
+                actor_source: ActorSource::EventSource,
+                replica_set: Some(set.name.clone()),
+                target: ResourceKey::of_object("Deployment", Some(&set.namespace), &owner.name),
+            })
+        })
+        .collect()
+}
+
+/// How far an event may be from the creation of its ReplicaSet and still be the scale-up that made it.
+const CREATION_SKEW: SignedDuration = SignedDuration::from_secs(120);
+
+/// Whether `entry` is the `Scaled up replica set X to N` event that made a ReplicaSet which has a
+/// rollout row of its own.
+fn is_scale_up_of(entry: &ChangeEntry, rollouts: &[ChangeEntry]) -> bool {
+    entry.kind == ChangeKind::Deployment
+        && entry.text.starts_with("Scaled up replica set ")
+        && entry.replica_set.as_ref().is_some_and(|name| {
+            rollouts.iter().any(|rollout| {
+                rollout.replica_set.as_ref() == Some(name)
+                    && entry.at.duration_since(rollout.at).abs() <= CREATION_SKEW
+            })
+        })
 }
 
 /// How far before the event's last occurrence a template write may be and still count as its

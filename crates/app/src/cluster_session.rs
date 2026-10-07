@@ -88,6 +88,9 @@ pub(crate) struct ClusterSession {
     /// The Overview screen is shown, so its change feeds run. Kept across Connecting and retry like
     /// `explorer_kind`.
     is_overview_visible: bool,
+    /// Overview shows its 24 h range, so its change feeds also watch the ReplicaSets. Kept like
+    /// `is_overview_visible`.
+    keeps_rollout_history: bool,
     /// What Topology draws while it is shown: its feeds run for this subject. Kept across Connecting
     /// and retry like `explorer_kind`.
     topology_subject: Option<TopologySubject>,
@@ -156,6 +159,8 @@ pub(crate) struct LiveCluster {
     pub(crate) issue_feeds: IssueFeeds,
     /// The Overview's change feeds: `Some` exactly while Overview is visible (`Denied` included).
     pub(crate) change_events: Option<ChangeEvents>,
+    /// Whether the change feeds watch the ReplicaSets too (the 24 h range).
+    keeps_rollout_history: bool,
     /// The watches behind the Topology graph: `Some` exactly while Topology is shown.
     topology: Option<TopologyFeeds>,
     connection: ClusterConnection,
@@ -573,10 +578,47 @@ pub(crate) enum ChangeEvents {
     Live {
         rollouts: LiveList<EventSummary>,
         rescales: LiveList<EventSummary>,
+        /// The ReplicaSets, while the 24 h range asks for rollouts older than the events.
+        history: Option<Box<RolloutHistory>>,
         _subscriptions: [WatchSubscription; 2],
     },
     /// A known access report denies listing events, so nothing was started (no retry loop on a 403).
     Denied,
+}
+
+/// The ReplicaSets of the scope, watched while Overview shows its 24 h range: their creation times
+/// are the rollouts that the events the API server keeps (about an hour) no longer hold. Dropping it
+/// stops the watch.
+pub(crate) struct RolloutHistory {
+    pub(crate) replica_sets: LiveList<ReplicaSetSummary>,
+    _subscription: WatchSubscription,
+}
+
+impl RolloutHistory {
+    fn start(
+        runtime: &ClusterRuntime,
+        connection: &ClusterConnection,
+        scope: &NamespaceScope,
+        cx: &mut Context<ClusterSession>,
+    ) -> Self {
+        Self {
+            replica_sets: LiveList::Loading,
+            _subscription: runtime.subscribe(
+                connection.watch_replica_sets(scope.clone()),
+                cx,
+                |session: &mut ClusterSession, update, _| {
+                    if let Some(list) = session.history_list_mut() {
+                        list.apply(update);
+                    }
+                },
+                |session, _| {
+                    if let Some(list) = session.history_list_mut() {
+                        list.mark_stopped();
+                    }
+                },
+            ),
+        }
+    }
 }
 
 /// The kinds of change events, in the order of `ChangeEvents::Live`'s subscriptions.
@@ -594,6 +636,7 @@ impl ChangeEvents {
         runtime: &ClusterRuntime,
         connection: &ClusterConnection,
         scope: &NamespaceScope,
+        keeps_history: bool,
         cx: &mut Context<ClusterSession>,
     ) -> Self {
         let subscribe = |kind: ChangeEventKind, cx: &mut Context<ClusterSession>| {
@@ -615,6 +658,8 @@ impl ChangeEvents {
         Self::Live {
             rollouts: LiveList::Loading,
             rescales: LiveList::Loading,
+            history: keeps_history
+                .then(|| Box::new(RolloutHistory::start(runtime, connection, scope, cx))),
             _subscriptions: CHANGE_EVENT_KINDS.map(|kind| subscribe(kind, cx)),
         }
     }
@@ -1335,6 +1380,7 @@ impl ClusterSession {
             issues: IssueBoard::default(),
             is_issues_visible: false,
             is_overview_visible: false,
+            keeps_rollout_history: false,
             topology_subject: None,
             source_entry,
             _issue_tick: Self::start_issue_tick(cx),
@@ -1381,6 +1427,31 @@ impl ClusterSession {
         live.change_events = None;
         if is_visible {
             live.start_change_events(&runtime, cx);
+        }
+        cx.notify();
+    }
+
+    /// Starts or stops the ReplicaSet watch behind the 24 h range of Recent changes. A session that
+    /// is not live only remembers the choice; `LiveCluster::start` reads it.
+    pub(crate) fn set_rollout_history(&mut self, keeps: bool, cx: &mut Context<Self>) {
+        self.keeps_rollout_history = keeps;
+        let runtime = cx.global::<ClusterRuntime>().clone();
+        let Some(live) = self.live_mut() else {
+            return;
+        };
+        if live.keeps_rollout_history == keeps {
+            return;
+        }
+        live.keeps_rollout_history = keeps;
+        if let Some(ChangeEvents::Live { history, .. }) = live.change_events.as_mut() {
+            *history = keeps.then(|| {
+                Box::new(RolloutHistory::start(
+                    &runtime,
+                    &live.connection,
+                    &live.scope,
+                    cx,
+                ))
+            });
         }
         cx.notify();
     }
@@ -1444,8 +1515,10 @@ impl ClusterSession {
         };
         matches!(
             &live.change_events,
-            Some(ChangeEvents::Live { rollouts, rescales, .. })
-                if rollouts.is_loading() || rescales.is_loading()
+            Some(ChangeEvents::Live { rollouts, rescales, history, .. })
+                if rollouts.is_loading()
+                    || rescales.is_loading()
+                    || history.as_ref().is_some_and(|history| history.replica_sets.is_loading())
         )
     }
 
@@ -1635,6 +1708,17 @@ impl ClusterSession {
         }
     }
 
+    /// The ReplicaSets of the 24 h range, while that watch runs.
+    fn history_list_mut(&mut self) -> Option<&mut LiveList<ReplicaSetSummary>> {
+        match self.live_mut()?.change_events.as_mut()? {
+            ChangeEvents::Live {
+                history: Some(history),
+                ..
+            } => Some(&mut history.replica_sets),
+            ChangeEvents::Live { history: None, .. } | ChangeEvents::Denied => None,
+        }
+    }
+
     /// The Topology feed of `kind`, while it exists.
     fn topology_feed_mut(&mut self, kind: ResourceKind) -> Option<&mut TopologyFeed> {
         self.live_mut()?.topology.as_mut()?.feed_mut(kind)
@@ -1720,6 +1804,7 @@ impl ClusterSession {
                 self.explorer_kind,
                 self.event_filter,
                 self.is_overview_visible,
+                self.keeps_rollout_history,
                 self.topology_subject.clone(),
                 cx,
             ))),
@@ -2579,12 +2664,34 @@ impl LiveCluster {
         self.connection.traffic()
     }
 
+    /// The ReplicaSets behind the 24 h range of Recent changes, while that watch runs.
+    pub(crate) fn rollout_history(&self) -> Option<&LiveList<ReplicaSetSummary>> {
+        match self.change_events.as_ref()? {
+            ChangeEvents::Live {
+                history: Some(history),
+                ..
+            } => Some(&history.replica_sets),
+            ChangeEvents::Live { history: None, .. } | ChangeEvents::Denied => None,
+        }
+    }
+
+    /// Whether the ReplicaSets of the 24 h range have not delivered their first snapshot.
+    pub(crate) fn is_rollout_history_loading(&self) -> bool {
+        self.rollout_history().is_some_and(LiveList::is_loading)
+    }
+
     /// Starts the change feeds unless a known review denies listing events.
     fn start_change_events(&mut self, runtime: &ClusterRuntime, cx: &mut Context<ClusterSession>) {
         self.change_events = Some(if is_change_feed_denied(&self.access) {
             ChangeEvents::Denied
         } else {
-            ChangeEvents::start(runtime, &self.connection, &self.scope, cx)
+            ChangeEvents::start(
+                runtime,
+                &self.connection,
+                &self.scope,
+                self.keeps_rollout_history,
+                cx,
+            )
         });
     }
 
@@ -2738,7 +2845,9 @@ impl LiveCluster {
             related: self.related.is_some(),
             issue_feeds: self.issue_feeds.watch_count(namespaces),
             change_events: match self.change_events {
-                Some(ChangeEvents::Live { .. }) => CHANGE_EVENT_KINDS.len() * namespaces,
+                Some(ChangeEvents::Live { ref history, .. }) => {
+                    (CHANGE_EVENT_KINDS.len() + usize::from(history.is_some())) * namespaces
+                }
                 Some(ChangeEvents::Denied) | None => 0,
             },
             topology: self.topology.as_ref().map_or(0, TopologyFeeds::open_count),
@@ -2763,9 +2872,11 @@ impl LiveCluster {
             .companion()
             .into_iter()
             .flat_map(|lists| lists.watched(namespaces));
-        let change_events = match self.change_events {
-            Some(ChangeEvents::Live { .. }) => namespaces,
-            Some(ChangeEvents::Denied) | None => 0,
+        let (change_events, history) = match self.change_events {
+            Some(ChangeEvents::Live { ref history, .. }) => {
+                (namespaces, namespaces * usize::from(history.is_some()))
+            }
+            Some(ChangeEvents::Denied) | None => (0, 0),
         };
         let topology = self.topology.iter().flat_map(|topology| {
             topology
@@ -2784,6 +2895,7 @@ impl LiveCluster {
                 ("Related objects", usize::from(self.related.is_some())),
                 ("Rollout events", change_events),
                 ("Rescale events", change_events),
+                ("Rollout history", history),
             ]
             .into_iter()
             .chain(explorer)
@@ -3097,6 +3209,7 @@ impl LiveCluster {
         explorer_kind: Option<ResourceKind>,
         event_filter: EventFilter,
         is_overview_visible: bool,
+        keeps_rollout_history: bool,
         topology_subject: Option<TopologySubject>,
         cx: &mut Context<ClusterSession>,
     ) -> Self {
@@ -3171,6 +3284,7 @@ impl LiveCluster {
             name_index: NameIndex::default(),
             issue_feeds,
             change_events: None,
+            keeps_rollout_history,
             topology: None,
             connection,
             subscriptions,

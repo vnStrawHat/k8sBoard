@@ -3242,14 +3242,27 @@ impl AppShell {
             return;
         }
         self.overview.window = window;
+        if let Some(session) = self.session() {
+            session.update(cx, |session, cx| {
+                session.set_rollout_history(window.reads_replica_sets(), cx)
+            });
+        }
         cx.notify();
     }
 
-    /// `View all →` of Recent changes: the Events screen with every event, since changes are Normal
-    /// events that a Warnings-only list would hide.
+    /// `View all →` of Recent changes: the Events screen with the Changes chip on. Changes are
+    /// Normal events that a Warnings-only list would hide, so every event is fetched; the chip keeps
+    /// the ones that mark a change, newest first (a list of Normal events sorts by last seen).
     pub(crate) fn view_all_events(&mut self, cx: &mut Context<Self>) {
         self.set_event_filter(EventFilter::All, cx);
         self.show_screen(Screen::Kind(ResourceKind::Events), cx);
+        let filter = TableFilter {
+            preset: Some(FilterPreset::Changes),
+            ..TableFilter::default()
+        };
+        self.update_view(cx, move |view| view.filter = filter);
+        // The input shows the filter text of its screen, which is empty now.
+        self.quick_filter_screen = None;
     }
 
     /// The filter of the Events list of the open cluster.

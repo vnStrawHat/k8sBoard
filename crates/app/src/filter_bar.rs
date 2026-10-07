@@ -150,6 +150,7 @@ fn hidden_preset_chip(state: &ToolkitState, cx: &Context<AppShell>) -> Option<An
     let label = match state.preset {
         Some(FilterPreset::HideSystem) => "Hide system",
         Some(FilterPreset::HideInactive) => "Hide inactive",
+        Some(FilterPreset::Changes) => "Changes",
         Some(FilterPreset::Nodes(_)) | None => return None,
     };
     Some(

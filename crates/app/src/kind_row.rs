@@ -131,6 +131,9 @@ pub(crate) struct EventDetail {
     pub(crate) source: Option<SharedString>,
     /// The full (trimmed, truncated) message, for Copy message.
     pub(crate) message: SharedString,
+    /// A Normal event that marks a change (a rollout, a rescale, a node going Ready or NotReady),
+    /// which the Changes filter keeps.
+    pub(crate) is_change: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

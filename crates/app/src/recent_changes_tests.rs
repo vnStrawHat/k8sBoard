@@ -82,6 +82,7 @@ fn inputs<'a>() -> ChangeInputs<'a> {
         rescales: None,
         nodes: None,
         namespaces: None,
+        replica_sets: None,
         deployments: None,
         window: ChangeWindow::FifteenMinutes,
         now: now(),
@@ -527,4 +528,195 @@ fn event_entry_reads_named_replica_set() {
         ..inputs()
     });
     assert_eq!(entries[0].replica_set, None);
+}
+
+// ---- The 24 h range: rollouts from ReplicaSet creation times ----
+
+fn replica_set(
+    name: &str,
+    owner: Option<&str>,
+    revision: Option<&str>,
+    cause: Option<&str>,
+    created: &str,
+) -> ReplicaSetSummary {
+    ReplicaSetSummary {
+        namespace: "payments".to_owned(),
+        name: name.to_owned(),
+        created_at: Some(at(created)),
+        labels: Vec::new(),
+        desired: 3,
+        current: 3,
+        ready: 3,
+        owner: owner.map(|owner| cluster::ControllerRef {
+            kind: "Deployment".to_owned(),
+            name: owner.to_owned(),
+        }),
+        revision: revision.map(str::to_owned),
+        change_cause: cause.map(str::to_owned),
+        selector: Vec::new(),
+        containers: vec![cluster::TemplateContainer {
+            name: "api".to_owned(),
+            image: "repo.example.com/api:2.14.0".to_owned(),
+            ports: Vec::new(),
+        }],
+    }
+}
+
+fn day_inputs<'a>() -> ChangeInputs<'a> {
+    ChangeInputs {
+        window: ChangeWindow::TwentyFourHours,
+        ..inputs()
+    }
+}
+
+/// Eight hours before `now()`: past the 1 h range, inside the 24 h one.
+const EIGHT_HOURS_AGO: &str = "2024-05-01T04:00:00Z";
+
+#[test]
+fn the_24_hour_range_lists_a_rollout_with_its_revision_tag_and_cause() {
+    let sets = [replica_set(
+        "api-7d9f8c",
+        Some("api"),
+        Some("8"),
+        Some("release test"),
+        EIGHT_HOURS_AGO,
+    )];
+    let entries = recent_changes(&ChangeInputs {
+        replica_sets: Some(&sets),
+        ..day_inputs()
+    });
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].kind, ChangeKind::Deployment);
+    assert_eq!(entries[0].object, "payments/api");
+    assert_eq!(entries[0].text, "rev 8 · 2.14.0 · release test");
+    assert_eq!(entries[0].at, at(EIGHT_HOURS_AGO));
+    assert_eq!(entries[0].replica_set.as_deref(), Some("api-7d9f8c"));
+    assert!(entries[0].target.is_some());
+}
+
+#[test]
+fn the_shorter_ranges_do_not_read_replica_sets() {
+    let sets = [replica_set(
+        "api-7d9f8c",
+        Some("api"),
+        Some("8"),
+        None,
+        "2024-05-01T11:55:00Z",
+    )];
+    for window in [ChangeWindow::FifteenMinutes, ChangeWindow::OneHour] {
+        let entries = recent_changes(&ChangeInputs {
+            replica_sets: Some(&sets),
+            window,
+            ..inputs()
+        });
+        assert!(entries.is_empty(), "{window:?}");
+    }
+}
+
+#[test]
+fn a_replica_set_without_a_deployment_owner_or_a_revision_is_no_rollout() {
+    let sets = [
+        replica_set("a-1", None, Some("1"), None, EIGHT_HOURS_AGO),
+        replica_set("b-1", Some("b"), None, None, EIGHT_HOURS_AGO),
+        replica_set("c-1", Some("c"), Some("1"), None, LONG_AGO),
+    ];
+    let entries = recent_changes(&ChangeInputs {
+        replica_sets: Some(&sets),
+        ..day_inputs()
+    });
+    assert!(entries.is_empty());
+}
+
+#[test]
+fn a_rollout_row_replaces_the_scale_up_event_of_its_replica_set() {
+    let sets = [replica_set(
+        "api-7d9f8c",
+        Some("api"),
+        Some("8"),
+        None,
+        RECENT,
+    )];
+    let mut scale_down = event("Deployment", Some("payments"), "api", Some(RECENT));
+    scale_down.message = "Scaled down replica set api-6b5f77 to 2".to_owned();
+    let events = [
+        // The event of the same ReplicaSet: the rollout row says it better.
+        event("Deployment", Some("payments"), "api", Some(RECENT)),
+        scale_down,
+    ];
+    let entries = recent_changes(&ChangeInputs {
+        rollouts: Some(&events),
+        replica_sets: Some(&sets),
+        ..day_inputs()
+    });
+    let texts: Vec<&str> = entries.iter().map(|entry| entry.text.as_str()).collect();
+    assert_eq!(texts.len(), 2, "{texts:?}");
+    assert!(texts.contains(&"rev 8 · 2.14.0"));
+    assert!(texts.contains(&"Scaled down replica set api-6b5f77 to 2"));
+}
+
+#[test]
+fn the_24_hour_range_keeps_the_events_that_name_no_listed_replica_set() {
+    let events = [event("Deployment", Some("payments"), "api", Some(RECENT))];
+    let entries = recent_changes(&ChangeInputs {
+        rollouts: Some(&events),
+        ..day_inputs()
+    });
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].text, "Scaled up replica set api-7d9f8c to 3");
+}
+
+#[test]
+fn the_24_hour_range_is_the_third_option_and_spans_a_day() {
+    assert_eq!(
+        ChangeWindow::ALL.map(ChangeWindow::label),
+        ["Last 15 min", "Last 1 h", "Last 24 h"]
+    );
+    assert_eq!(
+        ChangeWindow::TwentyFourHours.span(),
+        SignedDuration::from_hours(24)
+    );
+    assert!(ChangeWindow::TwentyFourHours.reads_replica_sets());
+    assert!(!ChangeWindow::OneHour.reads_replica_sets());
+}
+
+#[test]
+fn the_24_hour_range_adds_the_date_to_a_change_from_another_day() {
+    let utc = TimeZone::UTC;
+    let clock = |window| ChangeClock {
+        zone: &utc,
+        now: now(),
+        window,
+    };
+    let yesterday = at("2024-04-30T22:10:00Z");
+    let today = at("2024-05-01T04:00:00Z");
+    let day = clock(ChangeWindow::TwentyFourHours);
+    assert_eq!(day.label(yesterday), "04-30 22:10");
+    assert_eq!(day.label(today), "04:00");
+    // The shorter ranges never reach another day on a normal clock, and keep their narrow column.
+    let hour = clock(ChangeWindow::OneHour);
+    assert_eq!(hour.label(today), "04:00");
+    assert!(day.width() > hour.width());
+}
+
+#[test]
+fn a_scale_up_long_after_the_creation_is_a_rollback_and_stays() {
+    // The rolled-back ReplicaSet is eight hours old; only the event has the time of the rollback.
+    let sets = [replica_set(
+        "api-7d9f8c",
+        Some("api"),
+        Some("9"),
+        None,
+        EIGHT_HOURS_AGO,
+    )];
+    let events = [event("Deployment", Some("payments"), "api", Some(RECENT))];
+    let entries = recent_changes(&ChangeInputs {
+        rollouts: Some(&events),
+        replica_sets: Some(&sets),
+        ..day_inputs()
+    });
+    let texts: Vec<&str> = entries.iter().map(|entry| entry.text.as_str()).collect();
+    assert_eq!(
+        texts,
+        ["Scaled up replica set api-7d9f8c to 3", "rev 9 · 2.14.0"]
+    );
 }

@@ -39,6 +39,8 @@ pub(crate) enum FilterPreset {
     HideSystem,
     /// A Nodes summary chip.
     Nodes(NodeGroup),
+    /// Events that mark a change (see `event_rows::is_change`); the Overview's `View all` sets it.
+    Changes,
 }
 
 /// One kubectl-style label test, such as `app=api`.

@@ -523,6 +523,7 @@ fn event_with_reason(reason: Option<&str>) -> EventDetail {
         object: None,
         source: None,
         message: "m".into(),
+        is_change: false,
     }
 }
 
