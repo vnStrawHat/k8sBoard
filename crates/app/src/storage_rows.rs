@@ -156,6 +156,35 @@ pub(crate) fn claim_status(claim: &PersistentVolumeClaimSummary) -> StatusLabel 
     }
 }
 
+/// What a Bound claim no pod mounts is called: it holds storage nobody uses.
+pub(crate) const ORPHAN: &str = "Orphan";
+/// The drawer's Mounted by line for such a claim.
+pub(crate) const ORPHAN_NOTE: &str = "Orphan \u{b7} not mounted by any pod";
+
+/// The Mounted by cell: the pods that mount the claim (`api-0`, `api-0 +2`), `Orphan` for a Bound
+/// claim with none, and nothing for a claim that is not bound yet or while the pods are not
+/// loaded (`mounting` is `None`). `mounting` is sorted by name.
+pub(crate) fn mounted_by_cell(
+    claim: &PersistentVolumeClaimSummary,
+    mounting: Option<&[&str]>,
+) -> KindCell {
+    match mounting {
+        None => KindCell::Absent,
+        Some([only]) => KindCell::Text((*only).to_owned().into()),
+        Some([first, rest @ ..]) => KindCell::Text(format!("{first} +{}", rest.len()).into()),
+        Some([]) if claim.phase == BOUND && !claim.is_terminating => KindCell::Toned(StatusLabel {
+            text: ORPHAN.into(),
+            tone: StatusTone::Warn,
+        }),
+        Some([]) => KindCell::Absent,
+    }
+}
+
+/// Whether a Mounted by cell is the `Orphan` one.
+pub(crate) fn is_orphan_cell(cell: &KindCell) -> bool {
+    matches!(cell, KindCell::Toned(label) if label.text.as_ref() == ORPHAN)
+}
+
 pub(crate) fn persistent_volume_claim_row(claim: &PersistentVolumeClaimSummary) -> KindRow {
     let status = claim_status(claim);
     // An unbound claim has no capacity yet; its request is shown muted.
@@ -225,6 +254,8 @@ pub(crate) fn persistent_volume_claim_row(claim: &PersistentVolumeClaimSummary) 
             KindCell::Absent,
             modes_cell(&claim.access_modes),
             class_cell(claim.storage_class.as_deref()),
+            // The pods join fills Mounted by.
+            KindCell::Absent,
             KindCell::age(claim.created_at),
         ],
         sections,

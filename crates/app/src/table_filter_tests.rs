@@ -334,3 +334,12 @@ fn preset_keeps_only_the_rows_it_accepts() {
     with_chip.chips.push(FilterChip::Unhealthy);
     assert!(!passes(&Row::default(), &with_chip));
 }
+
+#[test]
+fn mounted_none_waits_for_enter_like_a_label_query() {
+    assert_eq!(quick_filter_text("mounted:none"), "");
+    assert_eq!(quick_filter_text("mounted:"), "");
+    // A word that merely starts alike is still text.
+    assert_eq!(quick_filter_text("mount"), "mount");
+    assert_eq!(quick_filter_text("web"), "web");
+}

@@ -634,6 +634,7 @@ static PERSISTENT_VOLUME_CLAIMS: KindSpec = KindSpec {
         column("Used", 80., Align::Right),
         column("Access", 90., Align::Left),
         column("Class", 150., Align::Left),
+        column("Mounted by", 150., Align::Left),
         AGE_COLUMN,
     ],
     read_only_actions: &[

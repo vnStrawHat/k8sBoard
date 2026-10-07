@@ -1078,6 +1078,7 @@ fn filtered_count_label(state: &ToolkitState) -> String {
         Some(FilterPreset::HideSystem) => "system:*",
         Some(FilterPreset::HideInactive) => "inactive",
         Some(FilterPreset::Changes) => "not changes",
+        Some(FilterPreset::Unmounted) => "mounted",
         Some(FilterPreset::Nodes(_)) | None => "",
     };
     if only_preset && !reason.is_empty() {

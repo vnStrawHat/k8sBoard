@@ -111,7 +111,7 @@ use crate::settings_store::SettingsNotice;
 use crate::shortcut_sheet::open_shortcut_sheet;
 use crate::status_bar::status_bar;
 use crate::table_filter::{
-    FilterChip, FilterPreset, TableFilter, parse_label_queries, quick_filter_text,
+    FilterChip, FilterPreset, TableFilter, UNMOUNTED_QUERY, parse_label_queries, quick_filter_text,
 };
 use crate::table_selection::{
     ClusterObject, DialogOrigin, ResourceKey, SelectionSync, list_item_index, list_row_index,
@@ -4895,6 +4895,17 @@ impl AppShell {
             }
             InputEvent::PressEnter { .. } => {
                 let text = input.read(cx).value();
+                // `mounted:none` is a switch of the PVC screen, not a text to search for.
+                if text.trim() == UNMOUNTED_QUERY
+                    && self.screen == Screen::Kind(ResourceKind::PersistentVolumeClaims)
+                {
+                    self.update_view(cx, |view| {
+                        view.filter.preset = Some(FilterPreset::Unmounted);
+                        view.filter.text.clear();
+                    });
+                    input.update(cx, |input, cx| input.set_value("", window, cx));
+                    return;
+                }
                 let Some(queries) = parse_label_queries(&text) else {
                     // Plain text already filters as it is typed: Enter hands the keyboard back to
                     // the table. A `label:` text keeps its chip behavior.

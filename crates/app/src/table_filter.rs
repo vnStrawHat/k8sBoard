@@ -41,6 +41,8 @@ pub(crate) enum FilterPreset {
     Nodes(NodeGroup),
     /// Events that mark a change (see `event_rows::is_change`); the Overview's `View all` sets it.
     Changes,
+    /// Bound claims no pod mounts, the orphans (`mounted:none`).
+    Unmounted,
 }
 
 /// One kubectl-style label test, such as `app=api`.
@@ -140,10 +142,15 @@ fn parse_label_query(part: &str) -> Option<LabelQuery> {
     })
 }
 
+/// The text that turns the PVC screen's quick filter into the Unmounted preset, on Enter.
+pub(crate) const UNMOUNTED_QUERY: &str = "mounted:none";
+const MOUNTED_PREFIX: &str = "mounted:";
+
 /// The quick filter text for what the input holds. A `label:` query waits for Enter to become
-/// chips, so it filters nothing by its literal text while it is typed.
+/// chips, and so does `mounted:none`, so neither filters by its literal text while it is typed.
 pub(crate) fn quick_filter_text(input: &str) -> &str {
-    if input.trim_start().starts_with(LABEL_PREFIX) {
+    let typed = input.trim_start();
+    if typed.starts_with(LABEL_PREFIX) || typed.starts_with(MOUNTED_PREFIX) {
         return "";
     }
     input

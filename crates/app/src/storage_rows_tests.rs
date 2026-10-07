@@ -157,6 +157,33 @@ fn capacity_is_absent_without_capacity_and_request() {
 }
 
 #[test]
+fn an_unmounted_bound_claim_is_an_orphan_and_nothing_else_is() {
+    let bound = claim();
+    let orphan = mounted_by_cell(&bound, Some(&[]));
+    assert!(is_orphan_cell(&orphan));
+    assert_eq!(
+        orphan,
+        KindCell::Toned(StatusLabel {
+            text: "Orphan".into(),
+            tone: StatusTone::Warn
+        })
+    );
+    assert_eq!(ORPHAN_NOTE, "Orphan \u{b7} not mounted by any pod");
+    let mut pending = claim();
+    pending.phase = "Pending".to_owned();
+    assert_eq!(mounted_by_cell(&pending, Some(&[])), KindCell::Absent);
+    let mut going = claim();
+    going.is_terminating = true;
+    assert_eq!(mounted_by_cell(&going, Some(&[])), KindCell::Absent);
+    assert_eq!(mounted_by_cell(&bound, None), KindCell::Absent);
+    assert_eq!(
+        mounted_by_cell(&bound, Some(&["web-0"])),
+        KindCell::Text("web-0".into())
+    );
+    assert!(!is_orphan_cell(&KindCell::Text("Orphan".into())));
+}
+
+#[test]
 fn unreadable_size_stays_text() {
     assert_eq!(size_cell(Some("lots"), None), KindCell::Text("lots".into()));
 }

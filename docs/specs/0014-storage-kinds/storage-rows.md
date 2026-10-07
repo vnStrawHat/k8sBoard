@@ -106,3 +106,7 @@ Status: default → Ok "Default"; else Done "Not default".
 | Labels | |
 
 `ClassVolumes`: companion PVs with this class: `Field { "Persistent volumes", "{n} · {bound} bound · {released} released" }` (zero parts skipped), then up to 20 PV `Link`s by name (label = phase). Loading / failed / denied: "Loading volumes…" / "Volumes are unavailable" / "Not permitted: list persistentvolumes".
+
+## Orphan claims and Mounted by (UX round 3, P21)
+
+PVCs gain a `Mounted by` column before Age (hideable in Columns). The pods join fills it in one pass over the pods (`kind_join::claim_mounts`): the first pod name sorted, with `+n` for the others (`web-0 +1`); `Orphan` (Warn) for a Bound claim that no pod mounts; empty for an unbound claim and while the pods load. The drawer's Mounted by section reads `Orphan · not mounted by any pod` for such a claim (`Not mounted by any pod` for an unbound one). `Filter` offers `mounted:none` (and the quick filter turns that text into it on Enter): `FilterPreset::Unmounted` keeps only the `Orphan` rows, and its chip removes it.

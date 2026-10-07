@@ -44,6 +44,8 @@ pub(crate) const NAMESPACE_MEMORY: usize = 3;
 pub(crate) const NETWORK_POLICY_AFFECTS: usize = 2;
 /// The index of the Used cell in a PVCs row.
 pub(crate) const CLAIM_USED: usize = 2;
+/// The index of the Mounted by cell in a PVCs row.
+pub(crate) const CLAIM_MOUNTED_BY: usize = 5;
 /// The index of the PVs cell in a StorageClasses row.
 pub(crate) const CLASS_VOLUMES: usize = 5;
 /// The index of the Instances cell in a CRDs row.
@@ -1041,6 +1043,7 @@ fn join_claims(rows: &mut [KindRow], inputs: &JoinInputs) {
         .companion
         .and_then(CompanionLists::storage_classes)
         .and_then(LiveList::ready_items);
+    let mounts = claim_mounts(inputs.pods.ready_items());
     for row in rows {
         let KindObject::PersistentVolumeClaim(claim) = &row.object else {
             continue;
@@ -1080,12 +1083,47 @@ fn join_claims(rows: &mut [KindRow], inputs: &JoinInputs) {
         if let Some(slot) = row.cells.get_mut(CLAIM_USED) {
             *slot = cell;
         }
+        let mounting = mounts.as_ref().map(|mounts| {
+            mounts
+                .get(&(claim.namespace.as_str(), claim.name.as_str()))
+                .map_or(&[][..], Vec::as_slice)
+        });
+        if let Some(slot) = row.cells.get_mut(CLAIM_MOUNTED_BY) {
+            *slot = crate::storage_rows::mounted_by_cell(claim, mounting);
+        }
         if let (Some(allows), KindObject::PersistentVolumeClaim(claim)) =
             (allows_expansion, &mut row.object)
         {
             claim.class_allows_expansion = Some(allows);
         }
     }
+}
+
+/// The pods that mount each claim, by `(namespace, claim)`, sorted by name; `None` while the pods
+/// are not loaded. One pass over the pods, so the join costs the pods and the claims once, not
+/// their product.
+fn claim_mounts(pods: Option<&[PodSummary]>) -> Option<HashMap<(&str, &str), Vec<&str>>> {
+    let mut mounts: HashMap<(&str, &str), Vec<&str>> = HashMap::new();
+    for pod in pods? {
+        let claims = pod
+            .containers
+            .iter()
+            .flat_map(|container| &container.mounts)
+            .filter_map(|mount| match &mount.source {
+                VolumeSource::PersistentVolumeClaim { claim } => Some(claim.as_str()),
+                _ => None,
+            });
+        for claim in claims {
+            let names = mounts.entry((pod.namespace.as_str(), claim)).or_default();
+            if !names.contains(&pod.name.as_str()) {
+                names.push(pod.name.as_str());
+            }
+        }
+    }
+    for names in mounts.values_mut() {
+        names.sort_unstable();
+    }
+    Some(mounts)
 }
 
 // ---- StorageClasses ----

@@ -1792,7 +1792,13 @@ fn mounted_by_rows(
     let mounting = claim_pods(&claim.namespace, &claim.name, pods);
     if mounting.is_empty() {
         let is_block = claim.volume_mode.as_deref() == Some("Block");
-        return std::iter::once(note("Not mounted by any pod", cx))
+        // A Bound claim nobody mounts holds storage for nothing: it has a name for that.
+        let text = if claim.phase == "Bound" {
+            crate::storage_rows::ORPHAN_NOTE
+        } else {
+            "Not mounted by any pod"
+        };
+        return std::iter::once(note(text, cx))
             .chain(is_block.then(|| note("Block volumes are not listed", cx)))
             .collect();
     }

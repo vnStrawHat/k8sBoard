@@ -20,7 +20,7 @@ use crate::node_summary::{NodeCounts, NodeGroup};
 use crate::pod_table::STATUS as POD_STATUS_COLUMN;
 use crate::resource_kind::ResourceKind;
 use crate::status_tone::{StatusTone, tone_color};
-use crate::table_filter::{FilterChip, FilterPreset};
+use crate::table_filter::{FilterChip, FilterPreset, UNMOUNTED_QUERY};
 use crate::table_view::{FilteredTable, TableView};
 
 /// The Status column of the Jobs table: the Name column is 0.
@@ -151,6 +151,7 @@ fn hidden_preset_chip(state: &ToolkitState, cx: &Context<AppShell>) -> Option<An
         Some(FilterPreset::HideSystem) => "Hide system",
         Some(FilterPreset::HideInactive) => "Hide inactive",
         Some(FilterPreset::Changes) => "Changes",
+        Some(FilterPreset::Unmounted) => UNMOUNTED_QUERY,
         Some(FilterPreset::Nodes(_)) | None => return None,
     };
     Some(
@@ -303,6 +304,7 @@ fn add_filter_button(state: &ToolkitState, cx: &Context<AppShell>) -> Option<Any
         })
     });
     let hides_inactive = state.preset == Some(FilterPreset::HideInactive);
+    let is_unmounted = state.preset == Some(FilterPreset::Unmounted);
     Some(
         Button::new("add-filter")
             .ghost()
@@ -351,6 +353,20 @@ fn add_filter_button(state: &ToolkitState, cx: &Context<AppShell>) -> Option<Any
                             .checked(hides_inactive)
                             .on_click(move |_, _, cx| {
                                 let next = (!hides_inactive).then_some(FilterPreset::HideInactive);
+                                let _ = shell.update(cx, |shell, cx| shell.set_preset(next, cx));
+                            }),
+                    )
+                } else {
+                    menu
+                };
+                // Orphans: the claims no pod mounts. The chip removes the filter, like the one above.
+                let menu = if screen == Screen::Kind(ResourceKind::PersistentVolumeClaims) {
+                    let shell = shell.clone();
+                    menu.item(
+                        PopupMenuItem::new(UNMOUNTED_QUERY)
+                            .checked(is_unmounted)
+                            .on_click(move |_, _, cx| {
+                                let next = (!is_unmounted).then_some(FilterPreset::Unmounted);
                                 let _ = shell.update(cx, |shell, cx| shell.set_preset(next, cx));
                             }),
                     )

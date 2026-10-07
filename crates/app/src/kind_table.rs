@@ -23,7 +23,7 @@ use crate::cluster_registry::ClusterRef;
 use crate::custom_rows::{date_text, date_tone};
 use crate::drawer::truncated_text_with_tooltip;
 use crate::filter_bar::filtered_empty_state;
-use crate::kind_join::CRD_INSTANCES;
+use crate::kind_join::{CLAIM_MOUNTED_BY, CRD_INSTANCES};
 use crate::kind_row::{KindCell, KindObject, KindRow};
 use crate::live_sections::{loaded_replica_sets, next_run_text};
 use crate::port_forward_menu::{ForwardMenu, row_subject};
@@ -407,6 +407,11 @@ impl TableRow for KindTableRow<'_> {
             }
             FilterPreset::Nodes(_) => true,
             FilterPreset::Changes => self.row.event.as_ref().is_some_and(|event| event.is_change),
+            FilterPreset::Unmounted => self
+                .row
+                .cells
+                .get(CLAIM_MOUNTED_BY)
+                .is_some_and(crate::storage_rows::is_orphan_cell),
         }
     }
 }
@@ -1272,6 +1277,31 @@ mod tests {
         assert!(is_kept(&event(true)));
         assert!(!is_kept(&event(false)));
         // A row that is no event is no change.
+        assert!(!is_kept(&row(vec![KindCell::Text("x".into())])));
+    }
+
+    #[test]
+    fn the_unmounted_preset_keeps_only_the_orphans() {
+        let claim = |mounted_by: KindCell| {
+            let mut cells = vec![KindCell::Absent; CLAIM_MOUNTED_BY];
+            cells.push(mounted_by);
+            row(cells)
+        };
+        let is_kept = |row: &KindRow| {
+            KindTableRow {
+                row,
+                name_column: NameColumn::Flexible,
+            }
+            .in_preset(&FilterPreset::Unmounted)
+        };
+        let orphan = crate::storage_rows::mounted_by_cell(
+            &crate::resource_edits::resource_edits_tests::claim("data", "1Gi", "1Gi"),
+            Some(&[]),
+        );
+        assert!(is_kept(&claim(orphan)));
+        assert!(!is_kept(&claim(KindCell::Text("web-0".into()))));
+        // Pods that have not loaded, or a claim that is not bound, are no verdict.
+        assert!(!is_kept(&claim(KindCell::Absent)));
         assert!(!is_kept(&row(vec![KindCell::Text("x".into())])));
     }
 

@@ -1141,6 +1141,66 @@ fn a_claim_learns_from_the_classes_whether_it_expands() {
     );
 }
 
+fn mounting_claim(pod_name: &str, claim: &str) -> PodSummary {
+    let mut main = container(ContainerKind::Main);
+    main.mounts = vec![MountEntry {
+        path: "/data".to_owned(),
+        volume: "data".to_owned(),
+        source: VolumeSource::PersistentVolumeClaim {
+            claim: claim.to_owned(),
+        },
+        is_read_only: false,
+        sub_path: None,
+    }];
+    with_container(pod("shop", pod_name, &[]), main)
+}
+
+fn mounted_by_of(
+    pods: &LiveList<PodSummary>,
+    claim: cluster::PersistentVolumeClaimSummary,
+) -> KindCell {
+    let mut rows = vec![crate::storage_rows::persistent_volume_claim_row(&claim)];
+    let inputs = JoinInputs {
+        custom_counts: None,
+        pods,
+        companion: None,
+        kubelet: None,
+        scope: &NamespaceScope::All,
+    };
+    join_rows(ResourceKind::PersistentVolumeClaims, &mut rows, &inputs);
+    rows.remove(0).cells[CLAIM_MOUNTED_BY].clone()
+}
+
+#[test]
+fn a_claim_names_the_pods_that_mount_it_or_is_an_orphan() {
+    let ready = |pods: Vec<PodSummary>| LiveList::Ready {
+        items: pods,
+        interruption: None,
+    };
+    let text = |text: &str| KindCell::Text(text.to_owned().into());
+    let pods = ready(vec![
+        mounting_claim("web-1", "data"),
+        mounting_claim("web-0", "data"),
+        mounting_claim("other", "elsewhere"),
+    ]);
+    // Sorted, and the first one named with the count of the rest.
+    assert_eq!(mounted_by_of(&pods, claim("Bound")), text("web-0 +1"));
+    let one = ready(vec![mounting_claim("web-0", "data")]);
+    assert_eq!(mounted_by_of(&one, claim("Bound")), text("web-0"));
+    // No pod mounts it: a Bound claim is an orphan, a Pending one is only unbound.
+    let none = ready(vec![mounting_claim("other", "elsewhere")]);
+    assert!(crate::storage_rows::is_orphan_cell(&mounted_by_of(
+        &none,
+        claim("Bound")
+    )));
+    assert_eq!(mounted_by_of(&none, claim("Pending")), KindCell::Absent);
+    // Pods that have not loaded say nothing: an empty list is not a verdict.
+    assert_eq!(
+        mounted_by_of(&LiveList::Loading, claim("Bound")),
+        KindCell::Absent
+    );
+}
+
 fn used_cell(row: &KindRow) -> &KindCell {
     row.cells.get(CLAIM_USED).expect("Used cell exists")
 }

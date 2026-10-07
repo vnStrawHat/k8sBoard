@@ -303,7 +303,10 @@ impl TableRow for NodeRow<'_> {
     fn in_preset(&self, preset: &FilterPreset) -> bool {
         match preset {
             FilterPreset::Nodes(group) => node_in_group(self.node, group),
-            FilterPreset::HideInactive | FilterPreset::HideSystem | FilterPreset::Changes => true,
+            FilterPreset::HideInactive
+            | FilterPreset::HideSystem
+            | FilterPreset::Changes
+            | FilterPreset::Unmounted => true,
         }
     }
 }
