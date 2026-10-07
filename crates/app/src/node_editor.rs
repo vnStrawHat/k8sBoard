@@ -21,8 +21,8 @@ use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{ActiveTheme as _, Disableable as _, Icon, IndexPath, Sizable as _};
 use gpui_kit::component::{h_flex, v_flex};
 use gpui_kit::{
-    AnyElement, App, AppContext as _, Context, Entity, Focusable as _, InteractiveElement as _,
-    IntoElement, KeyDownEvent, ParentElement as _, Render, SharedString,
+    AnyElement, App, AppContext as _, Context, Entity, FocusHandle, Focusable as _,
+    InteractiveElement as _, IntoElement, KeyDownEvent, ParentElement as _, Render, SharedString,
     StatefulInteractiveElement as _, Styled as _, Subscription, Task, WeakEntity, Window, div, px,
 };
 
@@ -136,6 +136,9 @@ pub(crate) struct NodeEditor {
     has_tried_review: bool,
     /// The kubelet labels are folded into one row until the user opens it.
     are_kubelet_labels_shown: bool,
+    /// Takes the focus when a row goes, so Enter after × still reviews instead of reaching the
+    /// dialog, which would close it with the edits.
+    focus_handle: FocusHandle,
     _load: Option<Task<()>>,
 }
 
@@ -337,6 +340,7 @@ impl NodeEditor {
             state: EditorState::Loading,
             has_tried_review: false,
             are_kubelet_labels_shown: false,
+            focus_handle: cx.focus_handle(),
             _load: Some(load),
         }
     }
@@ -471,7 +475,9 @@ impl NodeEditor {
         cx.notify();
     }
 
-    fn remove_row(&mut self, index: usize, cx: &mut Context<Self>) {
+    /// Drops a row, and takes the focus: the × that was clicked goes with its row, and an Enter
+    /// with the focus nowhere would reach the dialog and close it with the edits.
+    fn remove_row(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
         let EditorState::Ready { rows, .. } = &mut self.state else {
             return;
         };
@@ -484,6 +490,7 @@ impl NodeEditor {
             }
             Rows::Taints(_) | Rows::Labels(_) => return,
         }
+        window.focus(&self.focus_handle, cx);
         cx.notify();
     }
 
@@ -543,7 +550,9 @@ impl NodeEditor {
     /// Enter in a row's text field presses Review…, a fresh press only. A focused button or
     /// select keeps its own Enter.
     fn on_key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
-        if !is_enter(event) || !self.is_input_focused(window, cx) {
+        if !is_enter(event)
+            || !(self.is_input_focused(window, cx) || self.focus_handle.is_focused(window))
+        {
             return;
         }
         window.prevent_default();
@@ -594,7 +603,9 @@ impl NodeEditor {
                 .xsmall()
                 .icon(Icon::new(IconName::X))
                 .tooltip("Remove")
-                .on_click(cx.listener(move |editor, _, _, cx| editor.remove_row(index, cx)))
+                .on_click(
+                    cx.listener(move |editor, _, window, cx| editor.remove_row(index, window, cx)),
+                )
                 .into_any_element()
         };
         let list =
@@ -820,6 +831,7 @@ impl Render for NodeEditor {
         };
         v_flex()
             .key_context(FORWARD_FORM)
+            .track_focus(&self.focus_handle)
             .on_key_down(cx.listener(Self::on_key_down))
             .w_full()
             .gap_3()
@@ -1208,6 +1220,8 @@ pub(crate) struct BulkLabelEditor {
     /// Why the batch of the changes now would not go; worked out when a row changes, not on every
     /// draw (it reads every ticked node).
     problem: Option<SharedString>,
+    /// Takes the focus when a row goes, so Enter after × still reviews.
+    focus_handle: FocusHandle,
 }
 
 impl BulkLabelEditor {
@@ -1224,6 +1238,7 @@ impl BulkLabelEditor {
             targets,
             rows: Vec::new(),
             problem: None,
+            focus_handle: cx.focus_handle(),
         };
         editor.add_row(window, cx);
         editor
@@ -1265,9 +1280,10 @@ impl BulkLabelEditor {
         self.refresh_problem(cx);
     }
 
-    fn remove_row(&mut self, index: usize, cx: &mut Context<Self>) {
+    fn remove_row(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
         if index < self.rows.len() {
             self.rows.remove(index);
+            window.focus(&self.focus_handle, cx);
             self.refresh_problem(cx);
         }
     }
@@ -1340,7 +1356,7 @@ impl BulkLabelEditor {
                 .into_iter()
                 .any(|input| input.read(cx).focus_handle(cx).is_focused(window))
         });
-        if !is_enter(event) || !is_input_focused {
+        if !is_enter(event) || !(is_input_focused || self.focus_handle.is_focused(window)) {
             return;
         }
         window.prevent_default();
@@ -1372,9 +1388,9 @@ impl BulkLabelEditor {
                         .xsmall()
                         .icon(Icon::new(IconName::X))
                         .tooltip("Remove")
-                        .on_click(
-                            cx.listener(move |editor, _, _, cx| editor.remove_row(index, cx)),
-                        ),
+                        .on_click(cx.listener(move |editor, _, window, cx| {
+                            editor.remove_row(index, window, cx)
+                        })),
                 )
         });
         v_flex()
@@ -1411,6 +1427,7 @@ impl Render for BulkLabelEditor {
             .on_click(cx.listener(|editor, _, window, cx| editor.add_row(window, cx)));
         v_flex()
             .key_context(FORWARD_FORM)
+            .track_focus(&self.focus_handle)
             .on_key_down(cx.listener(Self::on_key_down))
             .w_full()
             .gap_3()
@@ -1642,6 +1659,7 @@ impl AppShell {
             state: ready(kind, edit, None, window, cx),
             has_tried_review: false,
             are_kubelet_labels_shown: false,
+            focus_handle: cx.focus_handle(),
             _load: None,
         });
         for (key, value, effect) in extra_taints.iter().rev() {
@@ -1791,8 +1809,8 @@ impl BulkLabelEditor {
         self.rows.iter().map(|row| row._subscriptions.len()).sum()
     }
 
-    pub(crate) fn drop_row(&mut self, index: usize, cx: &mut Context<Self>) {
-        self.remove_row(index, cx);
+    pub(crate) fn drop_row(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        self.remove_row(index, window, cx);
     }
 
     pub(crate) fn press_review(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1863,6 +1881,11 @@ impl NodeEditor {
                 select.set_selected_index(Some(IndexPath::default().row(index)), window, cx);
             });
         }
+    }
+
+    /// The × of a row, as a click on it presses it.
+    pub(crate) fn drop_row(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        self.remove_row(index, window, cx);
     }
 
     pub(crate) fn press_review(&mut self, window: &mut Window, cx: &mut Context<Self>) {

@@ -947,8 +947,8 @@ fn removing_a_bulk_row_drops_its_subscriptions_and_refreshes_the_problem(cx: &mu
         assert!(editor.current_problem().is_some());
     });
     // The row with the kubelet key goes: its subscriptions go with it and the problem clears.
-    t.t.fixture.with_window(cx, |_, cx| {
-        editor.update(cx, |editor, cx| editor.drop_row(1, cx));
+    t.t.fixture.with_window(cx, |window, cx| {
+        editor.update(cx, |editor, cx| editor.drop_row(1, window, cx));
     });
     editor.read_with(cx, |editor, _| {
         assert_eq!(editor.row_count(), 1);
@@ -1300,4 +1300,50 @@ fn page_keys_move_the_table_while_the_drawer_was_only_opened_by_a_click(cx: &mut
     assert!(!t.is_drawer_keyed(cx));
     t.t.fixture.press("end", cx);
     assert_eq!(t.node_cursor(cx), Some(2));
+}
+
+#[gpui_kit::test]
+fn enter_after_removing_a_taint_row_still_presses_review(cx: &mut TestAppContext) {
+    use gpui_kit::InputEvent as _;
+    let t = node_test("node-edit-enter-after-remove", cx);
+    t.open_editor(NodeEditKind::Taints, &t.t.stg, "node-b", cx);
+    let editor = t.wait_for_editor(cx);
+    t.add_row(&editor, ("gpu", "true", "NoSchedule"), cx);
+    t.add_row(&editor, ("temp", "hot", "NoSchedule"), cx);
+    // The × that was clicked goes with its row, so the focus is nowhere; the removal takes it.
+    t.t.fixture.with_window(cx, |window, cx| {
+        editor.update(cx, |editor, cx| editor.drop_row(0, window, cx));
+    });
+    t.t.fixture.draw_twice(cx);
+    t.t.fixture.with_window(cx, |window, cx| {
+        window.dispatch_event(enter(false).to_platform_input(), cx);
+    });
+    t.t.wait_for_dry_run(cx);
+    assert_eq!(
+        writes(&t.t.stg_api).len(),
+        1,
+        "the review dry-ran the patch instead of the dialog closing"
+    );
+}
+
+#[gpui_kit::test]
+fn enter_after_removing_a_bulk_label_row_still_presses_review(cx: &mut TestAppContext) {
+    use gpui_kit::InputEvent as _;
+    let t = node_test("bulk-labels-enter-after-remove", cx);
+    let editor = t.bulk_over_three(cx);
+    t.t.fixture.with_window(cx, |window, cx| {
+        editor.update(cx, |editor, cx| editor.push_row(window, cx));
+    });
+    t.t.fixture.with_window(cx, |window, cx| {
+        editor.update(cx, |editor, cx| editor.drop_row(1, window, cx));
+    });
+    t.t.fixture.draw_twice(cx);
+    t.t.fixture.with_window(cx, |window, cx| {
+        window.dispatch_event(enter(false).to_platform_input(), cx);
+    });
+    t.t.wait_for_dry_run(cx);
+    assert!(
+        !writes(&t.t.stg_api).is_empty(),
+        "the review dry-ran the batch"
+    );
 }
