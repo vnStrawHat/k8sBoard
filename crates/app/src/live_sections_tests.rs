@@ -1582,7 +1582,9 @@ fn used_by(owner: &str, ways: &[&'static str]) -> UsedBy {
 }
 
 fn hint_of(users: &[UsedBy]) -> Option<String> {
-    restart_hint(&users.iter().collect::<Vec<_>>())
+    restart_hint(&users.iter().collect::<Vec<_>>(), |used_by| {
+        used_by.owner.clone()
+    })
 }
 
 #[test]
@@ -1639,6 +1641,24 @@ fn restart_hint_caps_at_three_owners() {
         "{hint}"
     );
     assert!(!hint.contains("deployment/d"), "{hint}");
+}
+
+#[test]
+fn restart_hint_names_owners_the_way_the_caller_reads_them() {
+    let users = [
+        used_by("deployment/web", &["env"]),
+        used_by("cronjob/nightly", &["env"]),
+    ];
+    let hint = restart_hint(&users.iter().collect::<Vec<_>>(), |used_by| {
+        format!("lab-shop/{}", used_by.owner)
+    })
+    .expect("an env reader");
+    // The cron job is skipped by its raw owner text, then the rest reads as the caller says.
+    assert!(
+        hint.contains("restart lab-shop/deployment/web to use a change"),
+        "{hint}"
+    );
+    assert!(!hint.contains("nightly"), "{hint}");
 }
 
 // ---- Revision diff buttons ----

@@ -86,3 +86,7 @@ envFrom rows come first. Each row: name (mono, truncated, tooltip) and source (m
 ## Annotations (UX round 3)
 
 The Overview ends with Labels, then an `Annotations` section folded into one `N annotations` row until opened (`annotations_section` in `drawer.rs`, shared with the workload drawers). The terms come from `PodSummary.annotations` (`key=value`, at most 50, cut at 200 characters, an applied manifest left out, a credential-looking key's value `<hidden>`). Editing is in [0032b metadata-edit.md](../0032b-resource-edits/metadata-edit.md).
+
+## As built (2026-10-07): one rule for object mentions
+
+`drawer::object_text(text, target, cx)` is the one rule for naming an object in a drawer: `namespace/text` when the session's scope is All or has several namespaces, else `text`. `link_text` and the ConfigMap/Secret restart sentence ("restart lab-shop/deployment/web to use a change") both go through it.

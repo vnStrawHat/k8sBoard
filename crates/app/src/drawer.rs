@@ -929,17 +929,28 @@ pub(crate) fn link_text(
     target: ResourceKey,
     cx: &Context<AppShell>,
 ) -> AnyElement {
-    let text = if scope_has_many_namespaces(cx) {
-        qualified_link_text(text, &target)
-    } else {
-        text.clone()
-    };
+    let text = object_text(text.clone(), Some(&target), cx);
     link_style(div().id(("link", id)), &text, cx)
         .on_click(cx.listener(move |shell, _, window, cx| {
             open_link(shell, target.clone(), window, cx);
         }))
         .child(text)
         .into_any_element()
+}
+
+/// How a drawer names an object in text or in a link: `text`, with the namespace of `target` in
+/// front when the open session's scope covers more than one namespace. Every object mention in a
+/// drawer goes through this one rule.
+pub(crate) fn object_text(
+    text: impl Into<SharedString>,
+    target: Option<&ResourceKey>,
+    cx: &App,
+) -> SharedString {
+    let text = text.into();
+    match target {
+        Some(target) if scope_has_many_namespaces(cx) => qualified_link_text(&text, target),
+        _ => text,
+    }
 }
 
 /// Whether the open session lists more than one namespace: All, or several picked. A drawer link

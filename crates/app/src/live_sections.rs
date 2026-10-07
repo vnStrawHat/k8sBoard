@@ -39,7 +39,9 @@ use crate::cluster_session::{
 };
 use crate::config_map_rows::{format_bytes, key_size_text};
 use crate::custom_rows::{FieldsSide, conditions_rows, field_list_rows};
-use crate::drawer::{link_name, link_text, open_link, truncated_text, wide_detail_row};
+use crate::drawer::{
+    link_name, link_text, object_text, open_link, truncated_text, wide_detail_row,
+};
 use crate::helm_release_view::ValuesLayout;
 use crate::helm_rows::{HistoryModel, HistoryRow, history_model};
 use crate::kind_diagnosis::{is_pod_not_ready, unready_node};
@@ -1166,7 +1168,12 @@ fn used_by_rows(
                 }),
         )
         .chain((hidden > 0).then(|| note(&format!("+{hidden} more"), cx)))
-        .chain(restart_hint(&users).map(|hint| note(&hint, cx)))
+        .chain(
+            restart_hint(&users, |used_by| {
+                object_text(used_by.owner.as_str(), used_by.target.as_ref(), cx).to_string()
+            })
+            .map(|hint| note(&hint, cx)),
+        )
         .chain(std::iter::once(note(&format!("From pods in {scope}"), cx)))
         .collect()
 }
@@ -1177,22 +1184,28 @@ const HINT_LISTED_OWNERS: usize = 3;
 /// The note under Used by when some user reads the ConfigMap through env: those values are read
 /// once at container start. CronJob and Job owners are left out (each run starts fresh), and so are
 /// bare `pod/{name}` owners (a pod without a controller is not restarted; it is replaced), and
-/// orphan `replicaset/{name}` owners (a ReplicaSet without a Deployment is not restarted either). Pure.
-fn restart_hint(users: &[&UsedBy]) -> Option<String> {
-    let readers: Vec<&str> = users
+/// orphan `replicaset/{name}` owners (a ReplicaSet without a Deployment is not restarted either).
+/// `name_of` is how an owner reads, the same rule as its link in the list above.
+fn restart_hint(users: &[&UsedBy], name_of: impl Fn(&UsedBy) -> String) -> Option<String> {
+    let readers: Vec<&UsedBy> = users
         .iter()
+        .copied()
         .filter(|used_by| used_by.ways.contains(WAY_ENV) || used_by.ways.contains(WAY_ENV_FROM))
-        .map(|used_by| used_by.owner.as_str())
-        .filter(|owner| {
+        .filter(|used_by| {
             !["cronjob/", "job/", "pod/", "replicaset/"]
                 .iter()
-                .any(|prefix| owner.starts_with(prefix))
+                .any(|prefix| used_by.owner.starts_with(prefix))
         })
         .collect();
     if readers.is_empty() {
         return None;
     }
-    let listed = readers[..readers.len().min(HINT_LISTED_OWNERS)].join(", ");
+    let listed = readers
+        .iter()
+        .take(HINT_LISTED_OWNERS)
+        .map(|used_by| name_of(used_by))
+        .collect::<Vec<_>>()
+        .join(", ");
     let more = match readers.len().saturating_sub(HINT_LISTED_OWNERS) {
         0 => String::new(),
         count => format!(" and {count} more"),
