@@ -284,8 +284,9 @@ async fn pull_failure_detail(
 
 /// What the kubelet starts every pull failure message with.
 const PULL_FAILURE_PREFIX: &str = "Failed to pull image \"";
-/// The longest cause kept.
-const MAX_CAUSE_CHARS: usize = 200;
+/// The longest cause kept: a registry lookup failure quotes the image, the URL and the resolver,
+/// about 300 characters, and the tab wraps it.
+const MAX_CAUSE_CHARS: usize = 600;
 
 /// The cause of a kubelet pull failure message on one line: the head repeats the image name, which
 /// the app already shows, so it is cut off. Credentials in a URL are masked.

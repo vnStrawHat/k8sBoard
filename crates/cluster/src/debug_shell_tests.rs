@@ -453,7 +453,7 @@ async fn a_pull_failure_without_readable_events_still_reports_the_failure() {
 
 #[test]
 fn a_long_pull_cause_is_cut() {
-    let message = format!("Failed to pull image \"x\": {}", "e".repeat(500));
+    let message = format!("Failed to pull image \"x\": {}", "e".repeat(900));
     let cause = pull_cause(&message).expect("a cause");
     assert_eq!(cause.chars().count(), MAX_CAUSE_CHARS + 1);
     assert!(cause.ends_with('…'));
@@ -654,4 +654,12 @@ async fn the_debug_policy_blocks_an_attach() {
         other => panic!("expected one Failed, got {other:?}"),
     }
     assert!(api.requests().is_empty(), "no request left the client");
+}
+
+#[test]
+fn a_usual_pull_cause_is_kept_whole() {
+    let message = "Failed to pull image \"registry.invalid/x:1\": failed to pull and unpack image \"registry.invalid/x:1\": failed to resolve reference \"registry.invalid/x:1\": failed to do request: Head \"https://registry.invalid/v2/x/manifests/1\": dial tcp: lookup registry.invalid on 172.19.0.1:53: no such host";
+    let cause = pull_cause(message).expect("a cause");
+    assert!(cause.ends_with("lookup registry.invalid on 172.19.0.1:53: no such host"));
+    assert!(!cause.contains('…'));
 }
