@@ -1,7 +1,8 @@
 use futures::Stream;
 use k8s_openapi::api::batch::v1::CronJob;
+use kube::Api;
 
-use crate::connection::ClusterConnection;
+use crate::connection::{ClusterConnection, ClusterError};
 use crate::cron_schedule::{CronSchedule, ScheduleError};
 use crate::namespace::NamespaceScope;
 use crate::pod_status::non_negative;
@@ -54,6 +55,20 @@ impl ClusterConnection {
             "watching cron jobs",
             cron_job_summary,
         )
+    }
+}
+
+impl ClusterConnection {
+    /// One cron job by one GET: after a Resume the app waits for the run the controller starts.
+    /// A 404 is `ClusterError::Api { code: 404 }`.
+    pub async fn cron_job(
+        &self,
+        namespace: &str,
+        name: &str,
+    ) -> Result<CronJobSummary, ClusterError> {
+        let api = Api::<CronJob>::namespaced(self.client().clone(), namespace);
+        let cron_job = self.run("reading a cron job", api.get(name)).await?;
+        Ok(cron_job_summary(&cron_job))
     }
 }
 
@@ -256,5 +271,34 @@ mod tests {
         assert_eq!(summary.time_zone, None);
         assert!(summary.active_jobs.is_empty());
         assert!(summary.containers.is_empty());
+    }
+
+    #[tokio::test]
+    async fn one_get_reads_a_cron_job_by_name() {
+        use serde_json::json;
+
+        use crate::fake_api::FakeApi;
+        use crate::object_write::WritePolicy;
+
+        let body = json!({
+            "apiVersion": "batch/v1", "kind": "CronJob",
+            "metadata": { "name": "heartbeat", "namespace": "lab-batch" },
+            "spec": { "schedule": "*/2 * * * *", "suspend": false },
+            "status": { "active": [{ "name": "heartbeat-29" }] },
+        })
+        .to_string();
+        let (connection, api) =
+            FakeApi::connection(WritePolicy::Blocked, move |_| (200, body.clone()));
+        let cron_job = connection
+            .cron_job("lab-batch", "heartbeat")
+            .await
+            .expect("the cron job is readable");
+        assert_eq!(cron_job.active_jobs, ["heartbeat-29"]);
+        let requests = api.requests();
+        assert_eq!(requests[0].method, "GET");
+        assert_eq!(
+            requests[0].path,
+            "/apis/batch/v1/namespaces/lab-batch/cronjobs/heartbeat"
+        );
     }
 }

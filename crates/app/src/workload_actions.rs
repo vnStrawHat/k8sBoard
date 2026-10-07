@@ -18,6 +18,7 @@ use crate::app_shell::batch_write::{
     batch_plan,
 };
 use crate::app_shell::write_flow::WriteIntent;
+use crate::batch_rows::missed_run;
 use crate::cluster_registry::ClusterRef;
 use crate::kind_row::KindObject;
 use crate::live_sections::run_label;
@@ -145,9 +146,7 @@ pub(crate) fn workload_intent(
                 button: verb,
                 risk: action_risk(action),
                 operation: WriteOperation::SetCronJobSuspended { suspended },
-                warnings: next_run_note(cron_job, suspended, now)
-                    .into_iter()
-                    .collect(),
+                warnings: resume_notes(cron_job, suspended, now),
             }
         }
         (ResourceAction::TriggerCronJob, KindObject::CronJob(cron_job)) => Described {
@@ -171,21 +170,55 @@ pub(crate) fn workload_intent(
     intent_of(scope, &workload, described)
 }
 
-/// What a Resume tells before it is confirmed: `Next run: 10:45 UTC · in 9m`. `None` for a
-/// Suspend, and when the schedule has no run to name (an invalid one, or an `@every` before its
-/// first run).
-fn next_run_note(
+/// What a Resume tells before it is confirmed: the run that came due while it was suspended and
+/// what the controller does with it, then the next run. Nothing for a Suspend.
+fn resume_notes(
     cron_job: &CronJobSummary,
     suspended: bool,
     now: jiff::Timestamp,
-) -> Option<SharedString> {
+) -> Vec<SharedString> {
     if suspended {
-        return None;
+        return Vec::new();
     }
+    missed_run_note(cron_job, now)
+        .into_iter()
+        .chain(next_run_note(cron_job, now))
+        .collect()
+}
+
+/// `The 22:22 UTC run missed while suspended starts now (deadline 60 s)`: the controller starts
+/// the latest run that came due at once, unless its starting deadline has passed.
+fn missed_run_note(cron_job: &CronJobSummary, now: jiff::Timestamp) -> Option<SharedString> {
+    let run = missed_run(cron_job, now)?;
+    let when = run_label(&run.at.to_zoned(TimeZone::system()), now);
+    let deadline = match cron_job.starting_deadline_seconds {
+        Some(seconds) => format!("deadline {seconds} s"),
+        None => "no starting deadline".to_owned(),
+    };
+    let text = if run.starts {
+        format!("The {when} run missed while suspended starts now ({deadline})")
+    } else {
+        format!("The {when} run missed while suspended is skipped ({deadline} has passed)")
+    };
+    Some(text.into())
+}
+
+/// `Next run: 10:45 UTC · in 9m`. `None` when the schedule has no run to name (an invalid one,
+/// or an `@every` before its first run).
+fn next_run_note(cron_job: &CronJobSummary, now: jiff::Timestamp) -> Option<SharedString> {
     let next = cron_job.timetable.as_ref().ok()?.next_after(now)?;
-    let when = run_label(&next.timestamp().to_zoned(TimeZone::system()), now);
     let away = format_age(Some(now), next.timestamp());
+    let when = next_run_label(cron_job, now)?;
     Some(format!("Next run: {when} · in {away}").into())
+}
+
+/// `10:45 UTC`: when the schedule runs next after `now`.
+pub(crate) fn next_run_label(cron_job: &CronJobSummary, now: jiff::Timestamp) -> Option<String> {
+    let next = cron_job.timetable.as_ref().ok()?.next_after(now)?;
+    Some(run_label(
+        &next.timestamp().to_zoned(TimeZone::system()),
+        now,
+    ))
 }
 
 /// Restart rollout of `workload`, stamped at `now`.

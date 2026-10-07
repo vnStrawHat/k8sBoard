@@ -1487,7 +1487,53 @@ fn finish_commit(
                 }
             },
         }
+        if result.is_ok() {
+            follow_started_run(
+                shell,
+                intent,
+                created.as_deref(),
+                window.window_handle(),
+                cx,
+            );
+        }
     });
+}
+
+/// After a Trigger now or a Re-run: follows the Job it created to its end. After a Resume: reads
+/// the CronJob back and says what the controller did with the run that came due while it was
+/// suspended. Both announce later than the commit notice, which only says the write went through.
+fn follow_started_run(
+    shell: &WeakEntity<AppShell>,
+    intent: &WriteIntent,
+    created: Option<&str>,
+    window: AnyWindowHandle,
+    cx: &mut App,
+) {
+    let target = intent.request.target();
+    let Some(namespace) = target.namespace().map(str::to_owned) else {
+        return;
+    };
+    let cluster = intent.cluster.clone();
+    match (intent.action, intent.request.operation()) {
+        (ResourceAction::TriggerCronJob | ResourceAction::RerunJob, _) => {
+            let Some(job) = created.map(str::to_owned) else {
+                return;
+            };
+            let _ = shell.update(cx, |shell, cx| {
+                shell.watch_job(cluster, namespace, job, window, cx);
+            });
+        }
+        (
+            ResourceAction::SuspendCronJob,
+            WriteOperation::SetCronJobSuspended { suspended: false },
+        ) => {
+            let name = target.name().to_owned();
+            let _ = shell.update(cx, |shell, cx| {
+                shell.watch_resume(cluster, namespace, name, window, cx);
+            });
+        }
+        _ => {}
+    }
 }
 
 /// After a Scale of a workload that an HPA targets: follows its replicas for a while, because the

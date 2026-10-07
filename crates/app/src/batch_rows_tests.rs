@@ -415,6 +415,47 @@ fn cron_run_deadline_defaults_to_one_hundred_seconds() {
 }
 
 #[test]
+fn a_resume_meets_the_latest_run_that_came_due() {
+    let cron = cron_ran_at_ten();
+    // 10:05 and 10:10 came due; the latest, 10:10, is 30 s old and inside the 60 s deadline.
+    assert_eq!(
+        missed_run(&cron, time("2024-10-04T10:10:30Z")),
+        Some(MissedRun {
+            at: time("2024-10-04T10:10:00Z"),
+            starts: true
+        })
+    );
+    // 90 s old: the controller skips it.
+    assert_eq!(
+        missed_run(&cron, time("2024-10-04T10:11:30Z")),
+        Some(MissedRun {
+            at: time("2024-10-04T10:10:00Z"),
+            starts: false
+        })
+    );
+    // Nothing came due yet.
+    assert_eq!(missed_run(&cron, time("2024-10-04T10:04:00Z")), None);
+}
+
+#[test]
+fn a_run_without_a_starting_deadline_always_starts() {
+    let mut cron = cron_ran_at_ten();
+    cron.starting_deadline_seconds = None;
+    let missed = missed_run(&cron, time("2024-10-04T12:00:00Z")).expect("a run came due");
+    assert_eq!(missed.at, time("2024-10-04T12:00:00Z"));
+    assert!(missed.starts);
+}
+
+#[test]
+fn an_every_schedule_misses_no_run() {
+    let mut cron = cron_ran_at_ten();
+    cron.schedule = "@every 5m".to_owned();
+    cron.timetable = cluster::CronSchedule::parse("@every 5m", None)
+        .map(|timetable| timetable.anchored_at(cron.last_schedule_at));
+    assert_eq!(missed_run(&cron, time("2024-10-04T12:00:00Z")), None);
+}
+
+#[test]
 fn cron_never_run_counts_from_creation() {
     let mut cron = cron_job();
     cron.created_at = Some(time("2024-10-04T10:01:00Z"));

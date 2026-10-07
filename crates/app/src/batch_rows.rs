@@ -226,7 +226,8 @@ fn last_run(cron_job: &CronJobSummary) -> CronState {
     }
 }
 
-/// The controller starts a Job at most `startingDeadlineSeconds` late, and 100 s when unset.
+/// The controller starts a Job at most `startingDeadlineSeconds` late. With none set the state still
+/// allows 100 s of grace before calling a run missed; the diagnosis never quotes it as a deadline.
 const DEFAULT_STARTING_DEADLINE_SECONDS: i64 = 100;
 
 /// `cron_state` plus the one rule that needs the clock: the first run after the last schedule
@@ -259,6 +260,47 @@ pub(crate) fn cron_state_at(cron_job: &CronJobSummary, now: jiff::Timestamp) -> 
         return state;
     }
     CronState::Missed { expected_at }
+}
+
+/// A run that came due while the CronJob did not run, as a Resume meets it: the controller starts
+/// the latest one at once when its `startingDeadlineSeconds` still allows (none set: always).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct MissedRun {
+    pub(crate) at: jiff::Timestamp,
+    /// `false` when the starting deadline has passed: the controller skips the run.
+    pub(crate) starts: bool,
+}
+
+/// The most runs a Resume looks back over; a CronJob suspended longer than this (two weeks of a
+/// per-minute schedule) names no run, and the Resume confirm says nothing about it.
+const MAX_RUNS_SCANNED: usize = 20_000;
+
+/// The latest run due after the last schedule (after creation when it never ran) and not after
+/// `now`. `None` for an `@every` schedule, which has no calendar to miss, and when nothing came due.
+pub(crate) fn missed_run(cron_job: &CronJobSummary, now: jiff::Timestamp) -> Option<MissedRun> {
+    let timetable = cron_job.timetable.as_ref().ok()?;
+    if timetable.is_every() {
+        return None;
+    }
+    let mut since = cron_job.last_schedule_at.or(cron_job.created_at)?;
+    let mut latest = None;
+    for _ in 0..MAX_RUNS_SCANNED {
+        let Some(next) = timetable.next_after(since) else {
+            break;
+        };
+        let at = next.timestamp();
+        if at > now {
+            return latest.map(|at| MissedRun {
+                at,
+                starts: cron_job.starting_deadline_seconds.is_none_or(|deadline| {
+                    now.as_second().saturating_sub(at.as_second()) <= deadline.max(0)
+                }),
+            });
+        }
+        latest = Some(at);
+        since = at;
+    }
+    None
 }
 
 /// The first run due after the active Job started, once it is past: a CronJob with `concurrencyPolicy:

@@ -151,3 +151,31 @@ fn job_keeps_deadline_and_ttl() {
         (None, None)
     );
 }
+
+#[tokio::test]
+async fn one_get_reads_a_job_by_name() {
+    use serde_json::json;
+
+    use crate::fake_api::FakeApi;
+    use crate::object_write::WritePolicy;
+
+    let body = json!({
+        "apiVersion": "batch/v1", "kind": "Job",
+        "metadata": { "name": "report-failed-manual-x1", "namespace": "lab-batch" },
+        "status": { "failed": 1, "conditions": [{ "type": "Failed", "status": "True" }] },
+    })
+    .to_string();
+    let (connection, api) = FakeApi::connection(WritePolicy::Blocked, move |_| (200, body.clone()));
+    let job = connection
+        .job("lab-batch", "report-failed-manual-x1")
+        .await
+        .expect("the job is readable");
+    assert_eq!((job.status, job.failed), (JobStatus::Failed, 1));
+    let requests = api.requests();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].method, "GET");
+    assert_eq!(
+        requests[0].path,
+        "/apis/batch/v1/namespaces/lab-batch/jobs/report-failed-manual-x1"
+    );
+}

@@ -2,9 +2,10 @@ use std::fmt;
 
 use futures::Stream;
 use k8s_openapi::api::batch::v1::{Job, JobCondition};
+use kube::Api;
 use kube::runtime::watcher;
 
-use crate::connection::ClusterConnection;
+use crate::connection::{ClusterConnection, ClusterError};
 use crate::namespace::NamespaceScope;
 use crate::pod_status::non_negative;
 use crate::resource_watch::{WatchUpdate, selected_summary_watch, summary_watch};
@@ -75,6 +76,14 @@ impl ClusterConnection {
         scope: NamespaceScope,
     ) -> impl Stream<Item = WatchUpdate<JobSummary>> + Send + 'static {
         summary_watch(self, self.scoped_apis(&scope), "watching jobs", job_summary)
+    }
+
+    /// One job by one GET: the app follows a job it started to its end without a list of jobs. A
+    /// 404 is `ClusterError::Api { code: 404 }`.
+    pub async fn job(&self, namespace: &str, name: &str) -> Result<JobSummary, ClusterError> {
+        let api = Api::<Job>::namespaced(self.client().clone(), namespace);
+        let job = self.run("reading a job", api.get(name)).await?;
+        Ok(job_summary(&job))
     }
 
     /// Watches every job of `namespace` as one drawer-scoped watch; the caller keeps the

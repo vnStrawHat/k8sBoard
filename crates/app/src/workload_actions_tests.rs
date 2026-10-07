@@ -411,6 +411,59 @@ fn only_a_resume_names_the_next_run() {
     assert!(notes[0].contains(" · in "), "{}", notes[0]);
 }
 
+/// A suspended `*/5` CronJob whose last run was 12 minutes before `now()`: the latest run that came
+/// due is 200 s old.
+fn suspended_for_a_while(deadline: Option<i64>) -> KindObject {
+    let mut cron = cron_job("reconcile", "Allow", 0);
+    cron.is_suspended = true;
+    cron.last_schedule_at =
+        Some(jiff::Timestamp::from_second(now().as_second() - 720).expect("a valid timestamp"));
+    cron.starting_deadline_seconds = deadline;
+    KindObject::CronJob(cron)
+}
+
+#[test]
+fn a_resume_says_the_missed_run_starts_now_inside_its_deadline() {
+    let resume = intent(
+        ResourceAction::SuspendCronJob,
+        &suspended_for_a_while(Some(300)),
+    );
+    let notes = warnings(&resume);
+    assert_eq!(notes.len(), 2, "{notes:?}");
+    assert!(
+        notes[0].starts_with("The ")
+            && notes[0].ends_with(" run missed while suspended starts now (deadline 300 s)"),
+        "{}",
+        notes[0]
+    );
+    assert!(notes[1].starts_with("Next run: "), "{}", notes[1]);
+}
+
+#[test]
+fn a_resume_without_a_deadline_still_starts_the_missed_run() {
+    let resume = intent(ResourceAction::SuspendCronJob, &suspended_for_a_while(None));
+    assert!(
+        warnings(&resume)[0]
+            .ends_with("run missed while suspended starts now (no starting deadline)"),
+        "{:?}",
+        warnings(&resume)
+    );
+}
+
+#[test]
+fn a_resume_says_the_missed_run_is_skipped_after_its_deadline() {
+    let resume = intent(
+        ResourceAction::SuspendCronJob,
+        &suspended_for_a_while(Some(60)),
+    );
+    assert!(
+        warnings(&resume)[0]
+            .ends_with("run missed while suspended is skipped (deadline 60 s has passed)"),
+        "{:?}",
+        warnings(&resume)
+    );
+}
+
 #[test]
 fn a_resume_of_an_invalid_schedule_names_no_run() {
     let mut cron = cron_job("reconcile", "Allow", 0);

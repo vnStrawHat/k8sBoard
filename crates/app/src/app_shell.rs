@@ -158,6 +158,8 @@ pub(crate) mod drain_driver;
 mod edit_yaml_flow;
 #[path = "hpa_watch.rs"]
 mod hpa_watch;
+#[path = "job_watch.rs"]
+mod job_watch;
 #[path = "keyboard_navigation.rs"]
 mod keyboard_navigation;
 #[path = "leaving_work.rs"]
