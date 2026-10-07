@@ -47,17 +47,18 @@ const AGE: usize = 8;
 
 /// Name takes most of the spare width, up to a cap: pod names are the longest values. Status is
 /// sized to its longest label (`CrashLoopBackOff`) and Node to a short host name, so the width
-/// they would keep unused goes to Name.
+/// they would keep unused goes to Name. At 1024 px Age, then Memory, then CPU are shed (`sheds`) so
+/// the table needs no horizontal scroll and Name keeps about 28 characters.
 const POD_COLUMNS: [KindColumn; 9] = [
-    column("Name", 200., Align::Left).grows(4).up_to(640.),
+    column("Name", 280., Align::Left).grows(4).up_to(640.),
     column("Status", 160., Align::Left),
     column("Ready", 70., Align::Left),
     column("Restarts", 80., Align::Right),
-    column("CPU", 70., Align::Right),
-    column("Memory", 80., Align::Right),
+    column("CPU", 70., Align::Right).sheds(3),
+    column("Memory", 80., Align::Right).sheds(2),
     column("Node", 110., Align::Left).grows(2).up_to(260.),
     column(IMAGE_COLUMN_NAME, 200., Align::Left).grows(1),
-    column("Age", 70., Align::Right),
+    column("Age", 70., Align::Right).sheds(1),
 ];
 
 /// Rows come straight from the sessions, so the table never owns a copy of the pods.
@@ -576,6 +577,38 @@ mod tests {
     use cluster::{PodStatus, ReadyCount, StatusReason};
 
     use super::*;
+
+    /// The names of the columns shown by default in a window `window` px wide (less the sidebar).
+    fn default_columns_at(window: f32) -> Vec<String> {
+        let plan = pod_plan();
+        let hidden = BTreeSet::from([IMAGE]);
+        crate::table_layout::layout_columns(
+            &plan.specs,
+            plan.flexible,
+            gpui_kit::px(window) - crate::navigation::SIDEBAR_WIDTH,
+            &hidden,
+        )
+        .columns
+        .iter()
+        .map(|column| column.name.to_string())
+        .collect()
+    }
+
+    #[test]
+    fn at_1320_px_the_pod_table_keeps_every_default_column() {
+        assert_eq!(default_columns_at(1320.).len(), 1 + 8);
+    }
+
+    #[test]
+    fn at_1024_px_the_pod_table_sheds_age_memory_and_cpu_to_avoid_a_horizontal_scroll() {
+        let names = default_columns_at(1024.);
+        assert!(!names.contains(&"Age".to_owned()), "{names:?}");
+        assert!(!names.contains(&"Memory".to_owned()), "{names:?}");
+        assert!(!names.contains(&"CPU".to_owned()), "{names:?}");
+        assert!(names.contains(&"Name".to_owned()));
+        assert!(names.contains(&"Status".to_owned()));
+        assert!(names.contains(&"Node".to_owned()));
+    }
 
     fn pod() -> PodSummary {
         PodSummary {

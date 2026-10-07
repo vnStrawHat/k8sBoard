@@ -115,13 +115,14 @@ pub(crate) fn layout_columns(
     table_width: Pixels,
     hidden: &BTreeSet<usize>,
 ) -> TableColumns {
-    let visible: Vec<(usize, &KindColumn)> = specs
+    let mut visible: Vec<(usize, &KindColumn)> = specs
         .iter()
         .enumerate()
         .filter(|(index, _)| *index == flexible || !hidden.contains(index))
         .collect();
-    let shown: Vec<&KindColumn> = visible.iter().map(|(_, spec)| *spec).collect();
     let available = f32::from(table_width - TABLE_GUTTER - SELECT_WIDTH);
+    shed_columns(&mut visible, flexible, available);
+    let shown: Vec<&KindColumn> = visible.iter().map(|(_, spec)| *spec).collect();
     let widths = distribute_spare_width(&shown, available);
     let select = Column::new("select", "")
         .width(SELECT_WIDTH)
@@ -148,6 +149,27 @@ pub(crate) fn layout_columns(
         logical: std::iter::once(None)
             .chain(visible.iter().map(|(index, _)| Some(*index)))
             .collect(),
+    }
+}
+
+/// Drops columns that have a `shed_order`, the lowest first, until the rest fit in `available`, so
+/// a narrow window (1024 px) shows the table without a horizontal scroll. Before the first
+/// measure `available` is not positive and every column stays.
+fn shed_columns(visible: &mut Vec<(usize, &KindColumn)>, flexible: usize, available: f32) {
+    if available <= 0. {
+        return;
+    }
+    while visible.iter().map(|(_, spec)| spec.width).sum::<f32>() > available {
+        let next = visible
+            .iter()
+            .enumerate()
+            .filter(|(_, (index, spec))| *index != flexible && spec.shed_order > 0)
+            .min_by_key(|(_, (_, spec))| spec.shed_order)
+            .map(|(position, _)| position);
+        let Some(position) = next else {
+            return;
+        };
+        visible.remove(position);
     }
 }
 

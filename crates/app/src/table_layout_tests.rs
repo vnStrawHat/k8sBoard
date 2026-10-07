@@ -287,3 +287,39 @@ mod checkbox_clicks {
         }
     }
 }
+
+fn sheddable_specs() -> Vec<KindColumn> {
+    vec![
+        column("Name", 200., Align::Left).grows(1),
+        column("Status", 160., Align::Left),
+        column("Memory", 80., Align::Right).sheds(2),
+        column("Age", 70., Align::Right).sheds(1),
+    ]
+}
+
+#[test]
+fn layout_columns_keeps_every_column_when_the_table_is_wide_enough() {
+    // 510 px of columns plus the gutter and the checkbox column.
+    let layout = layout_columns(&sheddable_specs(), 0, px(570.), &BTreeSet::new());
+    assert_eq!(names(&layout), ["Name", "Status", "Memory", "Age"]);
+}
+
+#[test]
+fn layout_columns_sheds_the_lowest_order_first() {
+    let layout = layout_columns(&sheddable_specs(), 0, px(569.), &BTreeSet::new());
+    assert_eq!(names(&layout), ["Name", "Status", "Memory"]);
+    let narrower = layout_columns(&sheddable_specs(), 0, px(489.), &BTreeSet::new());
+    assert_eq!(names(&narrower), ["Name", "Status"]);
+}
+
+#[test]
+fn layout_columns_never_sheds_a_column_without_an_order() {
+    let layout = layout_columns(&sheddable_specs(), 0, px(100.), &BTreeSet::new());
+    assert_eq!(names(&layout), ["Name", "Status"]);
+}
+
+#[test]
+fn layout_columns_keeps_every_column_before_the_first_measure() {
+    let layout = layout_columns(&sheddable_specs(), 0, Pixels::ZERO, &BTreeSet::new());
+    assert_eq!(names(&layout), ["Name", "Status", "Memory", "Age"]);
+}

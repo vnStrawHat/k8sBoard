@@ -98,6 +98,9 @@ pub(crate) struct KindColumn {
     pub(crate) align: Align,
     pub(crate) weight: u8,
     pub(crate) max_width: f32,
+    /// 0 for a column that always stays. Otherwise the column is dropped when the table is too
+    /// narrow for the others, the lowest number first (see `shed_columns`).
+    pub(crate) shed_order: u8,
 }
 
 pub(crate) const fn column(name: &'static str, width: f32, align: Align) -> KindColumn {
@@ -107,6 +110,7 @@ pub(crate) const fn column(name: &'static str, width: f32, align: Align) -> Kind
         align,
         weight: 0,
         max_width: 0.,
+        shed_order: 0,
     }
 }
 
@@ -116,13 +120,21 @@ impl KindColumn {
         Self { weight, ..self }
     }
 
+    /// Gives way when the table is too narrow: `order` 1 goes first, then 2, and so on.
+    pub(crate) const fn sheds(self, order: u8) -> Self {
+        Self {
+            shed_order: order,
+            ..self
+        }
+    }
+
     /// Stops growing at `max_width`.
     pub(crate) const fn up_to(self, max_width: f32) -> Self {
         Self { max_width, ..self }
     }
 }
 
-const AGE_COLUMN: KindColumn = column("Age", 70., Align::Right);
+const AGE_COLUMN: KindColumn = column("Age", 70., Align::Right).sheds(1);
 
 /// The container images of a workload; hidden until the Columns menu asks for it.
 const IMAGE_COLUMN: KindColumn = column(IMAGE_COLUMN_NAME, 200., Align::Left).grows(1);

@@ -54,25 +54,27 @@ const USAGE_BAR_WIDTH: f32 = 28.;
 /// What the pods request, not what they use, and the labels: shown only when the user asks.
 const HIDDEN_BY_DEFAULT: [usize; 3] = [CPU_REQUESTED, MEMORY_REQUESTED, LABELS];
 
-/// The base widths of the default columns add up to what a 1100 px window leaves for the table, so
-/// Memory and Age stay inside it. At 1320 px both Name and Taints read whole enough: Taints gets its
-/// share first, up to 150 px (`workload:NoSched` and `maintenance:NoSched` stay apart with the end of
-/// the key cut), Name takes the rest and still holds a 26-character node name. The CPU and Memory
-/// bars are short and Roles is cut early to pay for that. Below the base widths Taints is the column
-/// that gives way first. Internal IP is fixed at the width of `255.255.255.255`, and Version at that
-/// of `v1.29.5`.
+/// Name starts at 190 px and Taints at 100 px so both read in a 1024 px window. The columns that never shed
+/// (Name, Status, Taints, Internal IP, CPU, Memory) add up to what a 1024 px window leaves for the
+/// table; Age, then Version (the chip above the table names it), then Roles are shed (`sheds`) when
+/// the table is narrower than all of them. At 1320 px both Name and Taints read whole enough: Taints
+/// gets its share first, up to 150 px (`workload:NoSched` and `maintenance:NoSched` stay apart with
+/// the end of the key cut), Name takes the rest, up to 300 px, and still holds a 26-character node
+/// name. The CPU and Memory bars are short and Roles is cut early to pay for that. Below the base
+/// widths Taints is the column that gives way first. Internal IP is fixed at the width of
+/// `255.255.255.255`, and Version at that of `v1.29.5`.
 const NODE_COLUMNS: [KindColumn; 12] = [
-    column("Name", 110., Align::Left).grows(2).up_to(300.),
+    column("Name", 190., Align::Left).grows(2).up_to(300.),
     column("Status", 84., Align::Left),
-    column("Roles", 84., Align::Left),
-    column("Taints", 52., Align::Left).grows(6).up_to(150.),
-    column("Version", 90., Align::Left),
+    column("Roles", 84., Align::Left).sheds(3),
+    column("Taints", 100., Align::Left).grows(6).up_to(150.),
+    column("Version", 90., Align::Left).sheds(2),
     column("Internal IP", 140., Align::Left),
     column("CPU", 80., Align::Left),
     column("Memory", 80., Align::Left),
     column("CPU req", 92., Align::Left),
     column("Mem req", 92., Align::Left),
-    column("Age", 56., Align::Right),
+    column("Age", 56., Align::Right).sheds(1),
     column("Labels", 200., Align::Left).grows(2).up_to(420.),
 ];
 
@@ -905,14 +907,15 @@ mod tests {
     }
 
     #[test]
-    fn the_base_widths_fit_a_1100_px_window_and_taints_grow_before_name() {
+    fn the_columns_that_stay_fit_a_1024_px_window_and_taints_grow_before_name() {
         // The window less the 220 px sidebar, the table gutter, and the checkbox column.
-        let room = 1100. - 220. - 28. - 32.;
-        // The request columns are hidden by default, so they take no room until asked for.
+        let room = 1024. - 220. - 28. - 32.;
+        // The request columns are hidden by default, so they take no room until asked for; the columns
+        // that shed (Age, Version, Roles) are not counted, they leave when the table is too narrow.
         let base: f32 = NODE_COLUMNS
             .iter()
             .enumerate()
-            .filter(|(index, _)| !HIDDEN_BY_DEFAULT.contains(index))
+            .filter(|(index, column)| !HIDDEN_BY_DEFAULT.contains(index) && column.shed_order == 0)
             .map(|(_, column)| column.width)
             .sum();
         assert!(base <= room, "{base} px of columns for {room} px");
@@ -942,6 +945,32 @@ mod tests {
 
     fn name_capacity(window: f32) -> usize {
         capacity_of(NAME, window)
+    }
+
+    #[test]
+    fn at_1320_px_the_node_table_keeps_every_default_column() {
+        let plan = node_plan();
+        let hidden = BTreeSet::from(HIDDEN_BY_DEFAULT);
+        let layout = layout_columns(&plan.specs, plan.flexible, px(1320. - 220.), &hidden);
+        assert_eq!(layout.columns.len(), 1 + 9);
+    }
+
+    #[test]
+    fn at_1024_px_the_node_table_sheds_age_version_and_roles_and_keeps_taints_readable() {
+        let plan = node_plan();
+        let hidden = BTreeSet::from(HIDDEN_BY_DEFAULT);
+        let layout = layout_columns(&plan.specs, plan.flexible, px(1024. - 220.), &hidden);
+        let names: Vec<_> = layout.columns.iter().map(|c| c.name.to_string()).collect();
+        assert!(!names.contains(&"Age".to_owned()), "{names:?}");
+        assert!(!names.contains(&"Roles".to_owned()), "{names:?}");
+        assert!(!names.contains(&"Version".to_owned()), "{names:?}");
+        let taints = layout
+            .columns
+            .iter()
+            .find(|c| c.name == "Taints")
+            .map(|c| c.width);
+        assert!(taints >= Some(px(100.)), "{taints:?}");
+        assert!(name_capacity(1024.) >= 16, "{}", name_capacity(1024.));
     }
 
     #[test]
