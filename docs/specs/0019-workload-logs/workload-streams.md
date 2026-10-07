@@ -59,7 +59,7 @@ Pods not admitted for lack of slots wait; the next sync (any pod update or any s
 |---|---|---|
 | none (no members yet) | Info | `Waiting for pods of {label}` (also the body text) |
 | some Connecting, none Streaming | Info | `Opening {n} streams…` |
-| any Streaming | Ok | `Streaming · {p} pods · {count}` (`Paused · …` when scrolled up) |
+| any Streaming | Ok | `Streaming · {p} pods · {count}` (`Paused · …` when scrolled up); `{p}` counts the pods with a Streaming stream, and a stream is Streaming from its `Started` or its first `Lines`, whichever comes first |
 | all Failed | Bad | `Failed · {count}`, Alert with the first failure message |
 | otherwise (all Ended or mixed Ended/Failed) | Done | `Streams ended · {count}` |
 
