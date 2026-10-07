@@ -32,8 +32,16 @@ Status: **draft 2026-10-07**, from the round-3 walkthrough (U48, proposal 14, fi
 
 ## Acceptance
 
-- [ ] A1 Namespaces row menu, key `V`, and the palette offer Compare with…; the palette also has Compare namespaces.
-- [ ] A2 The dialog lists, per kind, Only in A, Only in B and Differs with field change lines; equal objects are counted in the header.
-- [ ] A3 Open diff on a differing object shows the line diff of the two cleaned manifests, Secret values as tokens.
-- [ ] A4 Nothing blocks the main thread; a failed or forbidden kind is a line, not a failure.
-- [ ] A5 With two namespaces in scope a drawer link reads `namespace/name`.
+- [x] A1 Namespaces row menu, key `V`, and the palette offer Compare with…; the palette also has Compare namespaces.
+- [x] A2 The dialog lists, per kind, Only in A, Only in B and Differs with field change lines; equal objects are counted in the header.
+- [x] A3 Open diff on a differing object shows the line diff of the two cleaned manifests, Secret values as tokens.
+- [x] A4 Nothing blocks the main thread; a failed or forbidden kind is a line, not a failure.
+- [x] A5 With two namespaces in scope a drawer link reads `namespace/name`.
+
+## As built (2026-10-07)
+
+- Data: `crates/cluster/src/namespace_compare.rs`; `clean_value` was split out of `clean_yaml` (`object_edit.rs`) and `field_changes` made `pub(crate)` (`edit_preview.rs`).
+- View: `namespace_compare_rows.rs` (pure lines), `namespace_compare_view.rs` (dialog), `namespace_compare_flow.rs` (the shell entry points). Keys: `V` on a Namespaces row, `Ctrl+Shift+D` for the command; both on the sheet.
+- The palette pairs `Compare with…` with every namespace (like View YAML), and lists `Compare namespaces` as an Actions command.
+- P33 lives in `drawer::link_text`; the scope is read through the `ActiveConnection` global's session.
+- Not done: ticking two rows plus a selection bar action (optional in the brief); a virtual list for very long comparisons (the lines are one scroll column).
