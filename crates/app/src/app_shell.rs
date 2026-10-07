@@ -184,6 +184,8 @@ mod port_forward_dialogs;
 mod port_forward_open;
 #[path = "port_forward_page.rs"]
 mod port_forward_page;
+#[path = "replacement_watch.rs"]
+mod replacement_watch;
 #[path = "resource_edit_flow.rs"]
 mod resource_edit_flow;
 #[path = "revision_change_flow.rs"]

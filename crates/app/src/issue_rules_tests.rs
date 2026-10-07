@@ -686,6 +686,31 @@ fn cpu_cause_does_not_claim_throttling() {
 }
 
 #[test]
+fn the_cpu_hint_names_a_container_that_ran_at_its_limit() {
+    let mut api = serving("api");
+    api.resources = vec![limit("cpu", "300m")];
+    let pod = running_pod(vec![api]);
+    let at_limit = pod_history(&[usage(300, 100)]);
+    assert_eq!(
+        cpu_limit_hint(&pod, &at_limit).as_deref(),
+        Some("300m = limit: throttled")
+    );
+    // A sample rounds to the millicore: 299m of 300m is a pod at its limit.
+    let rounded = pod_history(&[usage(299, 100)]);
+    assert_eq!(
+        cpu_limit_hint(&pod, &rounded).as_deref(),
+        Some("299m = limit: throttled")
+    );
+    let near = pod_history(&[usage(280, 100)]);
+    assert_eq!(
+        cpu_limit_hint(&pod, &near).as_deref(),
+        Some("280m of 300m limit: near throttling")
+    );
+    let calm = pod_history(&[usage(100, 100)]);
+    assert_eq!(cpu_limit_hint(&pod, &calm), None);
+}
+
+#[test]
 fn no_limit_no_usage_finding() {
     let pod = running_pod(vec![serving("api")]);
     let history = pod_history(&[usage(5_000, 9_000), usage(5_000, 9_000)]);

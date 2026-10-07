@@ -274,6 +274,24 @@ impl BatchIntent {
             .collect()
     }
 
+    /// The pods (`namespace`, `name`) an Evict batch got accepted: the app follows their
+    /// replacements. A pod the cluster no longer lists by then cannot be followed.
+    fn evicted_pods(&self, results: &[ItemProgress]) -> Vec<(String, String)> {
+        if self.action != ResourceAction::EvictPod {
+            return Vec::new();
+        }
+        self.plan
+            .items
+            .iter()
+            .zip(results)
+            .filter(|(_, state)| matches!(state, ItemProgress::Done | ItemProgress::Pending(_)))
+            .filter_map(|(item, _)| {
+                let target = item.request.target();
+                Some((target.namespace()?.to_owned(), target.name().to_owned()))
+            })
+            .collect()
+    }
+
     /// What one commit's result means for its item.
     fn commit_progress(
         &self,
@@ -766,6 +784,9 @@ impl AppShell {
                 && !results.iter().all(ItemProgress::is_settled);
             let outcome = is_kept.then(|| (notice.clone(), batch.retry_batch(&results)));
             let watched = batch.watched_rollouts(&results);
+            let evicted = batch.evicted_pods(&results);
+            let evicted_cluster = cluster.clone();
+            let evicted_shell = shell.clone();
             let _ = cx.update_window(handle, |_, window, cx| {
                 // Only our own dialog is touched, and only while it is open. A clean run closes
                 // it; anything else keeps it as the per-object result, with Close and Retry.
@@ -807,6 +828,11 @@ impl AppShell {
                     None => notify_with(window, cx, notice, is_success),
                 }
             });
+            if !evicted.is_empty() {
+                let _ = evicted_shell.update(cx, |shell, cx| {
+                    shell.watch_replacements(evicted_cluster, &evicted, handle, cx);
+                });
+            }
         })
         .detach();
     }

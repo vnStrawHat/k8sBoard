@@ -18,6 +18,7 @@ use crate::event_rows::message_line;
 use crate::issue::{Finding, IssueAction, IssueObject, IssueRule, IssueSeverity};
 use crate::issue_board::IssueInputs;
 use crate::kind_row::{JOB_KIND, pod_workload};
+use crate::metrics_history::PodUsageHistory;
 use crate::node_usage::node_usage;
 use crate::pod_diagnosis::{DiagnosisCause, PodDiagnosis, is_diagnosis_skipped, pod_diagnosis};
 use crate::status_tone::{PRESSURE_CONDITIONS, StatusTone, active_pressures, node_condition_tone};
@@ -413,32 +414,57 @@ fn memory_finding(pod: &PodSummary, inputs: &IssueInputs) -> Option<Finding> {
     })
 }
 
-/// The newest CPU sample against the limit. Throttling is not measured, so the text claims none.
-fn cpu_finding(pod: &PodSummary, inputs: &IssueInputs) -> Option<Finding> {
-    let usage = inputs.pod_usage?;
+/// A serving container whose newest CPU sample is at least `USAGE_WARN_RATIO` of its limit, with
+/// the sample and the limit in cores.
+fn cpu_near_limit<'a>(
+    pod: &'a PodSummary,
+    usage: &PodUsageHistory,
+) -> Option<(&'a ContainerSummary, f64, f64)> {
     serving_containers(pod).find_map(|container| {
         let limit = CpuAmount::parse(resource_limit(container, CPU)?)?.cores();
         if limit <= 0. {
             return None;
         }
         let newest = usage.latest_container(&pod.namespace, &pod.name, &container.name)?;
-        if newest.cpu.cores() < USAGE_WARN_RATIO * limit {
-            return None;
-        }
-        let cause = format!(
-            "Container {} uses {} of its {} CPU limit.",
-            container.name,
-            Measure::Cpu.format(newest.cpu.cores()),
-            Measure::Cpu.format(limit),
-        );
-        Some(usage_finding(
-            pod,
-            container,
-            IssueRule::PodCpu,
-            "At CPU limit",
-            cause,
-        ))
+        let cores = newest.cpu.cores();
+        (cores >= USAGE_WARN_RATIO * limit).then_some((container, cores, limit))
     })
+}
+
+/// `300m = limit: throttled` for a pod whose container ran at its CPU limit: what a replacement
+/// that lands on the same node will do too.
+pub(crate) fn cpu_limit_hint(pod: &PodSummary, usage: &PodUsageHistory) -> Option<String> {
+    let (_, cores, limit) = cpu_near_limit(pod, usage)?;
+    // A sample rounds to the millicore, so a pod pinned at its limit can read 299m of 300m.
+    let at_limit = cores >= 0.99 * limit;
+    let used = Measure::Cpu.format(cores);
+    Some(if at_limit {
+        format!("{used} = limit: throttled")
+    } else {
+        format!(
+            "{used} of {} limit: near throttling",
+            Measure::Cpu.format(limit)
+        )
+    })
+}
+
+/// The newest CPU sample against the limit. Throttling is not measured, so the text claims none.
+fn cpu_finding(pod: &PodSummary, inputs: &IssueInputs) -> Option<Finding> {
+    let usage = inputs.pod_usage?;
+    let (container, cores, limit) = cpu_near_limit(pod, usage)?;
+    let cause = format!(
+        "Container {} uses {} of its {} CPU limit.",
+        container.name,
+        Measure::Cpu.format(cores),
+        Measure::Cpu.format(limit),
+    );
+    Some(usage_finding(
+        pod,
+        container,
+        IssueRule::PodCpu,
+        "At CPU limit",
+        cause,
+    ))
 }
 
 fn usage_finding(

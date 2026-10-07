@@ -84,6 +84,10 @@ The 0033 `kind_warnings` run for `Removal::Delete` only, so the bare-pod line of
 
 No automatic retry of a 429 (decision 15). The Retry of the 0030 dialog, where offered, re-runs the dry-run.
 
+## Following the replacement (round 3, Q10)
+
+An accepted Evict of a pod that has a controller starts `watch_replacements` (`replacement_watch.rs`): every second, for at most 45 s, it reads the pod list the session already watches and takes the pod of the same namespace and controller that is newer than the evicted one (a new name, or the same name for a StatefulSet) as the replacement. The toast that follows reads `Evicted noisy-a: replacement noisy-c → k8sboard-lab-worker (same node)`, or `→ {node}` when it moved, `replacement … is Pending, no node yet` when no node was chosen by then; several pods read `1 of 2 replacements placed · 1 on the same node`. A same-node replacement adds the throttling hint of the evicted pod when its container ran at its CPU limit: ` · 300m = limit: throttled` (`cpu_limit_hint`, from the usage history; ` · 280m of 300m limit: near throttling` from 90 % of the limit). Nothing is said when no replacement was seen in time or the pod was no longer listed.
+
 ## Audit
 
 One line per commit through `checked_write`: `Restart pod` with `deleteOptions.propagationPolicy = Background`; `Evict` with `pods/eviction = grace pod default`. Note checkbox as 0030. Dry-runs and 429 refusals write none.
