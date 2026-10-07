@@ -89,7 +89,12 @@ fn hpa_label_names_the_range() {
     assert_eq!(intent.risk, ActionRisk::Change);
     assert_eq!(
         intent.request.operation(),
-        &WriteOperation::SetHpaReplicaRange { min: 3, max: 20 }
+        &WriteOperation::SetHpaReplicaRange {
+            min: 3,
+            max: 20,
+            previous_min: 2,
+            previous_max: 10,
+        }
     );
     assert_eq!(intent.request.target().namespace(), Some("team-a"));
 }

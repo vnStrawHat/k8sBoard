@@ -6,11 +6,12 @@
 
 use cluster::{
     AccessCheck, BindingSummary, BroadGroup, ConfigMapSummary, ConfigMapValues, CronJobSummary,
-    CronSchedule, DeploymentSummary, EndpointSliceSummary, EventSummary, Identity, IngressSummary,
-    JobSummary, LimitRangeLimit, LimitRangeSummary, NodeSummary, ObjectKind,
-    PersistentVolumeClaimSummary, PersistentVolumeSummary, PodSummary, PvcUsage, RbacSnapshot,
-    ReplicaSetSummary, ResourceQuotaSummary, RoleSummary, SecretSummary, Selector,
-    ServiceAccountSummary, ServiceSummary, Subject, SubjectKind, ValuePreview, VolumeSource,
+    CronSchedule, DeploymentSummary, EndpointSliceSummary, EventSummary,
+    HorizontalPodAutoscalerSummary, Identity, IngressSummary, JobSummary, LimitRangeLimit,
+    LimitRangeSummary, NodeSummary, ObjectKind, PersistentVolumeClaimSummary,
+    PersistentVolumeSummary, PodSummary, PvcUsage, RbacSnapshot, ReplicaSetSummary,
+    ResourceQuotaSummary, RoleSummary, SecretSummary, Selector, ServiceAccountSummary,
+    ServiceSummary, Subject, SubjectKind, ValuePreview, VolumeSource,
 };
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::tooltip::Tooltip;
@@ -65,7 +66,7 @@ use crate::storage_rows::phase_label;
 use crate::table_selection::{ClusterObject, ResourceKey};
 use crate::usage_format::{Measure, format_percent, usage_tone};
 use crate::who_can_view::coverage_notes;
-use crate::workload_actions::{PAUSED_REASON, RevisionTarget, image_tag};
+use crate::workload_actions::{PAUSED_REASON, RevisionTarget, hpa_targeting, image_tag};
 
 /// Bounds the render cost of a Deployment with very many ReplicaSets or a CronJob with many jobs.
 const MAX_LISTED_OBJECTS: usize = 10;
@@ -130,6 +131,9 @@ pub(crate) fn live_rows(
         }
         (LiveContent::ScalingEvents, KindObject::HorizontalPodAutoscaler(_)) => {
             scaling_events_rows(kind, row, live, now, cx)
+        }
+        (LiveContent::Autoscaler, KindObject::Deployment(_) | KindObject::StatefulSet(_)) => {
+            autoscaler_rows(&row.object, live, roll_back, cx)
         }
         (LiveContent::BlockedCreations, KindObject::ResourceQuota(quota)) => {
             match related_subject(kind, row) {
@@ -249,6 +253,8 @@ pub(crate) struct DrawerWriteGate {
     pub(crate) subject: ClusterObject,
     pub(crate) availability: ActionAvailability,
     pub(crate) restart: Vec<(ObjectKind, ActionAvailability)>,
+    /// Whether Edit min / max may run, for the Autoscaler row.
+    pub(crate) hpa_range: ActionAvailability,
 }
 
 /// The ReplicaSet list the drawer watches for this row, as it stands: `None` while the drawer
@@ -1981,6 +1987,76 @@ fn event_time_label(at: Option<jiff::Timestamp>, now: jiff::Timestamp, zone: &Ti
         Some(at) => run_label(&at.to_zoned(zone.clone()), now),
         None => "—".to_owned(),
     }
+}
+
+/// The link id of the Autoscaler row; one per drawer, so it only has to differ from the others.
+const AUTOSCALER_LINK_ID: usize = 60_000;
+
+/// `1–3 · at max`: the range the HPA keeps, and the end the workload stands on, if any. Pure.
+pub(crate) fn autoscaler_state_text(hpa: &HorizontalPodAutoscalerSummary) -> String {
+    let range = format!("{}\u{2013}{}", hpa.min_replicas, hpa.max_replicas);
+    if hpa.current_replicas >= hpa.max_replicas {
+        format!("{range} · at max")
+    } else if hpa.current_replicas <= hpa.min_replicas {
+        format!("{range} · at min")
+    } else {
+        range
+    }
+}
+
+/// The row of a Deployment or StatefulSet drawer that names the HPA scaling it, from the HPAs the
+/// session holds: a link to the HPA, its range, and Edit min / max. Nothing when none targets it.
+fn autoscaler_rows(
+    object: &KindObject,
+    live: &LiveCluster,
+    gate: Option<&DrawerWriteGate>,
+    cx: &Context<AppShell>,
+) -> Vec<AnyElement> {
+    let (kind, namespace, name) = match object {
+        KindObject::Deployment(d) => (ObjectKind::Deployment, &d.namespace, &d.name),
+        KindObject::StatefulSet(s) => (ObjectKind::StatefulSet, &s.namespace, &s.name),
+        _ => return Vec::new(),
+    };
+    let Some(hpa) = hpa_targeting(live.loaded_hpas(), kind, namespace, name) else {
+        return Vec::new();
+    };
+    let target = ResourceKey::Kind {
+        kind: ResourceKind::HorizontalPodAutoscalers,
+        namespace: Some(hpa.namespace.clone()),
+        name: hpa.name.clone(),
+    };
+    let button = Button::new("autoscaler-edit")
+        .label("Edit min / max…")
+        .xsmall()
+        .ghost();
+    let button = match gate {
+        Some(gate) => match &gate.hpa_range {
+            ActionAvailability::Enabled => {
+                let object = ClusterObject::new(gate.subject.cluster.clone(), target.clone());
+                // The popover opens over the drawer: the HPA comes from the feed that found it,
+                // so the HPAs screen need not be shown.
+                button.on_click(cx.listener(move |shell, _, window, cx| {
+                    shell.open_hpa_range_popover(&object, window, cx);
+                }))
+            }
+            ActionAvailability::Disabled { reason } => {
+                button.disabled(true).tooltip(with_next_step(reason))
+            }
+        },
+        None => button.disabled(true).tooltip("Not connected"),
+    };
+    let link_text_value: SharedString = hpa.name.clone().into();
+    let value = h_flex()
+        .gap_2()
+        .items_center()
+        .child(link_text(AUTOSCALER_LINK_ID, &link_text_value, target, cx))
+        .child(
+            div()
+                .text_color(cx.theme().muted_foreground)
+                .child(autoscaler_state_text(hpa)),
+        )
+        .child(button);
+    vec![wide_detail_row("Autoscaler", value, cx).into_any_element()]
 }
 
 fn scaling_events_rows(

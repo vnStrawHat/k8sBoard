@@ -77,10 +77,12 @@ fn shell_audit(target: &ShellTarget, command: ShellCommand) -> (AuditObject, Vec
             AuditField {
                 path: "container".to_owned(),
                 value: Some(target.container.clone()),
+                from: None,
             },
             AuditField {
                 path: "command".to_owned(),
                 value: Some(command.to_owned()),
+                from: None,
             },
         ],
     )
@@ -96,6 +98,7 @@ fn start_audit(
     let field = |path: &str, value: &str| AuditField {
         path: path.to_owned(),
         value: Some(value.to_owned()),
+        from: None,
     };
     let pod = || AuditObject {
         kind: "Pod".to_owned(),
@@ -597,6 +600,7 @@ fn attach_intent(
         fields: vec![AuditField {
             path: "container".to_owned(),
             value: Some(target.container.clone()),
+            from: None,
         }],
         open: ConnectOpen::Attach(open),
     }

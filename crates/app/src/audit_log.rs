@@ -64,6 +64,9 @@ pub(crate) struct AuditField {
     pub(crate) path: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) value: Option<String>,
+    /// The value the field had before the change, for a write that knows it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) from: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -131,6 +134,7 @@ pub(crate) fn audit_entry(
         .map(|field| AuditField {
             path: field.path.into_owned(),
             value: field.value,
+            from: field.from,
         })
         .collect();
     AuditEntry {
@@ -229,6 +233,7 @@ pub(crate) fn drain_summary_entry(
     let count = |path: &str, value: usize| AuditField {
         path: path.to_owned(),
         value: Some(value.to_string()),
+        from: None,
     };
     // A drain that skips the budgets deletes its pods directly: nothing was evicted.
     let removed = match budgets {
@@ -257,6 +262,7 @@ pub(crate) fn drain_summary_entry(
             (budgets == BudgetPolicy::Skip).then(|| AuditField {
                 path: "disable_eviction".to_owned(),
                 value: Some("true".to_owned()),
+                from: None,
             }),
         ]
         .into_iter()
@@ -300,6 +306,7 @@ pub(crate) fn drain_in_flight_entry(
                             GracePeriod::PodDefault => "grace pod default".to_owned(),
                             GracePeriod::Seconds(seconds) => format!("grace {seconds}s"),
                         }),
+                        from: None,
                     },
                 ),
                 BudgetPolicy::Skip => (
@@ -308,6 +315,7 @@ pub(crate) fn drain_in_flight_entry(
                     AuditField {
                         path: "deleteOptions.propagationPolicy".to_owned(),
                         value: Some("Background".to_owned()),
+                        from: None,
                     },
                 ),
             }
@@ -322,6 +330,7 @@ pub(crate) fn drain_in_flight_entry(
             AuditField {
                 path: "spec.unschedulable".to_owned(),
                 value: Some("true".to_owned()),
+                from: None,
             },
         ),
         _ => return None,
@@ -346,6 +355,7 @@ pub(crate) fn created_name_field(name: &str) -> AuditField {
     AuditField {
         path: "metadata.name".to_owned(),
         value: Some(name.to_owned()),
+        from: None,
     }
 }
 
@@ -451,6 +461,7 @@ pub(crate) fn recordable_fields(kind_name: &str, mut fields: Vec<AuditField>) ->
     if PATH_ONLY_KINDS.contains(&kind_name) {
         for field in &mut fields {
             field.value = None;
+            field.from = None;
         }
     }
     fields

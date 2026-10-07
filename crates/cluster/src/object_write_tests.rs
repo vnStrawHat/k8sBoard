@@ -331,6 +331,7 @@ fn changed_fields_name_paths_and_values() {
         [ChangedField {
             path: "spec.unschedulable".into(),
             value: Some("true".to_owned()),
+            from: None,
         }]
     );
     let uncordon = set_schedulable(true).changed_fields();

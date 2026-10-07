@@ -65,6 +65,14 @@ fn eviction_line(grace: &str) -> String {
 /// The field Trigger now and Re-run send: the name prefix of the Job the server creates.
 const GENERATE_NAME_PATH: &str = "metadata.generateName";
 
+/// One changed field: `spec.replicas: 3 → 0` when the old value is known, else `path → new`.
+fn value_line(path: &str, from: Option<&str>, value: &str) -> String {
+    match from {
+        Some(from) => format!("{path}: {from} → {value}"),
+        None => format!("{path} → {value}"),
+    }
+}
+
 /// What a Trigger now or Re-run does, instead of the field it sends: `Create Job
 /// report-failed-rerun-… from Job report-failed`. A batch has one prefix per row, so it says only
 /// that each row creates a Job.
@@ -1164,7 +1172,7 @@ impl ConfirmDialog {
                             Some(value) if field.path == GENERATE_NAME_PATH => {
                                 created_job_line(&value, source)
                             }
-                            Some(value) => format!("{} → {value}", field.path),
+                            Some(value) => value_line(&field.path, field.from.as_deref(), &value),
                             None if is_ordered => format!("{} → removed", field.path),
                             None => field.path.into_owned(),
                         })
@@ -1733,6 +1741,27 @@ mod created_job_line_tests {
         assert_eq!(
             created_job_line("a-rerun-", None),
             "Create one Job from each row"
+        );
+    }
+}
+
+#[cfg(test)]
+mod value_line_tests {
+    use super::value_line;
+
+    #[test]
+    fn a_field_with_its_old_value_reads_old_to_new() {
+        assert_eq!(
+            value_line("spec.maxReplicas", Some("1"), "3"),
+            "spec.maxReplicas: 1 → 3"
+        );
+    }
+
+    #[test]
+    fn a_field_without_one_keeps_the_path_and_the_new_value() {
+        assert_eq!(
+            value_line("spec.paused", None, "true"),
+            "spec.paused → true"
         );
     }
 }

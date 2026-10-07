@@ -274,7 +274,10 @@ fn other_custom_targets_fit_no_operation() {
             propagation: DeletePropagation::Background,
         },
         WriteOperation::SetNodeSchedulable { schedulable: false },
-        WriteOperation::ScaleWorkload { replicas: 1 },
+        WriteOperation::ScaleWorkload {
+            replicas: 1,
+            previous: 2,
+        },
         WriteOperation::RestartRollout {
             restarted_at: requested_at(),
         },

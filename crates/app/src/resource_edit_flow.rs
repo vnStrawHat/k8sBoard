@@ -30,17 +30,34 @@ pub(crate) enum RowCheck {
 }
 
 impl AppShell {
-    /// The HPA under `subject`, from the subject's own cluster as it is now.
+    /// The HPA under `subject`, from the subject's own cluster as it is now: the HPAs screen's
+    /// row, else the HPA the Issues feed holds, so a Deployment drawer can edit its autoscaler
+    /// without the HPAs list having been opened.
     pub(crate) fn hpa_of(
         &self,
         subject: &ClusterObject,
         cx: &App,
     ) -> Option<HorizontalPodAutoscalerSummary> {
         let live = self.live_of(&subject.cluster, cx)?;
-        match &live.row_of(&subject.key)?.object {
-            KindObject::HorizontalPodAutoscaler(hpa) => Some(hpa.clone()),
-            _ => None,
-        }
+        let ResourceKey::Kind {
+            namespace, name, ..
+        } = &subject.key
+        else {
+            return None;
+        };
+        let listed = match live.row_of(&subject.key).map(|row| &row.object) {
+            Some(KindObject::HorizontalPodAutoscaler(hpa)) => Some(hpa),
+            Some(_) => None,
+            None => live.loaded_hpas().iter().find_map(|object| match object {
+                KindObject::HorizontalPodAutoscaler(hpa)
+                    if Some(&hpa.namespace) == namespace.as_ref() && hpa.name == *name =>
+                {
+                    Some(hpa)
+                }
+                _ => None,
+            }),
+        };
+        listed.cloned()
     }
 
     /// Edit min / max on the cursor row: the one popover that the menu, the key, and the palette

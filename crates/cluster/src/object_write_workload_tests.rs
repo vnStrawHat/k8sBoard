@@ -221,7 +221,10 @@ async fn allow_list_matches_the_operations() {
             request(
                 ObjectKind::Deployment,
                 "api",
-                WriteOperation::ScaleWorkload { replicas: 5 },
+                WriteOperation::ScaleWorkload {
+                    replicas: 5,
+                    previous: 2,
+                },
             ),
             "/apis/apps/v1/namespaces/payments/deployments/api/scale",
             json!({"spec": {"replicas": 5}}),
@@ -230,7 +233,10 @@ async fn allow_list_matches_the_operations() {
             request(
                 ObjectKind::StatefulSet,
                 "kafka",
-                WriteOperation::ScaleWorkload { replicas: 0 },
+                WriteOperation::ScaleWorkload {
+                    replicas: 0,
+                    previous: 2,
+                },
             ),
             "/apis/apps/v1/namespaces/payments/statefulsets/kafka/scale",
             json!({"spec": {"replicas": 0}}),
@@ -298,7 +304,10 @@ async fn scale_patches_the_scale_subresource() {
         &request(
             ObjectKind::StatefulSet,
             "kafka",
-            WriteOperation::ScaleWorkload { replicas: 5 },
+            WriteOperation::ScaleWorkload {
+                replicas: 5,
+                previous: 2,
+            },
         ),
         WriteMode::Commit,
     )
@@ -317,7 +326,10 @@ fn scale_rejects_other_kinds() {
         ObjectKind::ReplicaSet,
         ObjectKind::Job,
     ] {
-        let operation = WriteOperation::ScaleWorkload { replicas: 2 };
+        let operation = WriteOperation::ScaleWorkload {
+            replicas: 2,
+            previous: 2,
+        };
         assert!(
             WriteRequest::new(object(kind, "x"), operation).is_none(),
             "{kind:?}"
@@ -455,7 +467,10 @@ async fn patches_report_the_patched_effect() {
             &request(
                 ObjectKind::Deployment,
                 "api",
-                WriteOperation::ScaleWorkload { replicas: 5 },
+                WriteOperation::ScaleWorkload {
+                    replicas: 5,
+                    previous: 2,
+                },
             ),
             WriteMode::Commit,
         )
@@ -738,12 +753,18 @@ fn access_check_matches_each_operation() {
     let cases = [
         (
             ObjectKind::Deployment,
-            WriteOperation::ScaleWorkload { replicas: 1 },
+            WriteOperation::ScaleWorkload {
+                replicas: 1,
+                previous: 2,
+            },
             "patch deployments/scale",
         ),
         (
             ObjectKind::StatefulSet,
-            WriteOperation::ScaleWorkload { replicas: 1 },
+            WriteOperation::ScaleWorkload {
+                replicas: 1,
+                previous: 2,
+            },
             "patch statefulsets/scale",
         ),
         (ObjectKind::Deployment, restart(), "patch deployments"),
@@ -794,7 +815,10 @@ fn changed_fields_hold_names_and_numbers_only() {
         field(&request(
             ObjectKind::Deployment,
             "api",
-            WriteOperation::ScaleWorkload { replicas: 5 }
+            WriteOperation::ScaleWorkload {
+                replicas: 5,
+                previous: 2
+            }
         )),
         ("spec.replicas".to_owned(), "5".to_owned())
     );
@@ -866,7 +890,10 @@ fn manual_debug_shows_names_only() {
         request(
             ObjectKind::Deployment,
             "api",
-            WriteOperation::ScaleWorkload { replicas: 7 }
+            WriteOperation::ScaleWorkload {
+                replicas: 7,
+                previous: 2
+            }
         )
     );
     for hidden in ["2026", "api-6c1e2a", "37", "7 }"] {
@@ -895,7 +922,10 @@ async fn debug_build_blocks_every_new_operation() {
         request(
             ObjectKind::Deployment,
             "api",
-            WriteOperation::ScaleWorkload { replicas: 1 },
+            WriteOperation::ScaleWorkload {
+                replicas: 1,
+                previous: 2,
+            },
         ),
         request(ObjectKind::Deployment, "api", restart),
         request(
@@ -1005,7 +1035,10 @@ fn scale_above_the_int32_range_is_refused() {
     let scale = |replicas| {
         WriteRequest::new(
             object(ObjectKind::Deployment, "api"),
-            WriteOperation::ScaleWorkload { replicas },
+            WriteOperation::ScaleWorkload {
+                replicas,
+                previous: 2,
+            },
         )
     };
     assert!(scale(i32::MAX as u32).is_some());
@@ -1041,7 +1074,10 @@ async fn a_patch_reports_no_uid() {
     let scale = request(
         ObjectKind::Deployment,
         "api",
-        WriteOperation::ScaleWorkload { replicas: 1 },
+        WriteOperation::ScaleWorkload {
+            replicas: 1,
+            previous: 2,
+        },
     );
     let outcome = connection
         .write(&scale, WriteMode::Commit)
@@ -1055,7 +1091,10 @@ async fn the_raw_query_carries_no_other_parameter() {
     let scale = request(
         ObjectKind::Deployment,
         "api",
-        WriteOperation::ScaleWorkload { replicas: 1 },
+        WriteOperation::ScaleWorkload {
+            replicas: 1,
+            previous: 2,
+        },
     );
     let requests = written(&scale, WriteMode::DryRun).await;
     let post = requests.last().expect("a request");
@@ -1207,4 +1246,21 @@ fn set_image_summary_names_the_container_path_and_the_cause() {
             .len(),
         1
     );
+}
+
+#[test]
+fn a_scale_records_the_old_count_beside_the_new_one() {
+    let fields = request(
+        ObjectKind::Deployment,
+        "api",
+        WriteOperation::ScaleWorkload {
+            replicas: 0,
+            previous: 3,
+        },
+    )
+    .changed_fields();
+    assert_eq!(fields.len(), 1);
+    assert_eq!(fields[0].path, "spec.replicas");
+    assert_eq!(fields[0].from.as_deref(), Some("3"));
+    assert_eq!(fields[0].value.as_deref(), Some("0"));
 }

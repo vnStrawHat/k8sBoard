@@ -584,7 +584,10 @@ fn scale_names_the_change_and_changes_one_field() {
     assert_eq!(intent.risk, ActionRisk::Change);
     assert_eq!(
         intent.request.operation(),
-        &WriteOperation::ScaleWorkload { replicas: 5 }
+        &WriteOperation::ScaleWorkload {
+            replicas: 5,
+            previous: 3
+        }
     );
     assert!(intent.warnings.is_empty());
     let sets = ScaleTarget::of(

@@ -5,8 +5,9 @@
 use std::cell::Cell;
 
 use cluster::{
-    CronJobSummary, DeploymentSummary, HELM_MANAGED_WARNING, ObjectKind, ObjectRef,
-    ReplicaSetSummary, ResourceQuotaSummary, TemplateContainer, WriteOperation, WriteRequest,
+    CronJobSummary, DeploymentSummary, HELM_MANAGED_WARNING, HorizontalPodAutoscalerSummary,
+    ObjectKind, ObjectRef, ReplicaSetSummary, ResourceQuotaSummary, TemplateContainer,
+    WriteOperation, WriteRequest,
     terms_are_helm_managed,
 };
 use gpui_kit::SharedString;
@@ -753,23 +754,33 @@ impl ScaleTarget {
     }
 }
 
-fn managing_hpa(
-    hpas: &[KindObject],
+/// The HPA that targets the workload `kind` `namespace`/`name`, among the loaded HPAs.
+pub(crate) fn hpa_targeting<'a>(
+    hpas: &'a [KindObject],
     kind: ObjectKind,
     namespace: &str,
     name: &str,
-) -> Option<ManagingHpa> {
+) -> Option<&'a HorizontalPodAutoscalerSummary> {
     hpas.iter().find_map(|object| {
         let KindObject::HorizontalPodAutoscaler(hpa) = object else {
             return None;
         };
         let targets_it =
             hpa.namespace == namespace && hpa.target.kind == kind.name() && hpa.target.name == name;
-        targets_it.then(|| ManagingHpa {
-            name: hpa.name.clone(),
-            min: hpa.min_replicas,
-            max: hpa.max_replicas,
-        })
+        targets_it.then_some(hpa)
+    })
+}
+
+fn managing_hpa(
+    hpas: &[KindObject],
+    kind: ObjectKind,
+    namespace: &str,
+    name: &str,
+) -> Option<ManagingHpa> {
+    hpa_targeting(hpas, kind, namespace, name).map(|hpa| ManagingHpa {
+        name: hpa.name.clone(),
+        min: hpa.min_replicas,
+        max: hpa.max_replicas,
     })
 }
 
@@ -862,7 +873,10 @@ pub(crate) fn scale_intent(
         ),
         button: "Scale",
         risk,
-        operation: WriteOperation::ScaleWorkload { replicas },
+        operation: WriteOperation::ScaleWorkload {
+            replicas,
+            previous: target.desired,
+        },
         warnings: scale_warnings(target, replicas),
     };
     intent_of(scope, &workload, described)

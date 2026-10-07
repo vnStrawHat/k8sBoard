@@ -32,7 +32,15 @@ fn class(name: &str) -> ObjectRef {
 }
 
 fn hpa_range(min: u32, max: u32) -> Option<WriteRequest> {
-    WriteRequest::new(hpa(), WriteOperation::SetHpaReplicaRange { min, max })
+    WriteRequest::new(
+        hpa(),
+        WriteOperation::SetHpaReplicaRange {
+            min,
+            max,
+            previous_min: 1,
+            previous_max: 9,
+        },
+    )
 }
 
 fn expand(storage: &str) -> Option<WriteRequest> {
@@ -271,7 +279,12 @@ fn request_rejects_a_kind_that_does_not_fit() {
     let mismatches = [
         (
             claim(),
-            WriteOperation::SetHpaReplicaRange { min: 1, max: 2 },
+            WriteOperation::SetHpaReplicaRange {
+                min: 1,
+                max: 2,
+                previous_min: 1,
+                previous_max: 9,
+            },
         ),
         (
             hpa(),
@@ -285,7 +298,12 @@ fn request_rejects_a_kind_that_does_not_fit() {
         ),
         (
             class("gp3"),
-            WriteOperation::SetHpaReplicaRange { min: 1, max: 2 },
+            WriteOperation::SetHpaReplicaRange {
+                min: 1,
+                max: 2,
+                previous_min: 1,
+                previous_max: 9,
+            },
         ),
     ];
     for (target, operation) in mismatches {
@@ -322,6 +340,14 @@ fn field(path: &'static str, value: Option<&str>) -> ChangedField {
     ChangedField {
         path: path.into(),
         value: value.map(str::to_owned),
+        from: None,
+    }
+}
+
+fn changed(path: &'static str, from: &str, to: &str) -> ChangedField {
+    ChangedField {
+        from: Some(from.to_owned()),
+        ..field(path, Some(to))
     }
 }
 
@@ -330,8 +356,8 @@ fn changed_fields_values() {
     assert_eq!(
         hpa_range(3, 20).expect("valid").changed_fields(),
         [
-            field("spec.minReplicas", Some("3")),
-            field("spec.maxReplicas", Some("20")),
+            changed("spec.minReplicas", "1", "3"),
+            changed("spec.maxReplicas", "9", "20"),
         ]
     );
     assert_eq!(
@@ -409,7 +435,10 @@ async fn debug_build_blocks_the_new_operations() {
 fn operations_without_a_value_rule_pass_the_check_unchanged() {
     let operations = [
         WriteOperation::SetNodeSchedulable { schedulable: true },
-        WriteOperation::ScaleWorkload { replicas: 3 },
+        WriteOperation::ScaleWorkload {
+            replicas: 3,
+            previous: 2,
+        },
         WriteOperation::SetRolloutPaused { paused: true },
         WriteOperation::SetCronJobSuspended { suspended: false },
         WriteOperation::TriggerCronJob,
@@ -417,7 +446,12 @@ fn operations_without_a_value_rule_pass_the_check_unchanged() {
         WriteOperation::DeleteNodeShellPod {
             uid: "u".to_owned(),
         },
-        WriteOperation::SetHpaReplicaRange { min: 1, max: 4 },
+        WriteOperation::SetHpaReplicaRange {
+            min: 1,
+            max: 4,
+            previous_min: 1,
+            previous_max: 9,
+        },
         WriteOperation::SetDefaultStorageClass { is_default: true },
     ];
     for operation in operations {
@@ -429,7 +463,12 @@ fn operations_without_a_value_rule_pass_the_check_unchanged() {
     }
     // The ones with a value rule still refuse a bad value and trim a good one.
     assert_eq!(
-        checked_operation(WriteOperation::SetHpaReplicaRange { min: 0, max: 4 }),
+        checked_operation(WriteOperation::SetHpaReplicaRange {
+            min: 0,
+            max: 4,
+            previous_min: 1,
+            previous_max: 9
+        }),
         None
     );
     assert_eq!(
@@ -440,4 +479,37 @@ fn operations_without_a_value_rule_pass_the_check_unchanged() {
             storage: "1Gi".to_owned()
         })
     );
+}
+
+fn hpa_range_from(min: u32, max: u32, previous: (u32, u32)) -> WriteRequest {
+    WriteRequest::new(
+        hpa(),
+        WriteOperation::SetHpaReplicaRange {
+            min,
+            max,
+            previous_min: previous.0,
+            previous_max: previous.1,
+        },
+    )
+    .expect("a valid range")
+}
+
+#[test]
+fn hpa_range_lists_only_the_field_that_changed() {
+    assert_eq!(
+        hpa_range_from(1, 3, (1, 1)).changed_fields(),
+        [changed("spec.maxReplicas", "1", "3")]
+    );
+    assert_eq!(
+        hpa_range_from(2, 3, (1, 3)).changed_fields(),
+        [changed("spec.minReplicas", "1", "2")]
+    );
+}
+
+#[tokio::test]
+async fn hpa_range_patches_only_the_field_that_changed() {
+    let request = commit_once(&hpa_range_from(1, 3, (1, 1))).await;
+    assert_eq!(body_of(&request), json!({ "spec": { "maxReplicas": 3 } }));
+    let request = commit_once(&hpa_range_from(2, 3, (1, 3))).await;
+    assert_eq!(body_of(&request), json!({ "spec": { "minReplicas": 2 } }));
 }

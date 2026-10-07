@@ -95,6 +95,20 @@ pub(crate) struct ValuePopover {
     _subscriptions: Vec<Subscription>,
 }
 
+/// Focuses a number field with its prefilled `text` selected, so typing replaces the value
+/// instead of extending it (`0` over `1` gives `0`, not `01`).
+fn focus_selected(
+    input: &Entity<InputState>,
+    text: &str,
+    window: &mut Window,
+    cx: &mut Context<ValuePopover>,
+) {
+    input.update(cx, |input, cx| {
+        input.focus(window, cx);
+        input.set_selected_range(0..text.len(), cx);
+    });
+}
+
 /// A number field that takes digits only: a sign or a fraction cannot be typed, and the stepper
 /// stops at `min`.
 fn number_input(
@@ -267,7 +281,7 @@ impl ValuePopover {
     ) -> Self {
         let input = number_input("Replicas", initial, 0., window, cx);
         let subscriptions = Self::listen(&[&input], window, cx);
-        input.update(cx, |input, cx| input.focus(window, cx));
+        focus_selected(&input, initial, window, cx);
         Self {
             shell,
             form: ValueForm::Replicas { input },
@@ -285,10 +299,11 @@ impl ValuePopover {
         cx: &mut Context<Self>,
     ) -> Self {
         // Both fields start at 1: the API refuses a minimum of 0.
-        let min = number_input("Min", min, 1., window, cx);
+        let min_text = min;
+        let min = number_input("Min", min_text, 1., window, cx);
         let max = number_input("Max", max, 1., window, cx);
         let subscriptions = Self::listen(&[&min, &max], window, cx);
-        min.update(cx, |input, cx| input.focus(window, cx));
+        focus_selected(&min, min_text, window, cx);
         Self {
             shell,
             form: ValueForm::ReplicaRange { min, max },
@@ -331,9 +346,21 @@ impl ValuePopover {
                 cx.subscribe_in(
                     *input,
                     window,
-                    |popover, _, event, window, cx| match event {
+                    |popover, input, event, window, cx| match event {
                         InputEvent::PressEnter { .. } => popover.submit(window, cx),
                         InputEvent::Change => cx.notify(),
+                        // Tab into a number field selects its value, like the field that opens focused.
+                        InputEvent::Focus
+                            if matches!(
+                                popover.form,
+                                ValueForm::Replicas { .. } | ValueForm::ReplicaRange { .. }
+                            ) =>
+                        {
+                            input.update(cx, |input, cx| {
+                                let length = input.value().len();
+                                input.set_selected_range(0..length, cx);
+                            });
+                        }
                         _ => {}
                     },
                 )

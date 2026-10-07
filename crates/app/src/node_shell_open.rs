@@ -40,6 +40,7 @@ fn node_shell_fields(namespace: &str, request: &WriteRequest) -> Vec<AuditField>
     std::iter::once(AuditField {
         path: "metadata.namespace".to_owned(),
         value: Some(namespace.to_owned()),
+        from: None,
     })
     .chain(
         request
@@ -48,6 +49,7 @@ fn node_shell_fields(namespace: &str, request: &WriteRequest) -> Vec<AuditField>
             .map(|field| AuditField {
                 path: field.path.into_owned(),
                 value: field.value,
+                from: field.from,
             }),
     )
     .collect()

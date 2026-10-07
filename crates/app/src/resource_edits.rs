@@ -103,7 +103,15 @@ pub(crate) fn hpa_range_intent(
         Some(hpa.namespace.clone()),
         hpa.name.clone(),
     )?;
-    let request = WriteRequest::new(target, WriteOperation::SetHpaReplicaRange { min, max })?;
+    let request = WriteRequest::new(
+        target,
+        WriteOperation::SetHpaReplicaRange {
+            min,
+            max,
+            previous_min: hpa.min_replicas,
+            previous_max: hpa.max_replicas,
+        },
+    )?;
     let action = ResourceAction::EditHpaRange;
     Some(WriteIntent {
         cluster: scope.cluster.clone(),

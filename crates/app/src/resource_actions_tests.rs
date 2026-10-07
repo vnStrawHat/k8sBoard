@@ -4100,3 +4100,14 @@ fn s_has_nothing_to_pick_when_no_container_runs() {
     ]);
     assert_eq!(default_shell(&pod), DefaultShell::Unavailable);
 }
+
+#[test]
+fn shift_s_on_an_hpa_row_edits_its_range() {
+    assert_eq!(
+        subject_action(
+            RowAction::Scale,
+            &kind_key(ResourceKind::HorizontalPodAutoscalers)
+        ),
+        Some(ResourceAction::EditHpaRange)
+    );
+}

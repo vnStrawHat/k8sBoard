@@ -81,10 +81,12 @@ fn forward_audit(spec: &ForwardSpec) -> (AuditObject, Vec<AuditField>) {
             AuditField {
                 path: "remote_port".to_owned(),
                 value: Some(spec.remote_port.to_string()),
+                from: None,
             },
             AuditField {
                 path: "local_port".to_owned(),
                 value: Some(spec.requested_local_port().to_string()),
+                from: None,
             },
         ],
     )

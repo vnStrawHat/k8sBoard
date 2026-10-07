@@ -366,7 +366,11 @@ fn collect_missing(
 }
 
 fn field(path: Cow<'static, str>, value: Option<String>) -> ChangedField {
-    ChangedField { path, value }
+    ChangedField {
+        path,
+        value,
+        from: None,
+    }
 }
 
 /// At most `MAX_LISTED` fields, then one `… and {n} more`.

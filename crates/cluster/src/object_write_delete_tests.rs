@@ -289,6 +289,7 @@ fn delete_changed_fields_record_propagation() {
         vec![ChangedField {
             path: Cow::Borrowed("deleteOptions.propagationPolicy"),
             value: Some("Foreground".to_owned()),
+            from: None,
         }]
     );
 }

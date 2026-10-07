@@ -653,6 +653,18 @@ pub(crate) fn subject_action(row: RowAction, subject: &ResourceKey) -> Option<Re
             ResourceKey::Pod { .. } | ResourceKey::Node { .. } => None,
         }
         .map(ResourceAction::EditValues),
+        // An HPA scales through its range: Shift S opens Edit min / max there.
+        RowAction::Scale
+            if matches!(
+                subject,
+                ResourceKey::Kind {
+                    kind: ResourceKind::HorizontalPodAutoscalers,
+                    ..
+                }
+            ) =>
+        {
+            Some(ResourceAction::EditHpaRange)
+        }
         // The kind table is the one source of which workload kinds offer the action.
         RowAction::RestartRollout
         | RowAction::SetImage

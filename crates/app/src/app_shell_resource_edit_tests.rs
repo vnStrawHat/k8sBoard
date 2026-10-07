@@ -172,10 +172,8 @@ fn edit_min_max_opens_the_confirm_dialog(cx: &mut TestAppContext) {
     assert_eq!(sent[0].method, "PATCH");
     assert_eq!(sent[0].path, HPA_PATH);
     assert!(sent[0].has_query("dryRun", "All"));
-    assert_eq!(
-        sent[0].body,
-        r#"{"spec":{"minReplicas":3,"maxReplicas":5}}"#
-    );
+    // The HPA is 3-20: only the max changes, so only the max is sent.
+    assert_eq!(sent[0].body, r#"{"spec":{"maxReplicas":5}}"#);
     t.confirm(cx);
     t.wait_for("the commit", cx, |_| writes(&t.stg_api).len() == 2);
     let sent = writes(&t.stg_api);
@@ -503,10 +501,23 @@ fn edit_limits_applies_one_range_and_audits_each_object(cx: &mut TestAppContext)
         .filter(|request| !request.has_query_key("dryRun"))
         .collect();
     assert_eq!(commits.len(), 3);
-    assert!(
-        commits
-            .iter()
-            .all(|request| request.body == r#"{"spec":{"minReplicas":4,"maxReplicas":10}}"#)
+    // Each HPA gets only the fields that differ from its own range: web-hpa is 2-10 already.
+    let bodies: Vec<&str> = commits
+        .iter()
+        .map(|request| request.body.as_str())
+        .collect();
+    assert_eq!(
+        bodies,
+        [
+            r#"{"spec":{"minReplicas":4,"maxReplicas":10}}"#,
+            r#"{"spec":{"minReplicas":4}}"#,
+            r#"{"spec":{"minReplicas":4,"maxReplicas":10}}"#,
+        ]
+    );
+    // The audit lines keep the old range beside the new one.
+    assert_eq!(
+        lines[1]["fields"],
+        serde_json::json!([{ "path": "spec.minReplicas", "value": "4", "from": "2" }])
     );
     let _ = std::fs::remove_dir_all(&dir);
 }

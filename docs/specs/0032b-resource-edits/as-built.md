@@ -47,3 +47,7 @@
 - When a Set default ends clean, the shell re-reads the loaded StorageClasses list with the batch's own changes laid over it (`defaults_after`). If more than one class is marked default (one was made the default while the dialog was open), the end notice is a warning, not `2 done`. Without a loaded list there is nothing to check.
 - A Retry off the StorageClasses screen says `Open StorageClasses first`.
 - **Not done: uid pin on Expand.** Adding `metadata.uid` to the merge body would make the server refuse a replaced claim, but no vendored source or doc in `.cargo-home` states how the server answers a uid mismatch on a merge patch, and `PersistentVolumeClaimSummary` has no uid. Skipped; the dry-run and the re-read of the row at submit are the only guards against a claim replaced under the same name.
+
+## UX round 3 (N19)
+
+- `SetHpaReplicaRange` carries `previous_min` and `previous_max`: the confirm lists only the bounds that move (`spec.maxReplicas: 1 → 3`), the patch sends only those, and the audit line keeps `from`. Shift S on an HPA row opens Edit min / max (the key resolves to `EditHpaRange` there); Tab into the Max field selects its value.

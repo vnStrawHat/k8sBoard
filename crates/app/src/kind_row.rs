@@ -89,6 +89,8 @@ pub(crate) enum LiveContent {
     ConfigMapData,
     SelectedPods,
     ScalingEvents,
+    /// The HPA that scales a Deployment or StatefulSet, with a link and Edit min / max.
+    Autoscaler,
     BlockedCreations,
     NamespaceQuotas,
     ClaimUsage,

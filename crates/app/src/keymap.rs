@@ -445,7 +445,7 @@ pub(crate) fn shortcut_rows() -> Vec<ShortcutRow> {
         row(SelectedResource, "Restart rollout", RestartRollout),
         row(SelectedResource, "Restart pod", RestartPod),
         row(SelectedResource, "Evict pod", EvictPod),
-        row(SelectedResource, "Scale", Scale),
+        row(SelectedResource, "Scale (Edit min / max on an HPA)", Scale),
         row(SelectedResource, "Set image (workloads)", SetImage),
         row(SelectedResource, "Delete", Delete),
         row(Dock, "Toggle the dock", ToggleDock),

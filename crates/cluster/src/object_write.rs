@@ -76,8 +76,9 @@ const UNUSABLE_EVICTION_ANSWER: &str = "the eviction answer was not a success";
 pub enum WriteOperation {
     /// JSON merge patch `{"spec":{"unschedulable": !schedulable}}` on a Node (cordon or uncordon).
     SetNodeSchedulable { schedulable: bool },
-    /// Merge patch of the `scale` subresource of a Deployment or StatefulSet (0032).
-    ScaleWorkload { replicas: u32 },
+    /// Merge patch of the `scale` subresource of a Deployment or StatefulSet (0032). `previous`
+    /// is never sent: it lets the summary and the audit line name the old count.
+    ScaleWorkload { replicas: u32, previous: u32 },
     /// Merge patch of the pod template's `kubectl.kubernetes.io/restartedAt` annotation on a
     /// Deployment, StatefulSet, or DaemonSet (0032). Rounded to whole seconds on the wire, so a
     /// dry-run and its commit send the same body.
@@ -129,9 +130,14 @@ pub enum WriteOperation {
     /// Deletes a node shell pod this run (or a sweep) found, with a `uid` precondition and no grace
     /// period. Commit only: it has no dry-run (0037).
     DeleteNodeShellPod { uid: String },
-    /// Merge patch `{"spec":{"minReplicas":min,"maxReplicas":max}}` on a HorizontalPodAutoscaler
-    /// (0032b).
-    SetHpaReplicaRange { min: u32, max: u32 },
+    /// Merge patch of `spec.minReplicas` and `spec.maxReplicas` on a HorizontalPodAutoscaler
+    /// (0032b). Only a field that differs from `previous_min` / `previous_max` is sent.
+    SetHpaReplicaRange {
+        min: u32,
+        max: u32,
+        previous_min: u32,
+        previous_max: u32,
+    },
     /// Merge patch of a PersistentVolumeClaim's storage request (0032b). `storage` is a
     /// Kubernetes quantity, stored trimmed and sent as typed.
     ExpandClaim { storage: String },
@@ -293,6 +299,8 @@ pub struct WriteOutcome {
 pub struct ChangedField {
     pub path: Cow<'static, str>,
     pub value: Option<String>,
+    /// The value the field has now, when the request knows it and may record it.
+    pub from: Option<String>,
 }
 
 /// The `lab-writes` build: the screenshot build with the kind-lab opt-in (see `WritePolicy::of_lab_build`).
@@ -354,7 +362,7 @@ impl WriteRequest {
     /// follow the path-segment rule instead.
     pub fn new(target: ObjectRef, operation: WriteOperation) -> Option<Self> {
         // `replicas` is an int32: a larger number can only be a typo, and the server would refuse it.
-        if matches!(operation, WriteOperation::ScaleWorkload { replicas } if replicas > MAX_REPLICAS)
+        if matches!(operation, WriteOperation::ScaleWorkload { replicas, .. } if replicas > MAX_REPLICAS)
         {
             return None;
         }
@@ -388,13 +396,19 @@ impl WriteRequest {
         let field = |path: &'static str, value: String| ChangedField {
             path: Cow::Borrowed(path),
             value: Some(value),
+            from: None,
+        };
+        let changed = |path: &'static str, from: u32, to: u32| ChangedField {
+            path: Cow::Borrowed(path),
+            value: Some(to.to_string()),
+            from: Some(from.to_string()),
         };
         match &self.operation {
             WriteOperation::SetNodeSchedulable { schedulable } => {
                 vec![field("spec.unschedulable", (!schedulable).to_string())]
             }
-            WriteOperation::ScaleWorkload { replicas } => {
-                vec![field("spec.replicas", replicas.to_string())]
+            WriteOperation::ScaleWorkload { replicas, previous } => {
+                vec![changed("spec.replicas", *previous, *replicas)]
             }
             WriteOperation::RestartRollout { restarted_at } => vec![field(
                 "spec.template.metadata.annotations[kubectl.kubernetes.io/restartedAt]",
@@ -419,10 +433,12 @@ impl WriteRequest {
                 let mut fields = vec![ChangedField {
                     path: Cow::Owned(format!("spec.template.spec.containers[{container}].image")),
                     value: Some(image.clone()),
+                    from: None,
                 }];
                 fields.extend(change_cause.iter().map(|cause| ChangedField {
                     path: Cow::Borrowed(CHANGE_CAUSE_PATH),
                     value: Some(cause.clone()),
+                    from: None,
                 }));
                 fields
             }
@@ -444,6 +460,7 @@ impl WriteRequest {
                 .map(|path| ChangedField {
                     path: Cow::Owned(path.to_string()),
                     value: None,
+                    from: None,
                 })
                 .collect(),
             WriteOperation::DeleteObject { propagation, .. } => {
@@ -476,10 +493,18 @@ impl WriteRequest {
             WriteOperation::DeleteNodeShellPod { uid } => {
                 vec![field("metadata.uid", uid.clone())]
             }
-            WriteOperation::SetHpaReplicaRange { min, max } => vec![
-                field("spec.minReplicas", min.to_string()),
-                field("spec.maxReplicas", max.to_string()),
-            ],
+            WriteOperation::SetHpaReplicaRange {
+                min,
+                max,
+                previous_min,
+                previous_max,
+            } => [
+                (min != previous_min).then(|| changed("spec.minReplicas", *previous_min, *min)),
+                (max != previous_max).then(|| changed("spec.maxReplicas", *previous_max, *max)),
+            ]
+            .into_iter()
+            .flatten()
+            .collect(),
             WriteOperation::ExpandClaim { storage } => {
                 vec![field("spec.resources.requests.storage", storage.clone())]
             }
@@ -498,6 +523,7 @@ impl WriteRequest {
                         "metadata.annotations[storageclass.beta.kubernetes.io/is-default-class]",
                     ),
                     value: None,
+                    from: None,
                 },
             ],
             WriteOperation::EvictPod { grace, .. } => vec![field(
@@ -519,6 +545,7 @@ impl WriteRequest {
                         .map(|text| ChangedField {
                             path: Cow::Owned(text),
                             value: None,
+                            from: None,
                         })
                         .collect()
                 }
@@ -540,6 +567,7 @@ impl WriteRequest {
                 .map(|path| ChangedField {
                     path: Cow::Owned(path),
                     value: None,
+                    from: None,
                 })
                 .collect(),
             // Names and paths only: a ConfigMap value never reaches the dialog or the audit line.
@@ -588,7 +616,7 @@ fn checked_operation(operation: WriteOperation) -> Option<WriteOperation> {
     match operation {
         // `minReplicas: 0` needs an alpha feature gate and the API rejects `min > max`; both
         // fields are int32.
-        WriteOperation::SetHpaReplicaRange { min, max }
+        WriteOperation::SetHpaReplicaRange { min, max, .. }
             if min == 0 || min > max || max > MAX_REPLICAS =>
         {
             None
@@ -990,7 +1018,7 @@ impl ClusterConnection {
                 self.settle(request, mode, sent)?;
                 Ok(Answer::patched())
             }
-            WriteOperation::ScaleWorkload { replicas } => {
+            WriteOperation::ScaleWorkload { replicas, .. } => {
                 let body = json!({ "spec": { "replicas": replicas } });
                 let sent = run_raw(api.patch_scale(name, &params, &Patch::Merge(&body))).await;
                 self.settle(request, mode, sent)?;
@@ -1209,8 +1237,22 @@ impl ClusterConnection {
                     dropped_fields: Vec::new(),
                 })
             }
-            WriteOperation::SetHpaReplicaRange { min, max } => {
-                let body = json!({ "spec": { "minReplicas": min, "maxReplicas": max } });
+            WriteOperation::SetHpaReplicaRange {
+                min,
+                max,
+                previous_min,
+                previous_max,
+            } => {
+                // A field the HPA has already is left out, so the patch changes no more than the
+                // confirm listed.
+                let mut spec = serde_json::Map::new();
+                if min != previous_min {
+                    spec.insert("minReplicas".to_owned(), json!(min));
+                }
+                if max != previous_max {
+                    spec.insert("maxReplicas".to_owned(), json!(max));
+                }
+                let body = json!({ "spec": spec });
                 let sent = run_raw(api.patch(name, &params, &Patch::Merge(&body))).await;
                 self.settle(request, mode, sent)?;
                 Ok(Answer::patched())

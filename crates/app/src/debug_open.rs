@@ -183,6 +183,7 @@ impl AppShell {
             .map(|field| AuditField {
                 path: field.path.into_owned(),
                 value: field.value,
+                from: field.from,
             })
             .collect();
         let create = Rc::new(WriteIntent {

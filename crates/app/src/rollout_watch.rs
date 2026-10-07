@@ -12,7 +12,9 @@ use gpui_kit::component::notification::Notification;
 use gpui_kit::{AnyWindowHandle, App, AppContext as _, Context, SharedString};
 
 use super::AppShell;
+use super::write_flow::notify_with_view;
 use crate::cluster_registry::ClusterRef;
+use crate::table_selection::ClusterObject;
 use crate::workload_rows::{DEADLINE_EXCEEDED, PROGRESSING};
 
 const POLL: Duration = Duration::from_secs(1);
@@ -179,6 +181,7 @@ impl AppShell {
         &mut self,
         cluster: ClusterRef,
         workloads: Vec<(String, String)>,
+        scale_back: Option<(ClusterObject, u32)>,
         window: AnyWindowHandle,
         cx: &mut Context<Self>,
     ) {
@@ -215,8 +218,12 @@ impl AppShell {
                 .filter_map(|watched| Some((watched.name, watched.outcome?)))
                 .collect();
             let (text, is_success) = rollout_summary(&outcomes);
-            let _ = cx.update_window(window, |_, window, cx| {
-                notify_rollout(window, cx, text, is_success, id);
+            let _ = cx.update_window(window, |_, window, cx| match scale_back {
+                // A Scale keeps its Scale back button on the toast that replaces its first one.
+                Some((subject, replicas)) if is_success => {
+                    notify_with_view(window, cx, text, &shell, subject, Some(id), Some(replicas));
+                }
+                _ => notify_rollout(window, cx, text, is_success, id),
             });
         })
         .detach();

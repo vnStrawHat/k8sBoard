@@ -722,7 +722,9 @@ fn starts_rollout(action: ResourceAction) -> bool {
 
 /// The workload a rollout started, for the notice's View button.
 fn rollout_subject(intent: &WriteIntent, is_watched: bool) -> Option<ClusterObject> {
-    if !is_watched && !starts_rollout(intent.action) {
+    // A Scale of any workload offers View and Scale back, though only a Deployment is watched.
+    let is_scale = matches!(intent.action, ResourceAction::Scale(_));
+    if !is_watched && !starts_rollout(intent.action) && !is_scale {
         return None;
     }
     let target = intent.request.target();
@@ -1168,7 +1170,19 @@ impl AppShell {
         let Some(subject) = self.selected.clone() else {
             return;
         };
-        let Some(target) = self.scale_target_of(&subject, cx) else {
+        self.scale_object(&subject, replicas, window, cx);
+    }
+
+    /// The same change for `subject`, read from its own state now: the palette's Scale and the
+    /// Scale back of a toast both come here, and both open the confirm.
+    pub(crate) fn scale_object(
+        &mut self,
+        subject: &ClusterObject,
+        replicas: u32,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(target) = self.scale_target_of(subject, cx) else {
             let label = action_label(ResourceAction::Scale(ObjectKind::Deployment));
             notify(
                 window,
@@ -1177,7 +1191,7 @@ impl AppShell {
             );
             return;
         };
-        self.start_scale(&subject, &target, replicas, window, cx);
+        self.start_scale(subject, &target, replicas, window, cx);
     }
 
     /// What the palette says about the cursor row while it asks for replicas: `deployment/api (now
@@ -1424,17 +1438,20 @@ fn finish_commit(
                 let toast = workload
                     .as_ref()
                     .map(|workload| rollout_toast_id(std::slice::from_ref(workload)));
-                notify_with_view(window, cx, notice, shell, subject, toast);
+                let scale_back = scale_back_of(intent);
+                // The end toast of the rollout watch replaces this one, so it carries the button too.
+                let undo = scale_back.map(|replicas| (subject.clone(), replicas));
+                notify_with_view(window, cx, notice, shell, subject, toast, scale_back);
                 if let Some(workload) = workload {
                     let (cluster, handle) = (intent.cluster.clone(), window.window_handle());
                     let _ = shell.update(cx, |shell, cx| {
-                        shell.watch_rollouts(cluster, vec![workload], handle, cx);
+                        shell.watch_rollouts(cluster, vec![workload], undo, handle, cx);
                     });
                 }
                 watch_hpa_after_scale(shell, intent, window.window_handle(), cx);
             }
             None => match created_view {
-                Some(subject) => notify_with_view(window, cx, notice, shell, subject, None),
+                Some(subject) => notify_with_view(window, cx, notice, shell, subject, None, None),
                 None => {
                     let consumers = env_consumers_after(shell, intent, result.is_ok(), cx);
                     if consumers.is_empty() {
@@ -1468,7 +1485,7 @@ fn watch_hpa_after_scale(
     window: AnyWindowHandle,
     cx: &mut App,
 ) {
-    let (ResourceAction::Scale(_), WriteOperation::ScaleWorkload { replicas }) =
+    let (ResourceAction::Scale(_), WriteOperation::ScaleWorkload { replicas, .. }) =
         (intent.action, intent.request.operation())
     else {
         return;
@@ -1498,7 +1515,9 @@ pub(super) fn notify(window: &mut Window, cx: &mut App, text: String) {
 }
 
 /// A success notice with a View button that reveals `subject` (recorded for Back). `toast` is the
-/// id the end of the rollout watch replaces the notice under.
+/// id the end of the rollout watch replaces the notice under. `scale_back` replaces the button
+/// with one that scales the workload back to its old count through the same confirm as any
+/// Scale: a notice holds one button, and the user is on the row already.
 pub(super) fn notify_with_view(
     window: &mut Window,
     cx: &mut App,
@@ -1506,25 +1525,54 @@ pub(super) fn notify_with_view(
     shell: &WeakEntity<AppShell>,
     subject: ClusterObject,
     toast: Option<SharedString>,
+    scale_back: Option<u32>,
 ) {
     let shell = shell.clone();
     let notification = Notification::success(text).action(move |_, _, cx| {
         let (shell, subject) = (shell.clone(), subject.clone());
-        Button::new("rollout-view")
-            .label("View")
-            .small()
-            .outline()
-            .on_click(cx.listener(move |notification, _, window, cx| {
-                notification.dismiss(window, cx);
-                let subject = subject.clone();
-                let _ = shell.update(cx, |shell, cx| shell.reveal_object(subject, cx));
-            }))
+        match scale_back {
+            Some(replicas) => Button::new("scale-back")
+                .label(scale_back_label(replicas))
+                .small()
+                .outline()
+                .on_click(cx.listener(move |notification, _, window, cx| {
+                    notification.dismiss(window, cx);
+                    let subject = subject.clone();
+                    let _ = shell.update(cx, |shell, cx| {
+                        shell.scale_object(&subject, replicas, window, cx);
+                    });
+                })),
+            None => Button::new("rollout-view")
+                .label("View")
+                .small()
+                .outline()
+                .on_click(cx.listener(move |notification, _, window, cx| {
+                    notification.dismiss(window, cx);
+                    let subject = subject.clone();
+                    let _ = shell.update(cx, |shell, cx| shell.reveal_object(subject, cx));
+                })),
+        }
     });
     let notification = match toast {
         Some(id) => notification.id1::<RolloutToast>(id),
         None => notification,
     };
     window.push_notification(notification, cx);
+}
+
+/// The button that undoes a Scale: `Scale back to 3`.
+fn scale_back_label(replicas: u32) -> String {
+    format!("Scale back to {replicas}")
+}
+
+/// The count a finished Scale can go back to: its old count, when it differs from the new one.
+fn scale_back_of(intent: &WriteIntent) -> Option<u32> {
+    match (intent.action, intent.request.operation()) {
+        (ResourceAction::Scale(_), WriteOperation::ScaleWorkload { replicas, previous }) => {
+            (replicas != previous).then_some(*previous)
+        }
+        _ => None,
+    }
 }
 
 /// The notice of an action the gate refused. A permission denial offers Check permissions, which
@@ -1840,6 +1888,7 @@ impl NodeShellCleanup {
                 .map(|field| AuditField {
                     path: field.path.into_owned(),
                     value: field.value,
+                    from: field.from,
                 })
                 .collect(),
             outcome,

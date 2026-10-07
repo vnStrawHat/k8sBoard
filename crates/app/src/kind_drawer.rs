@@ -104,6 +104,7 @@ pub(crate) fn kind_drawer(
                 session.guard(cx).map(|guard| DrawerWriteGate {
                     subject: ClusterObject::new(context.cluster.clone(), key.clone()),
                     availability: action_availability(ResourceAction::RollBack, &guard),
+                    hpa_range: action_availability(ResourceAction::EditHpaRange, &guard),
                     restart: [
                         ObjectKind::Deployment,
                         ObjectKind::StatefulSet,

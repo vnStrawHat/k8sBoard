@@ -19,6 +19,7 @@ fn field(path: &str, value: Option<&str>) -> AuditField {
     AuditField {
         path: path.to_owned(),
         value: value.map(str::to_owned),
+        from: None,
     }
 }
 
@@ -35,7 +36,10 @@ fn full_entry() -> AuditEntry {
             namespace: Some("team-a".to_owned()),
             name: "api-0".to_owned(),
         }),
-        fields: vec![field("spec.unschedulable", Some("true"))],
+        fields: vec![AuditField {
+            from: Some("false".to_owned()),
+            ..field("spec.unschedulable", Some("true"))
+        }],
         outcome: AuditOutcome::Failed,
         error: Some("refused".to_owned()),
         note: Some("maintenance".to_owned()),
@@ -84,6 +88,7 @@ fn audit_keys_are_the_allow_list() {
             "context",
             "error",
             "fields",
+            "fields.from",
             "fields.path",
             "fields.value",
             "note",
@@ -805,4 +810,54 @@ fn a_taint_edit_records_each_taint_that_changed() {
         ]
     );
     assert!(entry.fields.iter().all(|field| field.value.is_none()));
+}
+
+#[test]
+fn a_scale_line_keeps_the_old_and_the_new_count() {
+    use cluster::{ObjectKind, ObjectRef, WriteOperation, WriteRequest};
+
+    let cluster = crate::cluster_registry::ClusterRef {
+        kubeconfig: PathBuf::from("test.yaml"),
+        context: "stg-b".to_owned(),
+    };
+    let target = ObjectRef::new(
+        ObjectKind::Deployment,
+        Some("shop".to_owned()),
+        "web".to_owned(),
+    )
+    .expect("a deployment");
+    let operation = WriteOperation::ScaleWorkload {
+        replicas: 0,
+        previous: 1,
+    };
+    let request = WriteRequest::new(target, operation).expect("a deployment scales");
+    let intent = WriteIntent {
+        cluster,
+        cluster_name: "stg-b".into(),
+        action: crate::resource_actions::ResourceAction::Scale(ObjectKind::Deployment),
+        label: "Scale deployment web from 1 to 0".into(),
+        button: "Scale".into(),
+        request,
+        risk: crate::write_guard::ActionRisk::Destructive,
+        warnings: Vec::new(),
+        change_lines: Vec::new(),
+    };
+    let access = AccessState::Unknown;
+    let guard = test_guard(&access, WriteLock::Unlocked, "stg-b", Environment::STAGING);
+    let entry = audit_entry(&intent, &guard, AuditOutcome::Applied, None, None);
+    let json = serde_json::to_value(&entry.fields).expect("fields serialize");
+    assert_eq!(
+        json,
+        serde_json::json!([{ "path": "spec.replicas", "value": "0", "from": "1" }])
+    );
+}
+
+#[test]
+fn a_path_only_kind_drops_the_old_value_too() {
+    let fields = vec![AuditField {
+        from: Some("hunter2".to_owned()),
+        ..field("data.password", Some("hunter3"))
+    }];
+    let recorded = recordable_fields("Secret", fields);
+    assert!(recorded[0].value.is_none() && recorded[0].from.is_none());
 }

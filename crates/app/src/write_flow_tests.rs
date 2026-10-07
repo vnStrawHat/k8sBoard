@@ -703,12 +703,18 @@ fn only_a_deployment_rollout_start_is_followed_to_its_end() {
     assert!(!watches_rollout(&pause(true)), "Pause starts nothing");
     let scale = deployment_intent(
         ResourceAction::Scale(ObjectKind::Deployment),
-        WriteOperation::ScaleWorkload { replicas: 4 },
+        WriteOperation::ScaleWorkload {
+            replicas: 4,
+            previous: 3,
+        },
     );
     assert!(watches_rollout(&scale));
     let mut edit = deployment_intent(
         ResourceAction::Scale(ObjectKind::Deployment),
-        WriteOperation::ScaleWorkload { replicas: 4 },
+        WriteOperation::ScaleWorkload {
+            replicas: 4,
+            previous: 3,
+        },
     );
     let target = ObjectRef::new(
         ObjectKind::Deployment,
@@ -791,4 +797,22 @@ fn a_trigger_offers_to_view_the_job_it_created() {
         WriteOperation::TriggerCronJob,
     );
     assert!(created_job_subject(&cordon, Some("x")).is_none());
+}
+
+#[test]
+fn a_scale_toast_offers_the_old_count_unless_nothing_changed() {
+    let scale = |replicas, previous| {
+        deployment_intent(
+            ResourceAction::Scale(ObjectKind::Deployment),
+            WriteOperation::ScaleWorkload { replicas, previous },
+        )
+    };
+    assert_eq!(scale_back_of(&scale(0, 1)), Some(1));
+    assert_eq!(scale_back_of(&scale(3, 3)), None);
+    assert_eq!(scale_back_label(1), "Scale back to 1");
+    let pause = deployment_intent(
+        ResourceAction::PauseRollout,
+        WriteOperation::SetRolloutPaused { paused: true },
+    );
+    assert_eq!(scale_back_of(&pause), None);
 }

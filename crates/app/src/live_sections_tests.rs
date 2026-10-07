@@ -1466,6 +1466,7 @@ fn gate(availability: ActionAvailability) -> DrawerWriteGate {
     };
     DrawerWriteGate {
         restart: Vec::new(),
+        hpa_range: ActionAvailability::Enabled,
         subject: ClusterObject::new(
             cluster,
             ResourceKey::Kind {
@@ -1970,4 +1971,19 @@ fn next_runs_say_they_are_skipped_while_a_forbid_job_outlives_a_run() {
         panic!("a daily schedule has runs");
     };
     assert_eq!(busy[0].1, "in 1m");
+}
+
+#[test]
+fn the_autoscaler_row_says_the_range_and_the_end_it_is_on() {
+    use crate::resource_edits::resource_edits_tests::hpa;
+
+    assert_eq!(
+        autoscaler_state_text(&hpa("web", 1, 3, 3)),
+        "1\u{2013}3 · at max"
+    );
+    assert_eq!(
+        autoscaler_state_text(&hpa("web", 2, 10, 2)),
+        "2\u{2013}10 · at min"
+    );
+    assert_eq!(autoscaler_state_text(&hpa("web", 2, 10, 6)), "2\u{2013}10");
 }

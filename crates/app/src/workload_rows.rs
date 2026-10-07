@@ -59,6 +59,7 @@ pub(crate) fn deployment_row(deployment: &DeploymentSummary) -> KindRow {
     if deployment.is_paused {
         replicas.push(DetailRow::field("Paused", KindCell::Text("Yes".into())));
     }
+    replicas.push(DetailRow::Live(LiveContent::Autoscaler));
     let mut sections = vec![
         DetailSection {
             title: "Replicas",
@@ -285,6 +286,7 @@ pub(crate) fn stateful_set_row(set: &StatefulSetSummary) -> KindRow {
                     "Pod management",
                     KindCell::text_or_absent(non_empty(&set.pod_management_policy)),
                 ),
+                DetailRow::Live(LiveContent::Autoscaler),
             ],
         },
         selector_section(&set.selector),

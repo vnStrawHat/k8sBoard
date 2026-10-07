@@ -784,12 +784,12 @@ impl AppShell {
                         match subject {
                             Some(key) => {
                                 let subject = ClusterObject::new(cluster.clone(), key);
-                                notify_with_view(window, cx, text, &shell, subject, Some(id));
+                                notify_with_view(window, cx, text, &shell, subject, Some(id), None);
                             }
                             None => notify_rollout(window, cx, text, is_success, id),
                         }
                         let _ = shell.update(cx, |shell, cx| {
-                            shell.watch_rollouts(cluster, watched, handle, cx);
+                            shell.watch_rollouts(cluster, watched, None, handle, cx);
                         });
                     }
                     None => notify_with(window, cx, notice, is_success),
