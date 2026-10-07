@@ -186,19 +186,20 @@ fn cron_job() -> CronJobSummary {
 }
 
 #[test]
-fn a_resume_finds_the_job_once_the_cron_job_scheduled_the_missed_run() {
-    let run = MissedRun {
-        at: time("2024-10-04T10:06:00Z"),
-        starts: true,
-    };
+fn a_resume_finds_the_job_once_the_cron_job_scheduled_a_run_since_the_baseline() {
+    let before = Some(time("2024-10-04T10:00:00Z"));
     let mut cron = cron_job();
-    // Not scheduled yet: the last schedule is the old one.
-    assert_eq!(started_job(&cron, run), None);
-    cron.last_schedule_at = Some(run.at);
-    // Scheduled and the Job is not listed any more.
-    assert_eq!(started_job(&cron, run), Some(None));
+    // Nothing scheduled yet: the last schedule is the baseline.
+    assert_eq!(started_job(&cron, before), None);
+    cron.last_schedule_at = Some(time("2024-10-04T10:06:00Z"));
+    // Scheduled, and the Job is not listed any more.
+    assert_eq!(started_job(&cron, before), Some(None));
     cron.active_jobs = vec!["cleanup-1".to_owned(), "cleanup-2".to_owned()];
-    assert_eq!(started_job(&cron, run), Some(Some("cleanup-2")));
+    assert_eq!(started_job(&cron, before), Some(Some("cleanup-2")));
+    // A CronJob that never ran has no baseline, and its first run is the answer.
+    assert_eq!(started_job(&cron, None), Some(Some("cleanup-2")));
+    cron.last_schedule_at = None;
+    assert_eq!(started_job(&cron, None), None);
 }
 
 #[test]

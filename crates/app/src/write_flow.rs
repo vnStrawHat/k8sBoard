@@ -640,7 +640,7 @@ pub(crate) fn failure_notice(label: &str, error: &CheckedWriteError) -> String {
 
 /// The leading verb of an intent label and its past tense: `Cordon node wk-04` reads
 /// `Cordoned node wk-04` once it went through.
-const PAST_TENSE: [(&str, &str); 14] = [
+const PAST_TENSE: [(&str, &str); 15] = [
     ("Restart", "Restarted"),
     ("Pause", "Paused"),
     ("Resume", "Resumed"),
@@ -648,6 +648,7 @@ const PAST_TENSE: [(&str, &str); 14] = [
     ("Scale", "Scaled"),
     ("Roll back", "Rolled back"),
     ("Re-run", "Re-ran"),
+    ("Recreate", "Recreated"),
     ("Run", "Ran"),
     ("Uncordon", "Uncordoned"),
     ("Cordon", "Cordoned"),
@@ -893,6 +894,9 @@ impl AppShell {
         cx: &mut Context<Self>,
     ) {
         let label = action_label(action);
+        // The suspended CronJob a Resume is about to wake: its schedule is the baseline the toast
+        // after the commit compares with.
+        let resume: Option<cluster::CronJobSummary>;
         let intent = {
             let (Some(guard), Some(live)) = (
                 self.guard_for(&subject.cluster, cx),
@@ -918,6 +922,15 @@ impl AppShell {
                         return;
                     }
                     let mut intent = workload_intent(action, &scope, &row.object, now);
+                    resume = match &row.object {
+                        KindObject::CronJob(cron_job)
+                            if action == ResourceAction::SuspendCronJob
+                                && cron_job.is_suspended =>
+                        {
+                            Some(cron_job.clone())
+                        }
+                        _ => None,
+                    };
                     // A Resume rolls out what was changed while paused: the confirm lists it.
                     if let (
                         Some(intent),
@@ -938,6 +951,9 @@ impl AppShell {
                 }
             }
         };
+        if let Some(cron_job) = resume {
+            self.note_resume_baseline(&subject.cluster, &cron_job);
+        }
         match intent {
             Some(intent) => self.start_write(intent, window, cx),
             None => notify(

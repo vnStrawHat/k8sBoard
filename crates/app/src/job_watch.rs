@@ -17,7 +17,7 @@ use gpui_kit::{AnyWindowHandle, AppContext as _, Context, SharedString};
 
 use super::AppShell;
 use crate::age::format_age;
-use crate::batch_rows::{MissedRun, missed_run};
+use crate::batch_rows::missed_run;
 use crate::cluster_registry::ClusterRef;
 use crate::cluster_runtime::ClusterRuntime;
 use crate::kind_diagnosis::first_main_termination;
@@ -128,11 +128,26 @@ pub(crate) fn resume_end_text(cron_job: &str, end: &ResumeEnd, next: Option<&str
     }
 }
 
-/// The Job a Resume made for `run`, once the CronJob says it scheduled that run: the last active
-/// Job, or `None` when it already finished and left the list.
-pub(crate) fn started_job(cron_job: &CronJobSummary, run: MissedRun) -> Option<Option<&str>> {
-    let has_scheduled = cron_job.last_schedule_at.is_some_and(|at| at >= run.at);
+/// The Job a Resume made, once the CronJob says it scheduled a run since `before` (its last
+/// schedule when the Resume was confirmed; a suspended CronJob schedules nothing, so any change is
+/// the controller's answer to the Resume): the last active Job, or `None` when it already finished
+/// and left the list.
+pub(crate) fn started_job(
+    cron_job: &CronJobSummary,
+    before: Option<jiff::Timestamp>,
+) -> Option<Option<&str>> {
+    let has_scheduled = cron_job.last_schedule_at.is_some() && cron_job.last_schedule_at != before;
     has_scheduled.then(|| cron_job.active_jobs.last().map(String::as_str))
+}
+
+/// What a suspended CronJob had scheduled when its Resume was confirmed. The controller reacts to
+/// the Resume at once, so the read after the commit may already show the run it started: only this
+/// tells that run from the old one.
+pub(crate) struct ResumeBaseline {
+    cluster: ClusterRef,
+    namespace: String,
+    name: String,
+    last_schedule_at: Option<jiff::Timestamp>,
 }
 
 /// A success or warning toast with a View button that reveals `subject`.
@@ -218,6 +233,28 @@ impl AppShell {
         .detach();
     }
 
+    /// Remembers what `cron_job` had scheduled, for the toast that follows its Resume.
+    pub(crate) fn note_resume_baseline(&mut self, cluster: &ClusterRef, cron_job: &CronJobSummary) {
+        self.resume_baseline = Some(ResumeBaseline {
+            cluster: cluster.clone(),
+            namespace: cron_job.namespace.clone(),
+            name: cron_job.name.clone(),
+            last_schedule_at: cron_job.last_schedule_at,
+        });
+    }
+
+    /// The baseline of the Resume of `cluster`/`namespace`/`name`, once; `None` for another object.
+    fn take_resume_baseline(
+        &mut self,
+        cluster: &ClusterRef,
+        namespace: &str,
+        name: &str,
+    ) -> Option<Option<jiff::Timestamp>> {
+        let baseline = self.resume_baseline.take()?;
+        (baseline.cluster == *cluster && baseline.namespace == namespace && baseline.name == name)
+            .then_some(baseline.last_schedule_at)
+    }
+
     /// After a Resume of the CronJob `namespace/name`: reads it back and says what the controller
     /// did with the run that came due while it was suspended, then follows the Job it started.
     pub(crate) fn watch_resume(
@@ -228,33 +265,25 @@ impl AppShell {
         window: AnyWindowHandle,
         cx: &mut Context<Self>,
     ) {
+        let baseline = self.take_resume_baseline(&cluster, &namespace, &name);
         let Some(connection) = self.connection_of(&cluster, cx) else {
             return;
         };
         let runtime = cx.global::<ClusterRuntime>().clone();
         cx.spawn(async move |shell, cx| {
-            // The first read is before the controller reacted (it syncs every 10 s), so the run it
-            // starts is the latest one that came due.
-            let Some(first) = read_cron_job(&runtime, &connection, &namespace, &name).await else {
+            let Some(mut cron_job) = read_cron_job(&runtime, &connection, &namespace, &name).await
+            else {
                 return;
             };
-            let now = jiff::Timestamp::now();
-            let next = next_run_label(&first, now);
-            let run = missed_run(&first, now);
-            let Some(run) = run.filter(|run| run.starts) else {
-                let skipped =
-                    run.map(|run| run_label(&run.at.to_zoned(jiff::tz::TimeZone::system()), now));
-                let text = resume_end_text(&name, &ResumeEnd::Resumed { skipped }, next.as_deref());
-                notify_resume(cx, window, text, true, None);
-                return;
-            };
+            // Without a baseline (a Resume that did not come through the confirm) the first read
+            // is the one to compare with.
+            let before = baseline.unwrap_or(cron_job.last_schedule_at);
             let started = Instant::now();
+            let mut is_decided = false;
             loop {
-                let Some(cron_job) = read_cron_job(&runtime, &connection, &namespace, &name).await
-                else {
-                    return;
-                };
-                if let Some(job) = started_job(&cron_job, run) {
+                let now = jiff::Timestamp::now();
+                let next = next_run_label(&cron_job, now);
+                if let Some(job) = started_job(&cron_job, before) {
                     let end = ResumeEnd::Started {
                         job: job.map(str::to_owned),
                     };
@@ -272,6 +301,21 @@ impl AppShell {
                     }
                     return;
                 }
+                // The controller has not scheduled anything yet: a run that came due while the
+                // CronJob was suspended is the one it starts, if its deadline still allows.
+                if !is_decided {
+                    is_decided = true;
+                    let run = missed_run(&cron_job, now);
+                    if !run.is_some_and(|run| run.starts) {
+                        let skipped = run.map(|run| {
+                            run_label(&run.at.to_zoned(jiff::tz::TimeZone::system()), now)
+                        });
+                        let end = ResumeEnd::Resumed { skipped };
+                        let text = resume_end_text(&name, &end, next.as_deref());
+                        notify_resume(cx, window, text, true, None);
+                        return;
+                    }
+                }
                 if started.elapsed() >= RESUME_WATCH_LIMIT {
                     let text =
                         format!("Resumed cronjob {name}; the missed run has not started yet");
@@ -279,6 +323,11 @@ impl AppShell {
                     return;
                 }
                 cx.background_executor().timer(RESUME_POLL).await;
+                let Some(read) = read_cron_job(&runtime, &connection, &namespace, &name).await
+                else {
+                    return;
+                };
+                cron_job = read;
             }
         })
         .detach();

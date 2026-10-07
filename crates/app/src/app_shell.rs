@@ -613,6 +613,8 @@ pub(crate) struct AppShell {
     /// the screen's header and forgotten when the screen changes.
     table_export: ExportState,
     _table_export: Option<Task<()>>,
+    /// What the CronJob of the Resume under confirmation had scheduled (see `job_watch`).
+    resume_baseline: Option<job_watch::ResumeBaseline>,
     /// The `/` input. Its text belongs to the screen in `quick_filter_screen`.
     quick_filter: Entity<InputState>,
     /// The screen whose filter text the input shows; `None` makes the next render load it.
@@ -890,6 +892,7 @@ impl AppShell {
             },
             table_export: ExportState::Idle,
             _table_export: None,
+            resume_baseline: None,
             quick_filter,
             quick_filter_screen: None,
             focus_handle,

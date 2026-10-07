@@ -341,6 +341,18 @@ fn a_create_names_what_it_made_in_the_notice() {
 }
 
 #[test]
+fn a_recreate_and_a_reclaim_policy_read_in_the_past_tense() {
+    assert_eq!(
+        success_notice("Recreate claim data with class standard", None, false),
+        "Recreated claim data with class standard."
+    );
+    assert_eq!(
+        success_notice("Set reclaim policy of volume pv-1 to Retain", None, false),
+        "Set reclaim policy of volume pv-1 to Retain."
+    );
+}
+
+#[test]
 fn confirmed_accepts_a_start_with_no_dry_run_once_the_name_matches() {
     let not_supported = DryRunState::NotSupported;
     assert!(confirmed(&not_supported, TypedMatch::NotNeeded, 3).is_some());
