@@ -1145,6 +1145,15 @@ impl ResourceKind {
         }
     }
 
+    /// The short word that names an object of this kind in a drawer: its first kubectl short name,
+    /// or the lowercase kind when it has none (a custom kind).
+    pub(crate) fn short_kind(self) -> String {
+        match self.short_names().first() {
+            Some(name) => (*name).to_owned(),
+            None => self.display_name().to_lowercase(),
+        }
+    }
+
     pub(crate) fn from_object_kind(text: &str) -> Option<Self> {
         Self::ALL
             .into_iter()

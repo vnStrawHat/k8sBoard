@@ -672,13 +672,14 @@ fn header_row(header: DrawerHeader, cx: &App) -> impl IntoElement {
         .child(header.subtitle)
 }
 
-/// The kind caption before the object name. `CustomResourceDefinition` is spelled `CRD`: at full
-/// length it took most of the header and cut the name; its tooltip keeps the full kind.
+/// The kind caption before the object name: the kubectl short name in upper case (`STS`, `SVC`),
+/// or the whole kind when it has none (`POD`, `HELM RELEASE`, a custom kind). The tooltip keeps the
+/// full kind.
 fn kind_label(kind_name: &str) -> String {
-    if kind_name == "CustomResourceDefinition" {
-        return "CRD".to_owned();
+    match ResourceKind::from_object_kind(kind_name) {
+        Some(kind) => kind.short_kind().to_uppercase(),
+        None => kind_name.to_uppercase(),
     }
-    kind_name.to_uppercase()
 }
 
 /// `←`: the arrow alone; the tooltip names the place Back leads to.
@@ -1188,9 +1189,41 @@ mod tests {
     }
 
     #[test]
-    fn a_crd_drawer_captions_the_kind_as_crd() {
-        assert_eq!(kind_label("CustomResourceDefinition"), "CRD");
-        assert_eq!(kind_label("StatefulSet"), "STATEFULSET");
+    fn a_drawer_captions_the_kind_by_its_short_name() {
+        for (kind_name, caption) in [
+            ("Service", "SVC"),
+            ("Deployment", "DEPLOY"),
+            ("StatefulSet", "STS"),
+            ("DaemonSet", "DS"),
+            ("ReplicaSet", "RS"),
+            ("CronJob", "CJ"),
+            ("ConfigMap", "CM"),
+            ("Ingress", "ING"),
+            ("NetworkPolicy", "NETPOL"),
+            ("PodDisruptionBudget", "PDB"),
+            ("HorizontalPodAutoscaler", "HPA"),
+            ("ResourceQuota", "QUOTA"),
+            ("PersistentVolumeClaim", "PVC"),
+            ("PersistentVolume", "PV"),
+            ("StorageClass", "SC"),
+            ("Namespace", "NS"),
+            ("Event", "EV"),
+            ("ServiceAccount", "SA"),
+            ("RoleBinding", "RB"),
+            ("ClusterRole", "CR"),
+            ("ClusterRoleBinding", "CRB"),
+            ("CustomResourceDefinition", "CRD"),
+            // Kinds whose short name is not clearer keep the whole word.
+            ("Pod", "POD"),
+            ("Node", "NODE"),
+            ("Job", "JOB"),
+            ("Secret", "SECRET"),
+            ("Role", "ROLE"),
+            ("Helm release", "HELM RELEASE"),
+            ("Widget", "WIDGET"),
+        ] {
+            assert_eq!(kind_label(kind_name), caption, "{kind_name}");
+        }
     }
 
     #[test]

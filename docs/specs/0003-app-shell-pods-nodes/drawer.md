@@ -93,3 +93,7 @@ pub(crate) struct DrawerHeader { kind_badge: &'static str /* "Po" | "No" */, nam
 - `clipboard_copy.rs` holds the one helper set: `copy_button` (kit `Clipboard`: tooltip "Copy", the icon turns into a check for 2 s), `copyable_mono` (truncating mono text plus the button), and `copy_text`. They write the plain app clipboard; a Secret's values never use them and keep the masked `secret_clipboard` path.
 - Copy buttons sit after: the drawer title name; the container Image and Digest; Pod IP; node addresses (InternalIP, Hostname, …); Service Cluster IP and External; Ingress Hosts (a bare-hosts row) and Address; workload container images (`DetailRow::CopyField`, built by `DetailRow::copyable_field`).
 - `chips(id, terms, cx)` (selector, labels, TLS hosts): a click on a chip copies its text (`key=value`, tooltip "Click to copy"), and one button after the set copies all of them, one per line.
+
+## As built (2026-10-07): short kind names
+
+- The header caption before the object name is the first kubectl short name in upper case (`SVC`, `DEPLOY`, `STS`, `CRD`), from `ResourceKind::short_names()`; Pod, Node, Job, Secret, Role, Helm release and custom kinds keep the whole word. The tooltip keeps the full kind.
