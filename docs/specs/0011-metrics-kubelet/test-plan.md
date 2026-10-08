@@ -76,7 +76,6 @@
 | 3 | `monitor_data_tests.rs` | `workload_without_disk_series_has_notice` | only when every owned pod lacks one |
 | 3 | `monitor_data_tests.rs` | `node_errors_split_summary_and_disk` | summary error on Network only, disk error on Disk only |
 | 3 | `monitor_data_tests.rs` | `kubelet_cards_end_at_the_kubelet_tick_without_metrics` | metrics ticks → metrics end; none → kubelet newest tick |
-| 3 | `monitor_data_tests.rs` | `rows_join_the_nearest_kubelet_tick` | ±7.5 s; outside → `None` |
 
 ## Live checks (coder-lite, UAT `readonly@Monitor`)
 

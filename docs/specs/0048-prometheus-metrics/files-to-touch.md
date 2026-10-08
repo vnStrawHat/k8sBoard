@@ -37,7 +37,7 @@
 | 4 | `drawer.rs` | `MonitorRange::{Days7, Days30}`, `SAMPLER`, `SOURCE`, `source_step`, `is_long` |
 | 4 | `monitor_source.rs` (new) + `monitor_source_tests.rs` | `SourceKey`, `SourceFetch`, `SourceResult`, `source_target`, `refresh_after`, `source_monitor_data`, `SourceView` |
 | 4 | `monitor_data.rs` | share the reference-line and OOM-mark builders with `monitor_source.rs` (`pub(crate)`, no copy) |
-| 4 | `monitor_tab.rs` | range set (the click indexes the shown set, not `ALL`), tooltip text, toolbar text, footer, notices, Alert, Table view bound |
+| 4 | `monitor_tab.rs` | range set (the click indexes the shown set, not `ALL`), tooltip text, toolbar text, footer, notices, Alert |
 | 4 | `app_shell.rs` | `source_fetch: Option<SourceFetch>` field; `sync_monitor_source(&mut Context)` next to `sync_kubelet_demand` (drops the fetch when `!shows_monitor()`), range reset; `refresh_monitor_cache` skips long ranges |
 | 4 | `launch_options.rs`, `screenshot.rs` | `pod-monitor-source-fixture` |
 

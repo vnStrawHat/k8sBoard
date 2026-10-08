@@ -31,7 +31,7 @@ pub(crate) struct SourceResult { pub(crate) end: jiff::Timestamp, pub(crate) ste
     pub(crate) metrics: [(UsageMetric, Result<UsageSeries, MetricsError>); 6] }
 pub(crate) fn source_target(subject: &MonitorSubject, scope: &MonitorScope) -> Option<UsageTarget>;
 pub(crate) fn refresh_after(range: MonitorRange) -> Duration;   // 30 s for 15m and 1h, 5 min otherwise
-/// The charts and rows from a result, with the same reference lines and OOM marks as `monitor_data`.
+/// The charts from a result, with the same reference lines and OOM marks as `monitor_data`.
 pub(crate) fn source_monitor_data(input: &MonitorInput, result: &SourceResult) -> SourceView;
 pub(crate) enum SourceView { Charts(MonitorData), Fallback(String) /* the reason */ }
 ```
@@ -61,10 +61,6 @@ pub(crate) enum SourceView { Charts(MonitorData), Fallback(String) /* the reason
 - Right text: `step {step} · metrics source` (`step 2h · metrics source`), `querying…` before the first result.
 - Footer note (W4c note 6), replacing `SOURCE_NOTE` while the source view shows: `CPU, memory, network, and disk I/O: {source display}, step {step}. Request and limit lines show the current spec.`
 - State not Ready and a source is saved: a muted line under the toolbar from `source_note`: `Metrics source: checking…`, `Metrics source unreachable: {reason} (Settings › Metrics)`, `Metrics source in settings is not valid (Settings › Metrics)`. The sampler view follows as today.
-
-## Table view
-
-Rows from the source result: one per step, newest first, `offset` = seconds before `end`; CPU, Memory, Network, Disk columns as 0011; OOM rows as 0010 (marks within half a step). At most 400 rows; `MAX_TABLE_ROWS` becomes the larger of the sampler bound and 400.
 
 ## Unchanged
 

@@ -82,7 +82,6 @@ Live (coder-lite, UAT, read-only): `probe --metrics-source monitoring/vmselect-v
 | `hidden_monitor_drops_the_fetch` | `app_shell_tests.rs` | another drawer tab → `source_fetch` is `None`, no timer |
 | `empty_cpu_falls_back_on_short_ranges` | `monitor_source_tests.rs` | 24h → `Fallback`; 30d → Alert reason |
 | `failed_network_keeps_other_charts` | `monitor_source_tests.rs` | notice on Network only |
-| `source_rows_newest_first_with_oom` | `monitor_source_tests.rs` | offsets, OOM row within half a step |
 | `leaving_ready_resets_long_ranges` | `app_shell_tests.rs` | 30d → 24h |
 
 ## Screens and ui-verifier

@@ -36,12 +36,12 @@ No changes in any step. `DynamicObject`/`ApiResource` (kube), `serde_json`, `fut
 | 2 | `src/node_drawer.rs` | Allocatable used section; formatted Resources rows |
 | 2 | `src/main.rs` | module declarations |
 | 3 | `src/usage_chart.rs` (new) + `usage_chart_tests.rs` | model, `UsageChart` (`#[derive(IntoPlot)]`, `Plot` impl), `usage_chart_card`, geometry |
-| 3 | `src/monitor_data.rs` (new) + `monitor_data_tests.rs` | `MonitorSubject`, `MonitorInput`, `MonitorData`, `ScopeChoice`, `MonitorRow`, `monitor_data` |
-| 3 | `src/monitor_tab.rs` (new) | toolbar, body by status, chart grid, Table view, note |
+| 3 | `src/monitor_data.rs` (new) + `monitor_data_tests.rs` | `MonitorSubject`, `MonitorInput`, `MonitorData`, `ScopeChoice`, `monitor_data` |
+| 3 | `src/monitor_tab.rs` (new) | toolbar, body by status, chart grid, note |
 | 3 | `src/drawer.rs` | `DrawerTab::Monitor`, `ContainerTab::Monitor`, `MonitorState`, `MonitorRange`, `MonitorScope`, `MonitorKey`, `MonitorCache`; `drawer_tabs`, `tab_titles` |
 | 3 | `src/pod_drawer.rs`, `node_drawer.rs`, `kind_drawer.rs` | Monitor bodies; container Monitor sub-tab |
 | 3 | `src/resource_kind.rs` | `has_monitor` |
-| 3 | `src/app_shell.rs` | `set_monitor_range`, `set_monitor_scope`, `toggle_monitor_table`; monitor cache refresh in `render`; scope reset on subject change; full reset in `show_screen` |
+| 3 | `src/app_shell.rs` | `set_monitor_range`, `set_monitor_scope`; monitor cache refresh in `render`; scope reset on subject change; full reset in `show_screen` |
 | 3 | `src/launch_options.rs` (+ tests) | `pod-monitor`, `node-monitor`, `{plural}-monitor`; usage text |
 | 3 | `src/screenshot.rs` | monitor screens wait for `is_metrics_settled` |
 

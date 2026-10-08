@@ -641,51 +641,6 @@ fn short_history_marks_the_range() {
 }
 
 #[test]
-fn rows_are_newest_first_with_oom_flags() {
-    let mut pod = api_pod();
-    pod.containers[0].last_termination = Some(Termination {
-        reason: Some(StatusReason::OomKilled),
-        exit_code: 137,
-        signal: None,
-        started_at: None,
-        finished_at: Some(at(46)),
-    });
-    let pods = [pod.clone()];
-    let mut pod_history = PodUsageHistory::default();
-    for tick in 1..=4 {
-        // The pod misses tick 3.
-        let sample = if tick == 3 {
-            Vec::new()
-        } else {
-            vec![metrics(
-                &pod,
-                Some(tick * 15),
-                &[("app", usage(tick as u64 * 10, 100))],
-            )]
-        };
-        pod_history.record(at(tick * 15), &sample, &pods);
-    }
-    let nodes = NodeUsageHistory::default();
-    let scope = MonitorScope::Total;
-    let data = monitor_data(&input(
-        MonitorSubject::Pod(&pod),
-        &scope,
-        &pods,
-        &pod_history,
-        &nodes,
-        &KubeletFeed::new(),
-    ));
-    let offsets: Vec<u64> = data.rows.iter().map(|row| row.offset).collect();
-    assert_eq!(offsets, [0, 15, 30, 45]);
-    assert_eq!(data.rows[0].cpu, Some(0.04));
-    assert_eq!(data.rows[1].cpu, None);
-    assert_eq!(data.rows[1].memory, None);
-    // The kill at 46 s is within half a step of the tick at 45 s (the row 15 s back) only.
-    let flags: Vec<bool> = data.rows.iter().map(|row| row.is_oom).collect();
-    assert_eq!(flags, [false, true, false, false]);
-}
-
-#[test]
 fn a_range_is_short_only_by_more_than_one_step() {
     let pod = api_pod();
     let pods = [pod.clone()];
@@ -1438,67 +1393,6 @@ fn kubelet_cards_end_at_the_kubelet_tick_without_metrics() {
     let data = monitor_data(&with_nodes(base, &nodes));
     assert_eq!(data.charts[0].end, at(4 * 15));
     assert_eq!(data.kubelet_charts[0].end, at(4 * 15));
-}
-
-#[test]
-fn rows_follow_the_kubelet_timeline_without_metrics() {
-    let pods = vec![api_pod()];
-    let feed = kubelet_feed(&pods, 4, 0, no_disk);
-    let nodes = [node_named("wk-1", NodeReadiness::Ready)];
-    let no_pods = PodUsageHistory::default();
-    let no_nodes = NodeUsageHistory::default();
-    let scope = MonitorScope::Total;
-    let base = input(
-        MonitorSubject::Pod(&pods[0]),
-        &scope,
-        &pods,
-        &no_pods,
-        &no_nodes,
-        &feed,
-    );
-    let data = monitor_data(&with_nodes(base, &nodes));
-    let offsets: Vec<u64> = data.rows.iter().map(|row| row.offset).collect();
-    assert_eq!(offsets, [0, 15, 30, 45]);
-    assert!(
-        data.rows
-            .iter()
-            .all(|row| row.cpu.is_none() && row.memory.is_none())
-    );
-    assert_eq!(
-        data.rows[0].network,
-        Some(RatePair {
-            first: 1_000.,
-            second: 500.,
-        })
-    );
-    // The first kubelet tick has no rate yet.
-    assert_eq!(data.rows[3].network, None);
-}
-
-#[test]
-fn rows_join_the_nearest_kubelet_tick() {
-    let pods = vec![api_pod()];
-    let nodes = [node_named("wk-1", NodeReadiness::Ready)];
-    let no_nodes = NodeUsageHistory::default();
-    let scope = MonitorScope::Total;
-    let metrics = history(&pods, 4, &[("app", usage(10, 100))]);
-    // Two kubelet ticks, at 22 s and 37 s; only the second has a rate.
-    let feed = kubelet_feed(&pods, 2, 7, no_disk);
-    let base = input(
-        MonitorSubject::Pod(&pods[0]),
-        &scope,
-        &pods,
-        &metrics,
-        &no_nodes,
-        &feed,
-    );
-    let rows = monitor_data(&with_nodes(base, &nodes)).rows;
-    let joined: Vec<(u64, bool)> = rows
-        .iter()
-        .map(|row| (row.offset, row.network.is_some()))
-        .collect();
-    // Metrics ticks at 60, 45, 30, 15 s. Only 30 s has a kubelet rate within 7.5 s (37 s).
-    assert_eq!(joined, [(0, false), (15, false), (30, true), (45, false)]);
 }
 
 #[test]

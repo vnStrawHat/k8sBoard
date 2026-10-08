@@ -1,5 +1,5 @@
 //! The Monitor tab's read of a Prometheus-compatible metrics source (spec 0048): what to query for a
-//! subject, when to query again, and the charts and rows built from the answers. Pure: the fetch
+//! subject, when to query again, and the charts built from the answers. Pure: the fetch
 //! itself runs in `app_shell_monitor_source.rs`.
 
 use std::rc::Rc;
@@ -13,10 +13,10 @@ use gpui_kit::Task;
 
 use crate::drawer::{MonitorRange, MonitorScope};
 use crate::kind_row::{PodOwner, owns_pod};
-use crate::kubelet_history::{RateKind, RatePair};
+use crate::kubelet_history::RateKind;
 use crate::monitor_data::{
-    MonitorData, MonitorInput, MonitorRow, MonitorSubject, kubelet_chart, nearest_rate, read_rates,
-    reference_lines, scope_choices, series_name,
+    MonitorData, MonitorInput, MonitorSubject, kubelet_chart, read_rates, reference_lines,
+    scope_choices, series_name,
 };
 use crate::monitor_notices::source_network_notice;
 use crate::node_usage::takes_room;
@@ -221,7 +221,7 @@ fn has_values(series: &SourceSeries) -> bool {
     series.points.iter().any(|(_, value)| value.is_some())
 }
 
-/// The charts and rows of a result, or why CPU and Memory (the two cards every view needs) cannot
+/// The charts of a result, or why CPU and Memory (the two cards every view needs) cannot
 /// be drawn.
 pub(crate) fn source_monitor_data(input: &MonitorInput, result: &SourceResult) -> SourceView {
     let mut required = Vec::new();
@@ -317,41 +317,6 @@ pub(crate) fn source_monitor_data(input: &MonitorInput, result: &SourceResult) -
             ],
         )
     };
-    let pair_at = |first: UsageMetric, second: UsageMetric, index: usize| {
-        let value = |metric| match answer(result, metric) {
-            Some(Ok(series)) => series.points.get(index).and_then(|(_, value)| *value),
-            _ => None,
-        };
-        Some(RatePair {
-            first: value(first)?,
-            second: value(second)?,
-        })
-    };
-    let half_step = result.step / 2;
-    let rows = cpu
-        .points
-        .iter()
-        .enumerate()
-        .rev()
-        .map(|(index, (at, cpu_value))| MonitorRow {
-            offset: end.duration_since(*at).as_secs().max(0).unsigned_abs(),
-            cpu: *cpu_value,
-            memory: memory.points.get(index).and_then(|(_, value)| *value),
-            network: pair_at(
-                UsageMetric::NetworkReceive,
-                UsageMetric::NetworkTransmit,
-                index,
-            ),
-            disk: if is_node {
-                nearest_rate(&disk_rates, *at)
-            } else {
-                pair_at(UsageMetric::DiskRead, UsageMetric::DiskWrite, index)
-            },
-            is_oom: markers
-                .iter()
-                .any(|mark| mark.duration_since(*at).unsigned_abs() <= half_step),
-        })
-        .collect();
     let was_cut = result
         .metrics
         .iter()
@@ -360,7 +325,6 @@ pub(crate) fn source_monitor_data(input: &MonitorInput, result: &SourceResult) -
         data: MonitorData {
             charts,
             kubelet_charts: vec![network, disk],
-            rows,
             choices,
             stale_since: None,
             span: None,

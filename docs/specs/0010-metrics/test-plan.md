@@ -70,7 +70,6 @@
 | 3 | `monitor_data_tests.rs` | `node_requested_line_only_for_all_namespaces` | allocatable always |
 | 3 | `monitor_data_tests.rs` | `scope_choices_follow_the_subject` / `stale_part_scope_falls_back_to_total` | |
 | 3 | `monitor_data_tests.rs` | `stale_when_the_server_timestamp_lags_two_ticks` / `short_history_marks_the_range` | |
-| 3 | `monitor_data_tests.rs` | `rows_are_newest_first_with_oom_flags` | |
 | 3 | `drawer.rs` | `drawer_tabs_follow_the_wireframe_order` (updated) | Monitor for Pod, Node, Deployments; none for ConfigMaps, Events |
 | 3 | `drawer.rs` | `long_ranges_read_coarse_points` | 15m/1h Fine; 6h/24h Coarse |
 | 3 | `resource_kind.rs` | `has_monitor_matches_the_wireframe_kinds` | five kinds; CronJobs no |
@@ -85,4 +84,4 @@
 
 ## ui-verifier checklist (step 3)
 
-W4: Memory column, "—" for Completed. W5: CPU/Memory bars + percent, yellow at ≥ 80 %. W4b: container Resources bars; sub-tabs `Info · Env · Mounts · Monitor`. W4c: tab order; toolbar (four range buttons, the short one muted, scope, Table view, status); CPU and Memory cards with `now …`, dashed request (muted) and limit (red) lines with labels, `-15m`/`now`, source note. W7: Monitor on Deployments with `All pods ▾`; node drawer "Allocatable used" with `9.8 / 15.8 cores` style. No hardcoded colors.
+W4: Memory column, "—" for Completed. W5: CPU/Memory bars + percent, yellow at ≥ 80 %. W4b: container Resources bars; sub-tabs `Info · Env · Mounts · Monitor`. W4c: tab order; toolbar (four range buttons, the short one muted, scope, status); CPU and Memory cards with `now …`, dashed request (muted) and limit (red) lines with labels, `-15m`/`now`, source note. W7: Monitor on Deployments with `All pods ▾`; node drawer "Allocatable used" with `9.8 / 15.8 cores` style. No hardcoded colors.

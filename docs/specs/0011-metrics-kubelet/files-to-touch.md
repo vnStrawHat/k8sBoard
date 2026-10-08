@@ -35,7 +35,7 @@ One change: `crates/cluster/Cargo.toml` gains `serde.workspace = true` (the work
 | 3 | `src/usage_chart.rs` (+ tests) | `chart_2`, legend, `notice`, rate floor |
 | 3 | `src/monitor_notices.rs` | notice rules of the Network and Disk I/O cards |
 | 3 | `src/monitor_data.rs` (+ tests) | `MonitorInput.kubelet`, `.nodes`; Network/Disk models; notices; window end; `MonitorRow` columns |
-| 3 | `src/monitor_tab.rs` | body by both feeds, kubelet Alert, Table view columns, note |
+| 3 | `src/monitor_tab.rs` | body by both feeds, kubelet Alert, note |
 | 3 | `src/app_shell.rs` | `wants_disk_io` in `sync_kubelet_demand` |
 | 3 | `src/screenshot.rs` | monitor screens wait for the kubelet feed too |
 

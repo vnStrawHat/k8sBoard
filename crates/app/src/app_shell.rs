@@ -2520,11 +2520,6 @@ impl AppShell {
         cx.notify();
     }
 
-    pub(crate) fn toggle_monitor_table(&mut self, cx: &mut Context<Self>) {
-        self.drawer.monitor.is_table = !self.drawer.monitor.is_table;
-        cx.notify();
-    }
-
     /// Keeps `drawer.monitor.cache` for what the open drawer shows, and frees it while no Monitor
     /// is shown. It runs inside `render`, so it only assigns and never notifies. The series are
     /// rebuilt only when the key changes (a new tick, range, scope, or subject), so a hover repaint

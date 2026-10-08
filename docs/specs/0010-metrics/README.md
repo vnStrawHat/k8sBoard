@@ -7,7 +7,7 @@ Status: amended after advisor review (HEAD `459e493`, 0008 steps 1–2). Crates:
 - A per-session **sampler** that polls PodMetrics (session scope) and NodeMetrics every 15 s into bounded rings: 1 h at 15 s plus 24 h at 5 min.
 - **Pods** Memory and CPU columns (Columns ▾ hides either); **Nodes** CPU and Memory bars as % of allocatable.
 - Usage bars in container Info › Resources and the node drawer ("Allocatable used"); human-readable node quantities (0008 open item 4).
-- A **Monitor tab** (CPU, Memory charts, request/limit lines, OOMKilled markers, 15m/1h/6h/24h ranges, scope selector, Table view, source note) on Pod, Node, Deployment, StatefulSet, DaemonSet, ReplicaSet, Job drawers, plus a container Monitor sub-tab.
+- A **Monitor tab** (CPU, Memory charts, request/limit lines, OOMKilled markers, 15m/1h/6h/24h ranges, scope selector, source note) on Pod, Node, Deployment, StatefulSet, DaemonSet, ReplicaSet, Job drawers, plus a container Monitor sub-tab.
 - "Metrics unavailable · reason" when the API is missing, broken, or denied.
 
 ## Non-goals
@@ -31,7 +31,7 @@ Network, Disk I/O, PVC usage, kubelet stats (0011); Prometheus and history beyon
 | [metrics-history.md](metrics-history.md) | steps 2–3: formatting, fine and coarse rings, scope retention, series, OOM marks |
 | [metrics-session.md](metrics-session.md) | step 2: access gates (per-namespace pods review), feeds, error wording, lifecycle |
 | [table-columns.md](table-columns.md) | step 2: Pods/Nodes columns on the 0009 toolkit, usage bars, node quantities |
-| [monitor-tab.md](monitor-tab.md) | step 3: tab layout, subjects and scopes, ranges, Table view, unavailable state, 0011 hooks |
+| [monitor-tab.md](monitor-tab.md) | step 3: tab layout, subjects and scopes, ranges, unavailable state, 0011 hooks |
 | [usage-chart.md](usage-chart.md) | step 3: the `Plot` implementation, geometry, tooltip, theme tokens |
 | [files-to-touch.md](files-to-touch.md) | modules per crate and step, doc updates |
 | [test-plan.md](test-plan.md) | unit tests per step, live checks, ui-verifier checklist |
@@ -55,6 +55,7 @@ Network, Disk I/O, PVC usage, kubelet stats (0011); Prometheus and history beyon
 
 ## Open items
 
+0. Table view removed on 2026-10-08 (user decision).
 1. Screenshots capture after 2 ticks, so charts show one short segment; add a dev-only `--metrics-interval` flag only if the ui-verifier needs dense charts.
 2. Prometheus (30 days) and Settings › Metrics stay backlog/0025; a range longer than the data says so in its tooltip.
 3. Above ~2,000 containers the history passes 14 MB, and pods seen in the last 24 h all count; switch to on-demand history (visible namespaces only) if C13 measurements require it.

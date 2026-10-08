@@ -24,7 +24,7 @@ Full list with rationale in [decisions.md](decisions.md). Key: service proxy onl
 | 2 | Cluster transport: `metrics_query.rs` (endpoint allow-list, the named `send` exception, capped body, deadline, status mapping, decode, `MetricsError`), `list_all_services`, probe `--metrics-source` (settles the [promql.md](promql.md) facts); 0030 table row | 1–6 |
 | 3a | App session: `registry.clusters[].metrics`, `ClusterProfile.metrics`, `SourceState` and its check, `ActiveConnection` global | 1–3, 8 |
 | 3b | App UI: `metrics_page.rs`, `SettingsPage::Metrics`, cluster form row, `--screen settings-metrics[-fixture]` | 1–3, 7–9, 13 |
-| 4 | App Monitor: `MonitorRange::{Days7, Days30}`, `monitor_source.rs` (fetch, refresh, chart models), fallback and notes, Table view, `--screen pod-monitor-source-fixture`, ui-verifier | 1–3, 10–14 |
+| 4 | App Monitor: `MonitorRange::{Days7, Days30}`, `monitor_source.rs` (fetch, refresh, chart models), fallback and notes, `--screen pod-monitor-source-fixture`, ui-verifier | 1–3, 10–14 |
 
 ## Files
 
@@ -34,7 +34,7 @@ Full list with rationale in [decisions.md](decisions.md). Key: service proxy onl
 | [source-and-transport.md](source-and-transport.md) | steps 1–2: source type, detection table, request path, allow-list, caps, errors, clippy row |
 | [promql.md](promql.md) | step 1: escaping, targets, query table, step table |
 | [settings-page.md](settings-page.md) | steps 3a (settings key, session state) and 3b (Metrics page, cluster form row, screens) |
-| [monitor-ranges.md](monitor-ranges.md) | step 4: ranges, fetch and refresh, fallback, notes, Table view |
+| [monitor-ranges.md](monitor-ranges.md) | step 4: ranges, fetch and refresh, fallback, notes |
 | [files-to-touch.md](files-to-touch.md) · [test-plan.md](test-plan.md) | files per step, doc follow-ups; tests, live checks, screens |
 
 ## Acceptance criteria

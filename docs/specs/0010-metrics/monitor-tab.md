@@ -5,7 +5,7 @@
 ## Layout (W4c)
 
 ```text
-[15m|1h|6h|24h]  [Container: api ▾]  [Table view]        step 15s · live
+[15m|1h|6h|24h]  [Container: api ▾]        step 15s · live
 no access in web                                          (pods feed note, when set)
 ┌ CPU            now 310m ┐ ┌ Memory          now 498Mi ┐   two per row when expanded,
 │ chart (usage-chart.md)  │ │ chart                     │   one per row at 420 px
@@ -19,7 +19,7 @@ Chart height 140 px expanded, 110 px at the default width. The body is `DrawerBo
 
 ```rust
 pub(crate) struct MonitorState { pub(crate) range: MonitorRange, pub(crate) scope: MonitorScope,
-    pub(crate) is_table: bool, pub(crate) cache: Option<MonitorCache> }
+    pub(crate) cache: Option<MonitorCache> }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum MonitorRange { Minutes15, Hour1, Hours6, Hours24 }      // labels 15m 1h 6h 24h
 impl MonitorRange { pub(crate) fn duration(self) -> Duration; pub(crate) fn resolution(self) -> Resolution; } // 6h, 24h → Coarse
@@ -30,7 +30,7 @@ pub(crate) struct MonitorKey { subject: ResourceKey, container: Option<String>, 
 pub(crate) struct MonitorCache { key: MonitorKey, pub(crate) data: MonitorData }
 ```
 
-- `DrawerState` gains `monitor: MonitorState` (15m, Total, charts, no cache). `AppShell::set_monitor_range`, `set_monitor_scope`, `toggle_monitor_table`, each `cx.notify()`. Scope resets on a subject change; `show_screen` resets everything (decision 28).
+- `DrawerState` gains `monitor: MonitorState` (15m, Total, charts, no cache). `AppShell::set_monitor_range`, `set_monitor_scope`, each `cx.notify()`. Scope resets on a subject change; `show_screen` resets everything (decision 28).
 - Memo (decision 28): before building a drawer that shows Monitor (tab or container sub-tab), `AppShell::render` (`&mut self`) compares the current `MonitorKey` (`ticks` = the feed's `tick_count()`) with `cache.key` and calls `monitor_data` only when it differs. Hover repaints and unrelated notifies reuse the cache.
 
 ## Data (`monitor_data.rs`)
@@ -42,7 +42,7 @@ pub(crate) enum MonitorSubject<'a> { Pod(&'a PodSummary), Container { pod: &'a P
 pub(crate) struct MonitorInput<'a> { pub(crate) subject: MonitorSubject<'a>, pub(crate) scope: &'a MonitorScope,
     pub(crate) range: MonitorRange, pub(crate) pods: &'a [PodSummary], pub(crate) pod_history: &'a PodUsageHistory,
     pub(crate) node_history: &'a NodeUsageHistory, pub(crate) is_all_namespaces: bool }
-pub(crate) struct MonitorData { pub(crate) charts: Vec<Rc<UsageChartModel>>, pub(crate) rows: Vec<MonitorRow>,
+pub(crate) struct MonitorData { pub(crate) charts: Vec<Rc<UsageChartModel>>,
     pub(crate) choices: Vec<ScopeChoice>, pub(crate) stale_since: Option<jiff::Timestamp>, pub(crate) span: Option<Duration>, pub(crate) scope: MonitorScope }
 pub(crate) fn monitor_data(input: &MonitorInput) -> MonitorData;
 ```
@@ -58,14 +58,12 @@ pub(crate) fn monitor_data(input: &MonitorInput) -> MonitorData;
 - The window ends at the feed's newest tick (`end`) and starts at `end − range`; older points drop. Requests and limits parse with `CpuAmount`/`ByteAmount` (unparsable → no line).
 - `charts`: `[CPU, Memory]`, ids `monitor-cpu`, `monitor-memory`; 0011 appends.
 - `choices`: Pod → `Pod total` + main and sidecar containers (`Container: {name}`); Workload → `All pods` + owned pods (`Pod: {name}`); Node → `Node total`. A `Part` no longer offered falls back to Total.
-- `rows` (`MonitorRow { offset: u64, cpu: Option<f64>, memory: Option<f64>, is_oom: bool }`): one per point, newest first; `is_oom` when a mark is within half a step of the point.
 - `stale_since`: the series' `sampled_at` once the server timestamp has not advanced for 4 polls in a row (counted in ticks, so it does not depend on the clock or the range; a pod that did not report the newest tick is not stale). `is_short_for(range)`: the history `span()` plus one step of the range's resolution is shorter than the range, so a full history (at most 24 h less a coarse step) does not dim 24h forever.
 
 ## Toolbar
 
 - Range: kit `ButtonGroup` of four small buttons, all enabled, the current one selected. Each range button for which `is_short_for(range)` holds is dimmed and has the tooltip "Showing data since k8sBoard connected; connect Prometheus for 30 days".
 - Scope: small outline `Button` with the current choice and a dropdown caret + `DropdownMenu` of `choices`; Node shows the muted text `Node total`. Hidden in the container sub-tab.
-- `Table view`: small outline `Button`, `.selected(is_table)`.
 - Right (`ml_auto`, muted `text_xs`): `Live` → `step 15s · live` (`step 5m` for coarse ranges), or `stale · last sample {age} ago` when `stale_since` is set; `Checking`/`Waiting` → `collecting…`; `Interrupted` → `paused · retrying` with the error as tooltip.
 - Pods feed `note` (e.g. `no access in web`): a muted `text_xs` line under the toolbar.
 
@@ -75,14 +73,10 @@ pub(crate) fn monitor_data(input: &MonitorInput) -> MonitorData;
 |---|---|
 | `Unavailable(reason)` or `Failed(reason)` | kit `Alert` (warning) titled `Metrics unavailable`, message `reason` (`Failed` adds `Retrying.`); no toolbar |
 | `Checking`/`Waiting`, no tick | toolbar, then muted `Collecting the first sample…` |
-| `Live` | toolbar, charts (or the table), note |
+| `Live` | toolbar, charts, note |
 | `Interrupted(reason)` | as Live plus a muted `Last poll failed: {reason}. Showing older samples.` |
 
 Pod, Container, and Workload read the pods feed; Node reads the nodes feed.
-
-## Table view
-
-Rows `Time · CPU · Memory`, mono `text_xs`, from `rows`: `format_offset`, `Measure::format` or muted `not running`; an OOM row adds `OOMKilled` toned Bad. At most 307 rows (288 coarse + 19 fine); the drawer body scrolls.
 
 ## Tabs
 
@@ -97,4 +91,4 @@ Rows `Time · CPU · Memory`, mono `text_xs`, from `rows`: `format_offset`, `Mea
 
 ## Hooks for 0011
 
-`charts` is a list (0011 appends Network and Disk I/O with two series each and a rate `Measure`); the grid lays out any count, two per row; legends render for two or more series; the note and `MonitorRow` gain 0011's parts.
+`charts` is a list (0011 appends Network and Disk I/O with two series each and a rate `Measure`); the grid lays out any count, two per row; legends render for two or more series; the note gains 0011's part.

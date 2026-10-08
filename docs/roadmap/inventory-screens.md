@@ -32,7 +32,7 @@
 | W4-13 | Env and mounts summary (sources: ConfigMap, Secret) | Done | 0008 (names and sources only, decision C1) | — |
 | W4c-1 | Monitor tab: CPU, Memory with request/limit lines, OOM markers | Done | 0010 | OOM marks from container status |
 | W4c-2 | Monitor: Network, Disk I/O (kubelet cAdvisor via API proxy) | Done | 0011 | Network (receive/transmit) and Disk I/O (read/write) from the kubelet through the node proxy |
-| W4c-3 | Range 15m/1h/6h/24h, scope pod/container, Table view, source note | Partial | 0010 (15m to 24h, scope, Table view, source note) | Prometheus ranges: backlog |
+| W4c-3 | Range 15m/1h/6h/24h, scope pod/container, source note | Partial | 0010 (15m to 24h, scope, source note) | Prometheus ranges: backlog |
 
 ## Nodes (W5) and Drain (W6)
 

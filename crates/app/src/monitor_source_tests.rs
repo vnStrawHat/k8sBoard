@@ -320,7 +320,7 @@ fn step_text_uses_the_largest_whole_unit() {
 }
 
 #[test]
-fn a_full_answer_builds_four_cards_and_rows() {
+fn a_full_answer_builds_four_cards() {
     let api = pod("api-1", None, false);
     let (data, was_cut) = charts_of(view_of(MonitorSubject::Pod(&api), &[], &result(all_ok())));
     assert!(!was_cut);
@@ -349,23 +349,12 @@ fn a_full_answer_builds_four_cards_and_rows() {
 }
 
 #[test]
-fn source_rows_newest_first_with_oom() {
+fn the_oom_marker_is_on_the_memory_chart() {
     let api = pod("api-1", None, false);
     let mut answers = result(all_ok());
-    // 600 s after the middle point: within half a step (900 s) of it, and not of the newest.
+    // 600 s after the middle point of the range.
     answers.oom = vec![at(1_000_000 + 1_800 + 600)];
     let (data, _) = charts_of(view_of(MonitorSubject::Pod(&api), &[], &answers));
-    let offsets: Vec<u64> = data.rows.iter().map(|row| row.offset).collect();
-    assert_eq!(offsets, [0, 1_800, 3_600]);
-    let oom: Vec<bool> = data.rows.iter().map(|row| row.is_oom).collect();
-    assert_eq!(oom, [false, true, false]);
-    let newest = &data.rows[0];
-    assert_eq!(newest.cpu, Some(3.0));
-    assert_eq!(newest.memory, Some(300.0));
-    let network = newest.network.expect("receive and transmit");
-    assert_eq!((network.first, network.second), (30.0, 60.0));
-    let disk = newest.disk.expect("read and write");
-    assert_eq!((disk.first, disk.second), (90.0, 120.0));
     assert_eq!(
         data.charts[1].markers, answers.oom,
         "the marker is on the memory chart"
@@ -379,7 +368,6 @@ fn an_oom_outside_the_range_is_dropped() {
     answers.oom = vec![at(1_000_000 - 10 * 86_400)];
     let (data, _) = charts_of(view_of(MonitorSubject::Pod(&api), &[], &answers));
     assert!(data.charts[1].markers.is_empty());
-    assert!(data.rows.iter().all(|row| !row.is_oom));
 }
 
 #[test]
@@ -518,7 +506,6 @@ fn a_node_takes_its_disk_card_from_the_kubelet_feed() {
         Some("Collecting… rates need two samples"),
         "no source disk series: the kubelet feed has not sampled"
     );
-    assert!(data.rows.iter().all(|row| row.disk.is_none()));
     assert_eq!(data.charts[0].series[0].name.as_ref(), "used");
 }
 

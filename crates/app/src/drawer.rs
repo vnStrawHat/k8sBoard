@@ -114,7 +114,7 @@ pub(crate) struct DrawerState {
     pub(crate) helm_revision: Option<u32>,
     /// A History button's layout that waits for the view of its revision to exist.
     pub(crate) pending_helm_layout: Option<(ResourceKey, ValuesLayout)>,
-    /// The Monitor tab: range and Table view survive a change of subject, the scope does not.
+    /// The Monitor tab: the range survives a change of subject, the scope does not.
     pub(crate) monitor: MonitorState,
     /// The scroll position of the body of an overview drawer, so a menu can move it.
     pub(crate) scroll: ScrollHandle,
@@ -195,12 +195,11 @@ pub(crate) fn scrolled_offset(offset: f32, viewport: f32, max: f32, step: Drawer
     wanted.clamp(-max, 0.)
 }
 
-/// What the Monitor tab shows: the range, which part of the subject, the Table view toggle, and
+/// What the Monitor tab shows: the range, which part of the subject, and
 /// the data memoized for the current key (see `MonitorKey`).
 pub(crate) struct MonitorState {
     pub(crate) range: MonitorRange,
     pub(crate) scope: MonitorScope,
-    pub(crate) is_table: bool,
     pub(crate) cache: Option<MonitorCache>,
     /// The metrics source query of the shown Monitor (spec 0048); `Some` exactly while the source is
     /// ready, the subject has a target, and a Monitor tab shows. It lives with the range and scope
@@ -213,7 +212,6 @@ impl MonitorState {
         Self {
             range: MonitorRange::Minutes15,
             scope: MonitorScope::Total,
-            is_table: false,
             cache: None,
             source: None,
         }
@@ -1484,7 +1482,6 @@ mod tests {
         let state = DrawerState::new();
         assert_eq!(state.monitor.range, MonitorRange::Minutes15);
         assert_eq!(state.monitor.scope, MonitorScope::Total);
-        assert!(!state.monitor.is_table);
         assert!(state.monitor.cache.is_none());
     }
 

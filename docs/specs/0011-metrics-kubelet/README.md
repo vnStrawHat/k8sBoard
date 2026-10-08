@@ -6,7 +6,7 @@ Status: draft for advisor review. Crates: `crates/cluster` (step 1), `crates/app
 
 - Read two fixed kubelet paths through the API server node proxy: `stats/summary` (pod and node network counters, PVC volume stats) and `metrics/cadvisor` (container disk read/write byte counters).
 - Turn counters into bytes/s rates with reset handling; keep them in 0010-style fine/coarse rings.
-- Monitor tab: **Network** and **Disk I/O** charts (two series, legend) for Pod, container, Node, and the five workload kinds; Table view columns; source note.
+- Monitor tab: **Network** and **Disk I/O** charts (two series, legend) for Pod, container, Node, and the five workload kinds; source note.
 - Store the newest PVC usage (used, capacity, inodes) per claim for 0014/0021; first consumer: PVC rows of the container Mounts sub-tab.
 
 ## Non-goals
@@ -19,7 +19,7 @@ Filesystem usage charts for containers, `rootfs`/`logs` stats, node ephemeral-st
 |---|---|---|
 | 1 | `crates/cluster`: `kubelet_stats.rs` (allow-list, summary structs, watch-driven poll), `cadvisor_text.rs` (disk I/O lines), `PodSummary.host_network`, `serde` dependency, probe `--kubelet-seconds` | 1, 2, 3, 4 |
 | 2 | App data: `kubelet_history.rs` (on 0010's `history_rings.rs`), `kubelet_metrics.rs` (demand, targets, feed), session wiring, `sync_kubelet_demand`, PVC usage in Mounts | 1, 2, 3, 5, 6 |
-| 3 | App Monitor: rate format, two-series legend and notices in `UsageChart`, Network/Disk models, Table view columns, disk demand, screenshots | 1, 2, 7, 8 |
+| 3 | App Monitor: rate format, two-series legend and notices in `UsageChart`, Network/Disk models, disk demand, screenshots | 1, 2, 7, 8 |
 
 ## Files
 
@@ -30,7 +30,7 @@ Filesystem usage charts for containers, `rootfs`/`logs` stats, node ephemeral-st
 | [cadvisor-disk-io.md](cadvisor-disk-io.md) | step 1: streaming Prometheus-text reader for two metric families |
 | [kubelet-history.md](kubelet-history.md) | steps 2–3: rate rule, record, series, disk state, PVC store |
 | [kubelet-session.md](kubelet-session.md) | step 2: demand, targets, gate, feed lifecycle, Mounts consumer |
-| [monitor-charts.md](monitor-charts.md) | step 3: rate format, chart changes, Network/Disk models, notices, Table view |
+| [monitor-charts.md](monitor-charts.md) | step 3: rate format, chart changes, Network/Disk models, notices |
 | [files-to-touch.md](files-to-touch.md) | modules per crate and step, doc updates |
 | [test-plan.md](test-plan.md) | unit tests per step, live checks, ui-verifier checklist |
 

@@ -70,11 +70,6 @@ CPU and Memory keep 0010's `end` (the metrics feed's newest tick). Network and D
 
 "Data state" = `Checking`, `Waiting`, `Live`, `Interrupted`. A `Workload` subject with no `related_pods` keeps 0010's `No pods to monitor`.
 
-## Table view
-
-- `MonitorRow` gains `network: Option<RatePair<f64>>` and `disk: Option<RatePair<f64>>`; columns `Time · CPU · Memory · Receive · Transmit · Read · Write`, mono `text_xs`, `Measure::Rate.format`, muted `—` for `None`.
-- Rows follow the metrics timeline (0010); each takes the kubelet point nearest in time within ±7.5 s. When the metrics feed has no ticks, rows follow the kubelet timeline with CPU and Memory `—`.
-
 ## Note (bottom of the tab)
 
 0010's first sentence, then `Network and disk I/O: kubelet stats summary and cAdvisor through the API server node proxy, sampled every 15s while needed.`, then 0010's history sentence unchanged.
@@ -94,4 +89,3 @@ CPU and Memory keep 0010's `end` (the metrics feed's newest tick). Network and D
 - A pod or node whose disk node is not read yet gets no special notice: the card falls through to `Collecting…` once it has no rate. A workload `Part(p)` on a node outside `disk_io_nodes` reads `Covers pods on 0 of 1 nodes`.
 - Rate axes take tops of 1, 2, 4, or 10 times a power of ten, so the midline is whole in its unit (a 5 KB/s top would have read `3 KB/s` at the middle).
 - Second series colour: every chart token is a shade of blue, so series 1 (`transmit`, `write`) uses `chart_bullish` (green); series 0 stays `chart_1`.
-- The Table view shows `—`, not `not running`, for CPU and Memory while the metrics feed has no sample.

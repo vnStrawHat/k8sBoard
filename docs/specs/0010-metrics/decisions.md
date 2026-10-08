@@ -47,8 +47,7 @@
 | 24 | Monitor tab on Pod, Node, Deployment, StatefulSet, DaemonSet, ReplicaSet, Job; shown even when metrics are unavailable | W7 ◔ list (CronJob has none); a tab with a reason beats a missing tab |
 | 25 | Scope: Pod → Pod total + each container; workload → All pods + each pod; Node → Node total | W4c note 2, W7 Monitor toolbar |
 | 26 | Container sub-tabs `Info · Env · Mounts · Monitor`; 0019 inserts `Logs` before Monitor (W4b order) | W4b; one chart path |
-| 27 | Table view: the range's points newest first: offset (`-3m 15s`, `-5h 40m`), CPU, Memory | W4c "Table view"; no time-zone dependency |
-| 28 | Range and Table view survive subject changes; scope resets on a new subject; `show_screen` resets all; chart data is memoized per (subject, tick count, scope, range) | like `tab` and `selected_container`; rendering never re-sums 2,000 rings per frame |
+| 28 | The range survives subject changes; scope resets on a new subject; `show_screen` resets all; chart data is memoized per (subject, tick count, scope, range) | like `tab` and `selected_container`; rendering never re-sums 2,000 rings per frame |
 
 ## Budget (1,000 pods, 2,000 containers, 50 nodes, scope All)
 

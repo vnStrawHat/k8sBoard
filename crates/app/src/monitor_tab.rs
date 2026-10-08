@@ -1,4 +1,4 @@
-//! The Monitor tab body: toolbar, charts or Table view, and the source note, by feed status.
+//! The Monitor tab body: toolbar, charts, and the source note, by feed status.
 
 use std::rc::Rc;
 
@@ -16,31 +16,17 @@ use crate::app_shell::AppShell;
 use crate::cluster_metrics::{FeedStatus, source_note};
 use crate::cluster_session::LiveCluster;
 use crate::drawer::{DrawerState, MonitorRange, MonitorScope, MonitorState};
-use crate::history_rings::{COARSE_POINTS, Resolution, TICKS_PER_COARSE};
-use crate::monitor_data::{MonitorData, MonitorRow};
+use crate::history_rings::Resolution;
+use crate::monitor_data::MonitorData;
 use crate::monitor_source::{SourceFetch, SourceView, fallback_note, step_text};
-use crate::status_tone::{StatusTone, tone_color};
 use crate::usage_chart::{UsageChartModel, usage_chart_card};
-use crate::usage_format::{Measure, format_offset};
 
 const CHART_HEIGHT: f32 = 110.;
 const CHART_MIN_WIDTH: f32 = 280.;
-/// The most rows the Table view shows: the sampler holds every coarse point and the fine ticks newer
-/// than the last one (fewer than 20, or that tick would have closed a coarse point); a source answer
-/// holds at most `cluster::MAX_POINTS` points.
-const SAMPLER_ROWS: usize = COARSE_POINTS + TICKS_PER_COARSE - 1;
-const SOURCE_ROWS: usize = cluster::MAX_POINTS as usize;
-const MAX_TABLE_ROWS: usize = if SAMPLER_ROWS > SOURCE_ROWS {
-    SAMPLER_ROWS
-} else {
-    SOURCE_ROWS
-};
 const SHORT_HISTORY_TIP: &str = "Showing data since k8sBoard connected; choose a metrics source in Settings › Clusters › Metrics for up to 30 days";
 const SOURCE_NOTE: &str = "CPU and memory: metrics-server, sampled by k8sBoard every 15s while the app is open. Network and disk I/O: kubelet stats summary and cAdvisor through the API server node proxy, sampled every 15s while needed. Kept 24 hours.";
 const METRICS_UNAVAILABLE_TITLE: &str = "Metrics unavailable";
 const KUBELET_UNAVAILABLE_TITLE: &str = "Network and disk I/O unavailable";
-/// A Table view column of a rate or of the time.
-const COLUMN_WIDTH: f32 = 78.;
 
 /// What the tab needs besides the cached data.
 pub(crate) struct MonitorView<'a> {
@@ -121,11 +107,7 @@ pub(crate) fn monitor_tab(view: &MonitorView<'_>, cx: &Context<AppShell>) -> Any
                     "Some series were left out (more than 64).".to_owned(),
                 ));
             }
-            column = if view.state.is_table {
-                column.child(table(&data.rows, true, cx))
-            } else {
-                column.child(charts(data.charts.iter().chain(&data.kubelet_charts), cx))
-            };
+            column = column.child(charts(data.charts.iter().chain(&data.kubelet_charts), cx));
             column
                 .child(muted(format!(
                     "CPU, memory, network, and disk I/O: {}, step {}. Request and limit lines show the current spec.",
@@ -237,11 +219,7 @@ fn sampler_tab(
     if !is_metrics_down && usage_charts.is_empty() {
         column = column.child(muted("Collecting the first sample…".into()));
     }
-    column = if view.state.is_table {
-        column.child(table(&data.rows, !data.charts.is_empty(), cx))
-    } else {
-        column.child(charts(usage_charts.iter().chain(kubelet_charts), cx))
-    };
+    column = column.child(charts(usage_charts.iter().chain(kubelet_charts), cx));
     if is_kubelet_down {
         column = column.child(unavailable(
             "monitor-kubelet-unavailable",
@@ -315,14 +293,6 @@ fn toolbar(
     if let (true, Some(data)) = (view.has_scope, data) {
         row = row.child(scope_selector(data, cx));
     }
-    row = row.child(
-        Button::new("monitor-table")
-            .label("Table view")
-            .outline()
-            .small()
-            .selected(state.is_table)
-            .on_click(cx.listener(|shell, _, _, cx| shell.toggle_monitor_table(cx))),
-    );
     row.child(status_text(view, data, cx)).into_any_element()
 }
 
@@ -423,52 +393,6 @@ fn charts<'a>(
                 .flex_1()
                 .min_w(px(CHART_MIN_WIDTH))
                 .child(usage_chart_card(model.clone(), px(CHART_HEIGHT), cx))
-        }))
-        .into_any_element()
-}
-
-/// The points of the range, newest first: how long ago, CPU, memory, receive, transmit, read,
-/// write. `has_metrics` is whether the metrics feed has a sample at all.
-fn table(rows: &[MonitorRow], has_metrics: bool, cx: &Context<AppShell>) -> AnyElement {
-    let theme = cx.theme();
-    let mono = theme.mono_font_family.clone();
-    let bad = tone_color(StatusTone::Bad, cx);
-    let muted = theme.muted_foreground;
-    let cell = |text: String| div().w(px(COLUMN_WIDTH)).child(text);
-    let value = |value: Option<f64>, measure: Measure| match value {
-        Some(value) => cell(measure.format(value)).into_any_element(),
-        // Without a metrics tick there is no CPU or Memory to be missing: it is just not read.
-        None if !has_metrics => cell("—".to_owned()).text_color(muted).into_any_element(),
-        None => cell("not running".to_owned())
-            .text_color(muted)
-            .into_any_element(),
-    };
-    let rate = |value: Option<f64>| match value {
-        Some(value) => cell(Measure::Rate.format(value)).into_any_element(),
-        None => cell("—".to_owned()).text_color(muted).into_any_element(),
-    };
-    let header = h_flex().gap_2().text_color(muted).children(
-        [
-            "Time", "CPU", "Memory", "Receive", "Transmit", "Read", "Write",
-        ]
-        .map(|title| cell(title.to_owned())),
-    );
-    v_flex()
-        .font_family(mono)
-        .text_xs()
-        .gap_1()
-        .child(header)
-        .children(rows.iter().take(MAX_TABLE_ROWS).map(|row| {
-            h_flex()
-                .gap_2()
-                .child(cell(format_offset(row.offset)))
-                .child(value(row.cpu, Measure::Cpu))
-                .child(value(row.memory, Measure::Bytes))
-                .child(rate(row.network.map(|pair| pair.first)))
-                .child(rate(row.network.map(|pair| pair.second)))
-                .child(rate(row.disk.map(|pair| pair.first)))
-                .child(rate(row.disk.map(|pair| pair.second)))
-                .children(row.is_oom.then(|| div().text_color(bad).child("OOMKilled")))
         }))
         .into_any_element()
 }
