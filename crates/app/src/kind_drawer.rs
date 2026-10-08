@@ -10,8 +10,8 @@ use gpui_kit::component::progress::Progress;
 use gpui_kit::component::{ActiveTheme as _, h_flex, v_flex};
 use gpui_kit::{
     AnyElement, App, Context, Div, Entity, InteractiveElement as _, IntoElement,
-    ParentElement as _, SharedString, StatefulInteractiveElement as _, Styled as _, WeakEntity,
-    div,
+    ParentElement as _, Pixels, SharedString, StatefulInteractiveElement as _, Styled as _,
+    WeakEntity, div,
 };
 
 use crate::access_bindings::{BindingIndex, ready_binding_lists};
@@ -25,10 +25,10 @@ use crate::cluster_session::{CompanionLists, CompanionSource, LiveCluster, Relat
 use crate::custom_rows::{date_text, date_tone};
 use crate::drawer::{
     DrawerBody, DrawerChrome, DrawerHeader, DrawerSize, DrawerState, DrawerTab, TabCounts,
-    absent_text, annotations_section, chips, created_text, drawer_frame, drawer_tab_bar,
-    drawer_tabs, first_section_title, helm_body, link_text, menu_button, open_link, port_row,
-    section_title, shown_tab, tab_titles, truncated_text, truncated_text_with_tooltip,
-    wide_detail_row, yaml_body,
+    WIDE_LABEL_WIDTH, absent_text, annotations_section, chips, created_text,
+    detail_row_with_label_width, drawer_frame, drawer_tab_bar, drawer_tabs, first_section_title,
+    fitted_label_width, helm_body, link_text, menu_button, open_link, port_row, section_title,
+    shown_tab, tab_titles, truncated_text, truncated_text_with_tooltip, wide_detail_row, yaml_body,
 };
 use crate::helm_release_view::HelmReleaseView;
 use crate::helm_rows::VALUES_CHANGE_TITLE;
@@ -48,7 +48,7 @@ use crate::port_forward_menu::{
     ForwardMenu, ForwardSubject, PortButton, PortButtons, PortChoice, row_subject,
 };
 use crate::related_objects::RelatedSubject;
-use crate::related_pods::pods_section;
+use crate::related_pods::{SectionPlace, pods_section};
 use crate::resource_actions::{
     MenuCluster, MenuExtras, OpenUrl, ResourceAction, action_availability, browse_instances_item,
     kind_menu, open_url_choice, open_url_menu_item, secret_menu,
@@ -349,6 +349,7 @@ fn overview(paint: &DrawerPaint, cx: &Context<AppShell>) -> Overview {
         if section.rows.is_empty() {
             sections.push(absent_text(cx).into_any_element());
         }
+        let label_width = section_label_width(&section.rows);
         for detail in &section.rows {
             next_id += 1;
             let plain_class;
@@ -363,11 +364,17 @@ fn overview(paint: &DrawerPaint, cx: &Context<AppShell>) -> Overview {
                 }
                 _ => detail,
             };
-            sections.push(detail_element(detail, next_id, paint, cx));
+            sections.push(detail_element(detail, next_id, label_width, paint, cx));
         }
     }
     if let Some(owner) = &row.related_pods {
-        sections.push(pods_section(owner, &row.object, live, cx));
+        sections.push(pods_section(
+            SectionPlace::Later,
+            owner,
+            &row.object,
+            live,
+            cx,
+        ));
     }
     if kind.has_labels() {
         sections.push(section_title("Labels", cx).into_any_element());
@@ -654,15 +661,29 @@ pub(crate) fn live_detail_rows(
     paint: &DrawerPaint,
     cx: &Context<AppShell>,
 ) -> Vec<AnyElement> {
+    let label_width = section_label_width(rows);
     rows.iter()
         .enumerate()
-        .map(|(offset, detail)| detail_element(detail, id_base + offset, paint, cx))
+        .map(|(offset, detail)| detail_element(detail, id_base + offset, label_width, paint, cx))
         .collect()
+}
+
+/// The label column of a section: the kind drawer's width, widened to the longest label of its
+/// rows so names such as `requests.ephemeral-storage` are not cut.
+fn section_label_width(rows: &[DetailRow]) -> Pixels {
+    let labels = rows.iter().filter_map(|row| match row {
+        DetailRow::Field { label, .. }
+        | DetailRow::CopyField { label, .. }
+        | DetailRow::Bar { label, .. } => Some(label.as_ref()),
+        _ => None,
+    });
+    fitted_label_width(labels).max(WIDE_LABEL_WIDTH)
 }
 
 fn detail_element(
     detail: &DetailRow,
     id: usize,
+    label_width: Pixels,
     paint: &DrawerPaint,
     cx: &Context<AppShell>,
 ) -> AnyElement {
@@ -673,7 +694,7 @@ fn detail_element(
             percent,
             text,
             tone,
-        } => bar_row(label, *percent, text, *tone, id, cx),
+        } => bar_row(label_width, label, *percent, text, *tone, id, cx),
         // The values view draws the Data section; one frame before it exists, or for another Secret,
         // the masked rows without buttons stand in.
         DetailRow::Live(LiveContent::SecretData)
@@ -712,10 +733,15 @@ fn detail_element(
                 cx,
             ))
             .into_any_element(),
-        DetailRow::Field { label, value } => {
-            wide_detail_row(label.clone(), field_value(value, id, now, cx), cx).into_any_element()
-        }
-        DetailRow::CopyField { label, text } => wide_detail_row(
+        DetailRow::Field { label, value } => detail_row_with_label_width(
+            label_width,
+            label.clone(),
+            field_value(value, id, now, cx),
+            cx,
+        )
+        .into_any_element(),
+        DetailRow::CopyField { label, text } => detail_row_with_label_width(
+            label_width,
             label.clone(),
             copyable_mono(("detail", id), text.clone(), cx),
             cx,
@@ -812,6 +838,7 @@ fn helm_values_change(paint: &DrawerPaint, cx: &Context<AppShell>) -> AnyElement
 
 /// A label, a bar toned by `tone` (the kit color without one), then the text in mono.
 pub(crate) fn bar_row(
+    label_width: Pixels,
     label: &SharedString,
     percent: u8,
     text: &SharedString,
@@ -833,7 +860,7 @@ pub(crate) fn bar_row(
                 .font_family(cx.theme().mono_font_family.clone())
                 .child(text.clone()),
         );
-    wide_detail_row(label.clone(), value, cx).into_any_element()
+    detail_row_with_label_width(label_width, label.clone(), value, cx).into_any_element()
 }
 
 /// Preformatted text that wraps, such as an event message.
@@ -986,5 +1013,22 @@ fn field_value(value: &KindCell, id: usize, now: jiff::Timestamp, cx: &App) -> A
             }
             .into_any_element()
         }
+    }
+}
+
+#[cfg(test)]
+mod label_width_tests {
+    use super::*;
+
+    #[test]
+    fn a_long_label_widens_the_section_label_column() {
+        let long = DetailRow::field("requests.ephemeral-storage", KindCell::Text("1".into()));
+        assert!(section_label_width(&[long]) > WIDE_LABEL_WIDTH);
+    }
+
+    #[test]
+    fn short_labels_keep_the_wide_label_column() {
+        let short = DetailRow::field("Phase", KindCell::Text("Bound".into()));
+        assert_eq!(section_label_width(&[short]), WIDE_LABEL_WIDTH);
     }
 }

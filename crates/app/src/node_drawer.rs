@@ -29,7 +29,7 @@ use crate::node_usage::{
     node_allocatable, node_byte_requests, node_pod_count, node_pod_limit, node_requests,
 };
 use crate::object_events::{event_subject, recent_events};
-use crate::related_pods::pods_section;
+use crate::related_pods::{SectionPlace, pods_section};
 use crate::resource_actions::node_menu;
 use crate::resource_kind::NODE_ICON;
 use crate::row_context::RowContext;
@@ -77,6 +77,7 @@ pub(crate) fn node_drawer(
         DrawerTab::Yaml => yaml_body(state),
         DrawerTab::Pods => DrawerBody::Scrolling(match session.read(cx).live() {
             Some(live) => pods_section(
+                SectionPlace::First,
                 &PodOwner::Node {
                     name: node.name.clone(),
                 },

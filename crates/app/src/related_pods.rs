@@ -13,7 +13,7 @@ use gpui_kit::{
 
 use crate::app_shell::AppShell;
 use crate::cluster_session::{LiveCluster, namespaces_label};
-use crate::drawer::{link_name, named_object_text, open_link, section_title};
+use crate::drawer::{first_section_title, link_name, named_object_text, open_link, section_title};
 use crate::kind_diagnosis::first_main_termination;
 use crate::kind_row::{
     DAEMON_SET_KIND, JOB_KIND, KindObject, PodOwner, STATEFUL_SET_KIND, owns_pod,
@@ -26,9 +26,17 @@ use crate::workload_rows::sort_by_ordinal;
 /// Bounds the render cost of a workload with very many pods.
 const MAX_RELATED_PODS: usize = 50;
 
+/// Where a section sits in its drawer body: the first one has no room above its title.
+#[derive(Clone, Copy)]
+pub(crate) enum SectionPlace {
+    First,
+    Later,
+}
+
 /// The pods of `owner`, read from the live pods list at render time so they stay current.
 /// A click opens the pod on the Pods screen. A node lists the pods of the current scope that run on it.
 pub(crate) fn pods_section(
+    place: SectionPlace,
     owner: &PodOwner,
     object: &KindObject,
     live: &LiveCluster,
@@ -71,7 +79,10 @@ pub(crate) fn pods_section(
     };
     let theme = cx.theme();
     v_flex()
-        .child(section_title(title, cx))
+        .child(match place {
+            SectionPlace::First => first_section_title(title, cx).into_any_element(),
+            SectionPlace::Later => section_title(title, cx).into_any_element(),
+        })
         .children(scope_note(owner, &live.scope).map(|text| {
             div()
                 .pb_1()

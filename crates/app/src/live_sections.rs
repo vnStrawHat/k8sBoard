@@ -40,8 +40,8 @@ use crate::cluster_session::{
 use crate::config_map_rows::{format_bytes, key_size_text};
 use crate::custom_rows::{FieldsSide, conditions_rows, field_list_rows};
 use crate::drawer::{
-    link_name, link_text, named_object_text, object_text, open_link, truncated_text,
-    wide_detail_row,
+    WIDE_LABEL_WIDTH, link_name, link_text, named_object_text, object_text, open_link,
+    truncated_text, wide_detail_row,
 };
 use crate::helm_release_view::ValuesLayout;
 use crate::helm_rows::{HistoryModel, HistoryRow, history_model};
@@ -1753,7 +1753,7 @@ fn claim_usage_content(
                 percent,
                 text,
                 tone,
-            } => bar_row(&label, percent, &text, tone, ix, cx),
+            } => bar_row(WIDE_LABEL_WIDTH, &label, percent, &text, tone, ix, cx),
             DetailRow::Note(text) => note(&text, cx),
             _ => div().into_any_element(),
         })
