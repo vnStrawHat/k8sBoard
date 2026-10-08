@@ -10,7 +10,7 @@
 | System info | one `wide_detail_row(kind, address)` per address (mono, copyable; none when the node has no addresses), then OS `{operating_system}/{architecture} · {os_image}` (empty parts and their separators left out), Kernel, Container runtime, Kubelet (the existing `kubelet_version`) |
 | Allocatable used | CPU, Memory, and Pods rows with usage bars (see Later changes) |
 | Labels | `chips(&labels)` |
-| Annotations | `annotations_section(&annotations)`: a folded `N annotations` row that opens the chips, as in the pod drawer |
+| Annotations | the annotation terms as chips like Labels (no fold) |
 | Conditions | one row per `NodeCondition` in API order: name, then `{status}` in `node_condition_tone`, then muted `{reason} · since {age}`; tooltip on the row = `message` when Some |
 
 The pods are not in the Overview: the Pods tab shows them (below). The raw capacity and allocatable quantities are not shown; the Allocatable used rows carry the human units.
