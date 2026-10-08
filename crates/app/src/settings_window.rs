@@ -684,7 +684,7 @@ fn appearance_page() -> SettingPage {
             SettingGroup::new()
                 .title("Fonts")
                 .item(SettingItem::render(|_, _, cx| {
-                    Label::new("The interface uses Inter and monospace text and the terminal use Lilex, both built into the app.")
+                    Label::new("The interface, monospace text and the terminal use Lilex, built into the app.")
                         .text_sm()
                         .text_color(cx.theme().muted_foreground)
                 })),

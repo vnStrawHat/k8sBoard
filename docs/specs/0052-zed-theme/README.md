@@ -11,7 +11,7 @@ Status: draft (architect, 2026-10-04). Crate: `crates/app` only, no dependency c
 
 ## Non-goals (possible follow-ups)
 
-- Zed fonts (Zed Plex Sans/Mono), radius, or density. The theme file sets no `font.*`, `mono_font.*`, `radius*`, or `shadow`. The monospace font is Lilex and the UI font is Inter, both built into the app (`crates/app/fonts/`, SIL OFL 1.1 in `OFL.txt` and `OFL-Inter.txt`) and set as `mono_font_family` and `font_family` by `bundled_fonts.rs` after the kit init, so a theme change keeps them. Inter replaces the Windows system font because Segoe UI clips descenders in the kit's 1.25 line boxes.
+- Zed fonts (Zed Plex Sans/Mono), radius, or density. The theme file sets no `font.*`, `mono_font.*`, `radius*`, or `shadow`. Lilex is both the UI and the monospace font, built into the app (`crates/app/fonts/`, SIL OFL 1.1 in `OFL.txt`) and set as `mono_font_family` and `font_family` by `bundled_fonts.rs` after the kit init, so a theme change keeps them. It replaces the Windows system font, whose Segoe UI clips descenders in the kit's 1.25 line boxes.
 - Other Zed themes (Ayu, Gruvbox, and so on) and a theme picker that lists the kit registry.
 - User-supplied theme files, and `ThemeRegistry::watch_dir`.
 - Following the OS appearance live while `System` is set. This does not happen today either.
