@@ -100,6 +100,8 @@ pub(crate) type CommitCallback = Box<dyn FnOnce(&Result<WriteOutcome, CheckedWri
 
 ## Diff opens with its check, and the confirm shows old and new (UX round 3, O16 and O17)
 
+> **Superseded by [0059](../0059-edit-yaml-local-diff/README.md) (2026-10-08):** the Diff tab is a local diff and sends no request; the dry-run runs only from the footer `Dry-run` button, and `Apply…` / Ctrl S need a passed dry-run. The confirm-dialog bullet below still holds.
+
 - Showing the **Diff** tab asks the server when the editor holds changes that no passed dry-run covers (`YamlEditView::show_tab`, the guard `can_check` that Ctrl S uses): no first Ctrl S is needed to see the diff. A text that already passed is not asked again. Ctrl S or `Apply…` for a text whose dry-run passed, from the Editor or the Diff, opens the confirm at once.
 - The **confirm dialog** lists `path: old → new` for each changed scalar, from the masked preview (`edit_change_lines`: `spec.replicas: 3 → 5`, a hidden env value `<hidden> → <hidden, changed>`), the path alone for a map or a list and for the data of a Secret, at most 12 lines then `and N more`. The audit line keeps paths only. The Helm line (`HELM_MANAGED_WARNING`) comes first among its warnings, as in the Scale and Roll back confirms.
 
