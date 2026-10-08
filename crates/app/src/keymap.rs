@@ -220,7 +220,6 @@ pub(crate) fn bind_keys(cx: &mut App) {
         KeyBinding::new("4", SelectDrawerTab4, Some(WORKSPACE)),
         KeyBinding::new("5", SelectDrawerTab5, Some(WORKSPACE)),
         KeyBinding::new("alt-left", GoBack, Some(WORKSPACE)),
-        KeyBinding::new("backspace", GoBack, Some(WORKSPACE)),
         KeyBinding::new("alt-right", GoForward, Some(WORKSPACE)),
         KeyBinding::new("l", ViewLogs, Some(WORKSPACE)),
         KeyBinding::new("y", ViewYaml, Some(WORKSPACE)),
@@ -314,7 +313,6 @@ pub(crate) fn bind_keys(cx: &mut App) {
     // shell never receives, so they keep their meaning.
     cx.bind_keys(
         [
-            "backspace",
             "tab",
             "shift-tab",
             "ctrl-c",

@@ -1029,28 +1029,3 @@ fn the_filter_field_of_a_log_tab_keeps_its_own_copy_and_escape(cx: &mut TestAppC
         Some("k8sboard::ClearLogSelection")
     );
 }
-
-#[gpui_kit::test]
-fn backspace_goes_back_in_the_workspace(cx: &mut TestAppContext) {
-    bind_all(cx);
-    for path in [&SHELL[..], &TABLE_PATH[..]] {
-        assert_eq!(resolve("backspace", path, cx), Some("k8sboard::GoBack"));
-    }
-}
-
-#[gpui_kit::test]
-fn backspace_never_navigates_in_fields_editors_and_the_terminal(cx: &mut TestAppContext) {
-    bind_all(cx);
-    let paths: [&[&str]; 6] = [
-        &INPUT_PATH,
-        &["Root", "AppShell", "QuickFilter", "Input"],
-        &["Root", "AppShell", "Drawer", "YamlEdit", "Input"],
-        &["Root", "AppShell", "Drawer", "ValuesEdit", "Input"],
-        &["Root", "AppShell", "Dock", "Terminal"],
-        &["Root", "AppShell", "Popover", "Input"],
-    ];
-    for path in paths {
-        let name = resolve("backspace", path, cx);
-        assert!(!is_app_action(name), "backspace under {path:?}: {name:?}");
-    }
-}
