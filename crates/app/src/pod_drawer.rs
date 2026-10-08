@@ -29,9 +29,9 @@ use crate::container_detail::{
 use crate::dock::Dock;
 use crate::drawer::{
     DrawerBody, DrawerChrome, DrawerHeader, DrawerSize, DrawerState, DrawerTab, TabCounts,
-    absent_text, annotations_section, chips, created_text, detail_row, drawer_frame,
-    drawer_tab_bar, drawer_tabs, first_section_title, link_text, menu_button, section_title,
-    shown_tab, tab_titles, value_or_absent, yaml_body,
+    absent_text, annotations_section, chips, created_text, detail_row, detail_row_with_label_width,
+    drawer_frame, drawer_tab_bar, drawer_tabs, first_section_title, fitted_label_width, link_text,
+    menu_button, section_title, shown_tab, tab_titles, value_or_absent, yaml_body,
 };
 use crate::kind_join::services_selecting;
 use crate::kind_row::deployment_of_pod;
@@ -762,6 +762,7 @@ fn placement_section(
 /// The `Volumes` section: one row per mounted volume, its source a link when it has a screen.
 fn volumes_section(pod: &PodSummary, cx: &Context<AppShell>) -> Vec<AnyElement> {
     let rows = volume_rows(&pod.namespace, &pod.containers);
+    let label_width = fitted_label_width(rows.iter().map(|row| row.name.as_str()));
     let body = if rows.is_empty() {
         vec![
             div()
@@ -780,7 +781,7 @@ fn volumes_section(pod: &PodSummary, cx: &Context<AppShell>) -> Vec<AnyElement> 
                     }
                     None => div().truncate().child(row.source).into_any_element(),
                 };
-                detail_row(row.name, value, cx).into_any_element()
+                detail_row_with_label_width(label_width, row.name, value, cx).into_any_element()
             })
             .collect()
     };

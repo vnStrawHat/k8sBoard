@@ -80,6 +80,11 @@ pub(crate) fn drawer_width(size: DrawerSize, workspace: Pixels) -> Pixels {
     px((workspace * share).max(DRAWER_MIN_WIDTH).min(workspace))
 }
 const LABEL_WIDTH: Pixels = px(104.);
+/// The longest label column `fitted_label_width` gives.
+const FITTED_LABEL_MAX: Pixels = px(260.);
+/// Average glyph width of a `text_sm` label (14 px proportional UI font, about 0.55 em).
+const LABEL_CHAR_WIDTH: f32 = 7.7;
+const LABEL_PADDING: f32 = 8.;
 /// The kind drawers have longer labels, such as "Concurrency policy". Anything longer still
 /// truncates with a tooltip, or uses `DetailRow::Stacked`.
 pub(crate) const WIDE_LABEL_WIDTH: Pixels = px(136.);
@@ -799,6 +804,25 @@ pub(crate) fn detail_row(
     labeled_row(LABEL_WIDTH, label.into(), value, cx)
 }
 
+/// The label column that fits the longest of `labels`, between `LABEL_WIDTH` and
+/// `FITTED_LABEL_MAX`. The width is an estimate (chars times the average glyph width), since the
+/// UI font is proportional and text is not measured before layout.
+pub(crate) fn fitted_label_width<'a>(labels: impl Iterator<Item = &'a str>) -> Pixels {
+    let longest = labels.map(|label| label.chars().count()).max().unwrap_or(0);
+    let estimate = px(longest as f32 * LABEL_CHAR_WIDTH + LABEL_PADDING);
+    estimate.max(LABEL_WIDTH).min(FITTED_LABEL_MAX)
+}
+
+/// `detail_row` with a label column of the given width.
+pub(crate) fn detail_row_with_label_width(
+    label_width: Pixels,
+    label: impl Into<SharedString>,
+    value: impl IntoElement,
+    cx: &App,
+) -> impl IntoElement {
+    labeled_row(label_width, label.into(), value, cx)
+}
+
 /// `detail_row` with the wider label column of the kind drawers.
 pub(crate) fn wide_detail_row(
     label: impl Into<SharedString>,
@@ -1140,6 +1164,18 @@ pub(crate) fn port_row(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn fitted_label_width_grows_with_the_longest_label_up_to_a_cap() {
+        assert_eq!(fitted_label_width(["data", "tmp"].into_iter()), LABEL_WIDTH);
+        assert_eq!(fitted_label_width(std::iter::empty()), LABEL_WIDTH);
+        let medium = "usr-local-share-ca-certificates-xx".to_owned();
+        assert!(fitted_label_width([medium.as_str()].into_iter()) > LABEL_WIDTH);
+        let long = "a".repeat(200);
+        assert_eq!(
+            fitted_label_width([long.as_str()].into_iter()),
+            FITTED_LABEL_MAX
+        );
+    }
 
     #[test]
     fn links_name_their_namespace_unless_the_scope_is_one_namespace() {

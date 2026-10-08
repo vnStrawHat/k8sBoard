@@ -85,7 +85,7 @@ envFrom rows come first. Each row: name (mono, truncated, tooltip) and source (m
 
 ## Annotations (UX round 3)
 
-The Overview ends with Labels, then an `Annotations` section of plain chips like Labels, no fold (`annotations_section` in `drawer.rs`, shared with the workload drawers). The terms come from `PodSummary.annotations` (`key=value`, at most 50, cut at 200 characters, an applied manifest left out, a credential-looking key's value `<hidden>`). Editing is in [0032b metadata-edit.md](../0032b-resource-edits/metadata-edit.md).
+The Overview ends with Labels, then an `Annotations` section of plain chips like Labels, no fold (`annotations_section` in `drawer.rs`, shared with the workload drawers). The terms come from `PodSummary.annotations` (`key=value`, at most 50, cut at 200 characters, an applied manifest left out, a credential-looking key's value `<hidden>`). Editing is in [0032b metadata-edit.md](../0032b-resource-edits/metadata-edit.md). The pod drawer's `Volumes` section sizes the label column to the longest volume name (`fitted_label_width`, up to 260 px).
 
 ## As built (2026-10-07): one rule for object mentions
 
