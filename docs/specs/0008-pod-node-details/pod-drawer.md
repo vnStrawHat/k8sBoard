@@ -50,7 +50,7 @@ Text builders (pure, `container_detail.rs`):
 | Fn | Example |
 |---|---|
 | `resource_text(&ContainerResource)` | `request 250m · limit 1`, `request 250m · no limit`, `no request · limit 512Mi` |
-| `probe_chips(&ProbeSummary)` | one chip per fact, in order: protocol (`HTTP`/`HTTPS` scheme, `TCP`, `gRPC`, `exec`), `GET` (HTTP only), `port 8080` or `port http`, `path /ready` (HTTP) or the exec argv without backticks (cut at 100 chars with `…`; `command` when empty); `unknown action` alone for an unknown action; then always `delay 5s` (also `delay 0s`), `timeout 1s`, `period 10s`, `failures 3` |
+| `probe_chips(&ProbeSummary)` | one chip per fact, in order: `GET` then `http://:8080/ready` (lowercase scheme, port or named port, path; HTTP only), `tcp://:5432`, `grpc://:9090`, or `exec` then the argv without backticks (cut at 100 chars with `…`; `command` when empty); `unknown action` alone for an unknown action; then always `delay 5s` (also `delay 0s`), `timeout 1s`, `period 10s`, `failures 3` |
 | `env_summary(&ContainerSummary)` | `14 env vars · 6 from configmap/api-config · 3 from secret/api-db · all of secret/extra`; sources in first-seen order, at most 3, then ` · +{n} more`; `1 env var`; None when both lists are empty |
 | `mount_summary(&ContainerSummary)` | `/etc/api ← configmap/api-config (read-only) · +3 more`; first mount in spec order; None when empty |
 | `last_run_text(&Termination, now)` | `ran 4m, ended 2m ago` |

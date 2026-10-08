@@ -155,10 +155,8 @@ fn http_probe_chips_name_scheme_method_port_path_and_timings() {
     assert_eq!(
         chip_texts(&http),
         [
-            "HTTP",
             "GET",
-            "port 8080",
-            "path /ready",
+            "http://:8080/ready",
             "delay 5s",
             "timeout 1s",
             "period 10s",
@@ -177,10 +175,7 @@ fn https_probe_chips_keep_the_scheme_and_a_named_port() {
         },
         10,
     );
-    assert_eq!(
-        chip_texts(&https)[..4],
-        ["HTTPS", "GET", "port web", "path /"]
-    );
+    assert_eq!(chip_texts(&https)[..2], ["GET", "https://:web/"]);
 }
 
 #[test]
@@ -191,9 +186,9 @@ fn tcp_and_grpc_probe_chips_have_protocol_and_port_only() {
         },
         10,
     );
-    assert_eq!(chip_texts(&tcp)[..3], ["TCP", "port 5432", "delay 0s"]);
+    assert_eq!(chip_texts(&tcp)[..2], ["tcp://:5432", "delay 0s"]);
     let grpc = probe(ProbeAction::Grpc { port: 9090 }, 10);
-    assert_eq!(chip_texts(&grpc)[..3], ["gRPC", "port 9090", "delay 0s"]);
+    assert_eq!(chip_texts(&grpc)[..2], ["grpc://:9090", "delay 0s"]);
 }
 
 #[test]

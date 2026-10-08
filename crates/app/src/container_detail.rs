@@ -639,17 +639,16 @@ fn exec_command(command: &[String]) -> String {
     cut
 }
 
-/// The probe's facts, one chip each: protocol, method, port, path or command, then the timings.
+/// The probe's facts, one chip each: `GET` plus `scheme://:port/path`, `tcp://:port`, `grpc://:port`,
+/// or `exec` plus the command, then the timings.
 pub(crate) fn probe_chips(probe: &ProbeSummary) -> Vec<SharedString> {
     let mut terms: Vec<String> = match &probe.action {
         ProbeAction::HttpGet { scheme, port, path } => vec![
-            scheme.clone(),
             "GET".to_owned(),
-            format!("port {port}"),
-            format!("path {path}"),
+            format!("{}://:{port}{path}", scheme.to_lowercase()),
         ],
-        ProbeAction::TcpSocket { port } => vec!["TCP".to_owned(), format!("port {port}")],
-        ProbeAction::Grpc { port } => vec!["gRPC".to_owned(), format!("port {port}")],
+        ProbeAction::TcpSocket { port } => vec![format!("tcp://:{port}")],
+        ProbeAction::Grpc { port } => vec![format!("grpc://:{port}")],
         ProbeAction::Exec { command } => vec!["exec".to_owned(), exec_command(command)],
         ProbeAction::Unknown => vec!["unknown action".to_owned()],
     };
