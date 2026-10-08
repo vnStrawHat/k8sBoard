@@ -7,7 +7,7 @@ edition = "2024"
 rust-version = "1.96.0"
 license = "Apache-2.0"
 publish = false
-version = "0.1.0"
+version = "0.1.1"
 
 [workspace.dependencies]
 gpui-kit = { version = "0.7", features = ["tree-sitter-yaml"] }
