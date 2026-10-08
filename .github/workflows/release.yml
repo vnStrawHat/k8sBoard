@@ -34,18 +34,20 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # Linux and macOS come later; restore the commented entries (and the Linux package step) to bring them back.
           - { name: windows-x86_64, os: windows-latest, target: x86_64-pc-windows-msvc }
-          - { name: macos-aarch64, os: macos-latest, target: aarch64-apple-darwin }
-          - { name: linux-x86_64, os: ubuntu-22.04, target: x86_64-unknown-linux-gnu }
+          # - { name: macos-aarch64, os: macos-latest, target: aarch64-apple-darwin }
+          # - { name: linux-x86_64, os: ubuntu-22.04, target: x86_64-unknown-linux-gnu }
     steps:
       - uses: actions/checkout@v4
 
-      # Linux has never been built: keep in sync with ci.yml and adjust when the first Linux run fails.
-      - name: Install Linux system libraries
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libx11-xcb-dev libxcb1-dev libfontconfig1-dev libssl-dev libasound2-dev pkg-config cmake clang mesa-vulkan-drivers libvulkan1
+      # Linux and macOS come later. Linux has never been built: restore this step in sync with ci.yml and
+      # adjust the package list when the first Linux run fails.
+      # - name: Install Linux system libraries
+      #   if: runner.os == 'Linux'
+      #   run: |
+      #     sudo apt-get update
+      #     sudo apt-get install -y libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libx11-xcb-dev libxcb1-dev libfontconfig1-dev libssl-dev libasound2-dev pkg-config cmake clang mesa-vulkan-drivers libvulkan1
 
       - uses: Swatinem/rust-cache@v2
 

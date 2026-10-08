@@ -24,22 +24,25 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, ubuntu-22.04, macos-latest]
+        # Linux and macOS come later; restore the commented entries to bring them back (and the
+        # Linux package step and the Format condition below).
+        os: [windows-latest]
+        # os: [windows-latest, ubuntu-22.04, macos-latest]
     steps:
       - uses: actions/checkout@v4
 
-      # Linux has never been built: adjust this package list when the first Linux run fails.
-      - name: Install Linux system libraries
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libx11-xcb-dev libxcb1-dev libfontconfig1-dev libssl-dev libasound2-dev pkg-config cmake clang mesa-vulkan-drivers libvulkan1
+      # Linux and macOS come later. Linux has never been built: adjust this package list when the
+      # first Linux run fails.
+      # - name: Install Linux system libraries
+      #   if: runner.os == 'Linux'
+      #   run: |
+      #     sudo apt-get update
+      #     sudo apt-get install -y libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libx11-xcb-dev libxcb1-dev libfontconfig1-dev libssl-dev libasound2-dev pkg-config cmake clang mesa-vulkan-drivers libvulkan1
 
       - uses: Swatinem/rust-cache@v2
 
-      # Formatting does not depend on the platform, so it runs once.
+      # Formatting does not depend on the platform; with more runners, run it once (`if: runner.os == 'Linux'`).
       - name: Format
-        if: runner.os == 'Linux'
         run: cargo fmt --all -- --check
 
       - name: Clippy
