@@ -777,8 +777,7 @@ pub(crate) fn usage_chart_card(
             .child(
                 div()
                     .max_w_full()
-                    .whitespace_nowrap()
-                    .overflow_hidden()
+                    .whitespace_normal()
                     .px_1p5()
                     .rounded(theme.radius)
                     .bg(theme.background)
