@@ -5,7 +5,7 @@
 ## History (H3)
 
 1. `reveal_object` records the place it leaves (drawer links, palette Go to, Issues rows, Overview cards, dialog links, menu Go to items); j/k, row clicks, sidebar screens, Topology node clicks, and `when_selected` action runs (palette pairs, keys) do not. [A1]
-2. `Alt+Left` restores the previous place: screen and that table's filter; when the place had a selection, also the object (scrolled into view), drawer open or closed, drawer tab, Pod container and container sub-tab. A place without a selection restores screen and filter only. `Alt+Right` redoes it. [A1]
+2. `Alt+Left` restores the previous place: screen and that table's filter; when the place had a selection, also the object (scrolled into view), drawer open or closed, drawer tab, Pod container and container sub-tab. A place without a selection restores screen and filter only. `Alt+Right` redoes it. The mouse Back and Forward buttons do the same as `Alt+Left` and `Alt+Right`. [A1]
 3. A reveal of the object already selected on the current screen records nothing. [A1]
 4. A new reveal after going back clears the forward stack. Back keeps at most 50 entries. [A1]
 5. Cluster switch and scope change clear the history. [A1]

@@ -1,10 +1,14 @@
 //! Back and forward in a headless shell without a session: the places, the restore through the
 //! setters, and what does and does not record.
 
-use gpui_kit::{Entity, TestAppContext};
+use gpui_kit::component::Root;
+use gpui_kit::{
+    Entity, InputEvent as _, Modifiers, MouseButton, MouseDownEvent, NavigationDirection,
+    TestAppContext, WindowHandle, point, px,
+};
 
 use super::app_shell_history::is_place_served;
-use super::app_shell_tests::{open_shell_on, served_kind};
+use super::app_shell_tests::{open_shell_on, render, served_kind};
 use super::*;
 use crate::cluster_registry::ClusterRef;
 use crate::drawer::{ContainerTab, DrawerNavigation, DrawerTab};
@@ -287,4 +291,57 @@ fn row_controls_are_disabled_without_a_visible_subject(cx: &mut TestAppContext) 
     cx.run_until_parked();
     let rows = drawer_navigation(&shell, cx).rows.expect("row controls");
     assert_eq!(rows.position, None);
+}
+
+/// A press of `button` over the shell, as Windows delivers XButton1 and XButton2.
+fn press_mouse(window: WindowHandle<Root>, button: MouseButton, cx: &mut TestAppContext) {
+    cx.update_window(window.into(), |_, window, cx| {
+        let event = MouseDownEvent {
+            button,
+            position: point(px(600.), px(450.)),
+            modifiers: Modifiers::default(),
+            click_count: 1,
+            first_mouse: false,
+        };
+        window.dispatch_event(event.to_platform_input(), cx);
+    })
+    .expect("the window is open");
+    cx.run_until_parked();
+}
+
+/// A drawn shell on Pods whose history holds one step: Secrets was revealed from `api-0`.
+fn revealed_secret(cx: &mut TestAppContext) -> (WindowHandle<Root>, Entity<AppShell>) {
+    let (window, shell) = open_shell_on("does-not-exist/kubeconfig.yml", &[], cx);
+    show_pod_drawer(&shell, cx);
+    reveal(
+        &shell,
+        kind_object(ResourceKind::Secrets, "credentials"),
+        cx,
+    );
+    render(window, cx);
+    (window, shell)
+}
+
+#[gpui_kit::test]
+fn the_mouse_back_button_goes_back(cx: &mut TestAppContext) {
+    let (window, shell) = revealed_secret(cx);
+    press_mouse(window, MouseButton::Navigate(NavigationDirection::Back), cx);
+    shell.read_with(cx, |shell, _| {
+        assert_eq!(shell.screen, Screen::Pods);
+        assert_eq!(shell.selected, Some(pod("api-0")));
+    });
+}
+
+#[gpui_kit::test]
+fn the_mouse_forward_button_goes_forward(cx: &mut TestAppContext) {
+    let (window, shell) = revealed_secret(cx);
+    press_mouse(window, MouseButton::Navigate(NavigationDirection::Back), cx);
+    press_mouse(
+        window,
+        MouseButton::Navigate(NavigationDirection::Forward),
+        cx,
+    );
+    shell.read_with(cx, |shell, _| {
+        assert_eq!(shell.screen, Screen::Kind(ResourceKind::Secrets));
+    });
 }

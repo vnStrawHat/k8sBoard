@@ -9,7 +9,7 @@ use gpui_kit::component::notification::Notification;
 use gpui_kit::component::table::{TableDelegate, TableState};
 use gpui_kit::{
     Action, App, ClipboardItem, Context, Div, Entity, Focusable as _, InteractiveElement as _,
-    Window,
+    MouseButton, NavigationDirection, Window,
 };
 
 use super::node_editor::NodeEditKind;
@@ -210,6 +210,16 @@ pub(super) fn register_key_handlers(root: Div, cx: &Context<AppShell>) -> Div {
         }))
         .on_action(cx.listener(|shell, _: &GoBack, _, cx| shell.go_back(cx)))
         .on_action(cx.listener(|shell, _: &GoForward, _, cx| shell.go_forward(cx)))
+        // The mouse Back and Forward buttons (XButton1 and XButton2) step the history like
+        // Alt+Left and Alt+Right. A mouse event neither types nor moves focus.
+        .on_mouse_down(
+            MouseButton::Navigate(NavigationDirection::Back),
+            cx.listener(|shell, _, _, cx| shell.go_back(cx)),
+        )
+        .on_mouse_down(
+            MouseButton::Navigate(NavigationDirection::Forward),
+            cx.listener(|shell, _, _, cx| shell.go_forward(cx)),
+        )
         .on_action(
             cx.listener(|shell, _: &CopyName, window, cx| shell.copy_cursor_name(window, cx)),
         )
