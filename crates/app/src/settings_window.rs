@@ -47,7 +47,7 @@ gpui_kit::actions!(
     ]
 );
 
-const WINDOW_WIDTH: f32 = 1000.;
+const WINDOW_WIDTH: f32 = 1080.;
 const WINDOW_HEIGHT: f32 = 620.;
 /// For a screenshot of the whole Clusters form, which is taller than the standard window.
 const TALL_WINDOW_HEIGHT: f32 = 900.;

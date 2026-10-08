@@ -4,7 +4,7 @@
 
 | # | Decision | Rationale |
 |---|---|---|
-| 1 | The window is opened with `gpui_kit::open_window` (wraps the view in kit `Root`), 1000 × 620, centered, `TitleBar::window_options()`, its own kit `TitleBar` titled "Settings" | W2 label; same chrome as the main window; `Root` hosts dialogs |
+| 1 | The window is opened with `gpui_kit::open_window` (wraps the view in kit `Root`), 1080 × 620, centered, `TitleBar::window_options()`, its own kit `TitleBar` titled "Settings" | W2 label; same chrome as the main window; `Root` hosts dialogs |
 | 2 | **Single instance** through a `Global` `SettingsWindowHandle(Option<OpenWindow>)` (the window handle plus a weak view): open = `handle.update(cx, \|_, window, _\| window.activate_window())`; an `Err` opens a new one. The close hook sets it to `None` when the Settings window closes | W2 note 1; a stale handle is never kept |
 | 3 | `OpenSettings` is bound to `secondary-,` with **no key context** (works in both windows, also inside dialogs and inputs); `ImportKubeconfig` to `secondary-o` in `SettingsWindow`. 0025 binds them in `settings_window::bind_keys`; 0028 later moves them to `keymap.rs` | keyboard map `Ctrl ,`; 0025 lands before 0028 |
 | 4 | Closing the **main** window quits the app; closing Settings does not. A second `quit` during shutdown is harmless | the app has no use without its main window |
