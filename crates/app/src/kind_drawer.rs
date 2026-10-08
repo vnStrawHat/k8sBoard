@@ -121,7 +121,6 @@ pub(crate) fn kind_drawer(
             let paint = DrawerPaint::new(kind, row, live, now)
                 .in_cluster(&context.cluster)
                 .with_roll_back(roll_back)
-                .with_annotations_open(state.are_annotations_open)
                 .with_secret_values(state.secret_values.as_ref())
                 .with_helm(state.helm.as_ref(), state.helm_revision)
                 .with_ports(forward);
@@ -375,11 +374,7 @@ fn overview(paint: &DrawerPaint, cx: &Context<AppShell>) -> Overview {
         sections.push(chips("labels", &row.labels, cx));
     }
     if let Some(annotations) = row.object.annotations() {
-        sections.extend(annotations_section(
-            annotations,
-            paint.are_annotations_open,
-            cx,
-        ));
+        sections.extend(annotations_section(annotations, cx));
     }
     Overview {
         sections,
@@ -594,8 +589,6 @@ pub(crate) struct DrawerPaint<'a> {
     cluster: Option<&'a ClusterRef>,
     /// The gate of the Roll back buttons of a Deployment's revisions.
     roll_back: Option<DrawerWriteGate>,
-    /// Whether the Annotations section shows its list.
-    are_annotations_open: bool,
 }
 
 impl<'a> DrawerPaint<'a> {
@@ -616,7 +609,6 @@ impl<'a> DrawerPaint<'a> {
             helm_revision: None,
             cluster: None,
             roll_back: None,
-            are_annotations_open: false,
         }
     }
 }
@@ -629,11 +621,6 @@ impl<'a> DrawerPaint<'a> {
 
     fn with_roll_back(mut self, gate: Option<DrawerWriteGate>) -> Self {
         self.roll_back = gate;
-        self
-    }
-
-    fn with_annotations_open(mut self, is_open: bool) -> Self {
-        self.are_annotations_open = is_open;
         self
     }
 

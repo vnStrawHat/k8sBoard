@@ -113,9 +113,6 @@ pub(crate) struct DrawerState {
     pub(crate) monitor: MonitorState,
     /// The scroll position of the body of an overview drawer, so a menu can move it.
     pub(crate) scroll: ScrollHandle,
-    /// Whether the Annotations section of a pod or workload Overview shows its list; they are
-    /// noisy, so it starts folded.
-    pub(crate) are_annotations_open: bool,
     /// The title of an Overview section a menu item asked to see (Roll back…, Show remaining
     /// resources, Show selected pods): the next paint of the drawer scrolls to it and clears the
     /// request. A `Cell` because painting reads the state and never writes it.
@@ -141,7 +138,6 @@ impl DrawerState {
             pending_helm_layout: None,
             monitor: MonitorState::new(),
             scroll: ScrollHandle::new(),
-            are_annotations_open: false,
             reveal_section: Cell::new(None),
             workspace_width: Cell::new(WORKSPACE_FALLBACK_WIDTH),
         }
@@ -780,50 +776,18 @@ fn section_heading(text: impl Into<SharedString>, cx: &App) -> Div {
         .child(text.into())
 }
 
-/// The Annotations section of a pod or workload Overview: one row that opens the list, since a
-/// tool can write many of them and they would push the sections below it out of view. The terms
-/// are `key=value`, already cut and masked by the cluster crate.
-pub(crate) fn annotations_section(
-    annotations: &[String],
-    is_open: bool,
-    cx: &Context<AppShell>,
-) -> Vec<AnyElement> {
-    let mut parts = vec![section_title("Annotations", cx).into_any_element()];
-    if annotations.is_empty() {
-        parts.push(absent_text(cx).into_any_element());
-        return parts;
-    }
-    let chevron = if is_open {
-        IconName::ChevronDown
-    } else {
-        IconName::ChevronRight
-    };
-    let noun = if annotations.len() == 1 {
-        "annotation"
-    } else {
-        "annotations"
-    };
-    parts.push(
-        h_flex()
-            .child(
-                Button::new("drawer-annotations-fold")
-                    .ghost()
-                    .small()
-                    .icon(Icon::new(chevron))
-                    .label(format!("{} {noun}", annotations.len()))
-                    .on_click(cx.listener(|shell, _, _, cx| shell.toggle_annotations(cx))),
-            )
-            .into_any_element(),
-    );
-    if is_open {
-        let terms: Vec<SharedString> = annotations
-            .iter()
-            .cloned()
-            .map(SharedString::from)
-            .collect();
-        parts.push(chips("annotations", &terms, cx));
-    }
-    parts
+/// The Annotations section of an Overview: the terms as plain chips like Labels. The terms are
+/// `key=value`, already cut and masked by the cluster crate.
+pub(crate) fn annotations_section(annotations: &[String], cx: &App) -> Vec<AnyElement> {
+    let terms: Vec<SharedString> = annotations
+        .iter()
+        .cloned()
+        .map(SharedString::from)
+        .collect();
+    vec![
+        section_title("Annotations", cx).into_any_element(),
+        chips("annotations", &terms, cx),
+    ]
 }
 
 /// A label with its value, in the two-column layout shared by both drawers.

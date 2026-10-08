@@ -112,7 +112,6 @@ pub(crate) fn pod_drawer(
             loaded_events,
             session.read(cx).live(),
             now,
-            state.are_annotations_open,
             cx,
         )),
         DrawerTab::Containers => DrawerBody::Filling(containers_tab(
@@ -245,7 +244,6 @@ fn overview(
     events: Option<&[EventSummary]>,
     live: Option<&LiveCluster>,
     now: jiff::Timestamp,
-    are_annotations_open: bool,
     cx: &Context<AppShell>,
 ) -> AnyElement {
     let running = pod
@@ -373,11 +371,7 @@ fn overview(
         .children(volumes_section(pod, cx))
         .child(section_title("Labels", cx))
         .child(chips("pod-labels", &labels, cx))
-        .children(annotations_section(
-            pod.annotations.terms(),
-            are_annotations_open,
-            cx,
-        ))
+        .children(annotations_section(pod.annotations.terms(), cx))
         .into_any_element()
 }
 

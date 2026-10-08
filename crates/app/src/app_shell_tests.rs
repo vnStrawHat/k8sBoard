@@ -849,18 +849,6 @@ fn closing_the_drawer_keeps_the_row(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-fn the_annotations_section_starts_folded_and_toggles(cx: &mut TestAppContext) {
-    let (_, shell) = open_shell(cx);
-    shell.update(cx, |shell, cx| {
-        assert!(!shell.drawer.are_annotations_open);
-        shell.toggle_annotations(cx);
-        assert!(shell.drawer.are_annotations_open);
-        shell.toggle_annotations(cx);
-        assert!(!shell.drawer.are_annotations_open);
-    });
-}
-
-#[gpui_kit::test]
 fn the_drawer_does_not_open_without_a_row(cx: &mut TestAppContext) {
     let (_, shell) = open_shell(cx);
     shell.update(cx, |shell, cx| {

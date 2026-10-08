@@ -2478,12 +2478,6 @@ impl AppShell {
         cx.notify();
     }
 
-    /// Folds or opens the Annotations section of the drawer's Overview.
-    pub(crate) fn toggle_annotations(&mut self, cx: &mut Context<Self>) {
-        self.drawer.are_annotations_open = !self.drawer.are_annotations_open;
-        cx.notify();
-    }
-
     /// Closes the drawer (the ✕ button, Esc); the row stays highlighted.
     pub(crate) fn close_drawer(&mut self, cx: &mut Context<Self>) {
         self.set_drawer_open(false, cx);

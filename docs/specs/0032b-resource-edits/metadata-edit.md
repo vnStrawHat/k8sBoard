@@ -18,4 +18,4 @@ PATCH `application/merge-patch+json`, per-key (`null` removes), no `resourceVers
 
 ## Drawer
 
-The Overview of a pod and of the six workload kinds has an `Annotations` section under Labels, folded into one `N annotations` row until opened (`DrawerState.are_annotations_open`). Summaries carry `annotations: Vec<String>` (`key=value`, at most 50, a value cut at 200 characters on one line, an applied manifest left out, a credential-looking key's value `<hidden>`); the editor itself always reads the object again.
+The Overview of a pod and of the six workload kinds has an `Annotations` section under Labels, as plain chips like Labels, no fold. Summaries carry `annotations: Vec<String>` (`key=value`, at most 50, a value cut at 200 characters on one line, an applied manifest left out, a credential-looking key's value `<hidden>`); the editor itself always reads the object again.
