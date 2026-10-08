@@ -108,6 +108,7 @@ fn resource_label_names() {
     assert_eq!(resource_label("memory"), "Memory");
     assert_eq!(resource_label("ephemeral-storage"), "Ephemeral storage");
     assert_eq!(resource_label("pods"), "Pods");
+    assert_eq!(resource_label("hugepages-2Mi"), "Hugepages 2Mi");
     assert_eq!(resource_label("example.com/gpu"), "example.com/gpu");
 }
 

@@ -1,5 +1,7 @@
 //! What a node's usage means against its allocatable resources, and what its pods request.
 
+use std::collections::BTreeMap;
+
 use cluster::{
     ByteAmount, ContainerKind, CpuAmount, NodeResource, NodeSummary, PodStatus, PodSummary,
     ResourceUsage, StatusReason,
@@ -128,6 +130,33 @@ pub(crate) fn requests_of<'a>(
         CpuAmount::from_nanocores(cpu),
         ByteAmount::from_bytes(memory),
     )
+}
+
+/// The requests of the pods on `node` for each byte-valued resource in `names` (such as
+/// `ephemeral-storage` or `hugepages-2Mi`), counted like `requests_of`. Every name gets an entry.
+pub(crate) fn node_byte_requests(
+    node: &str,
+    pods: &[PodSummary],
+    names: &[&str],
+) -> BTreeMap<String, ByteAmount> {
+    let mut bytes: BTreeMap<String, u64> =
+        names.iter().map(|name| ((*name).to_owned(), 0)).collect();
+    for container in pods_on_node(node, pods)
+        .flat_map(|pod| &pod.containers)
+        .filter(|container| container.kind != ContainerKind::Init)
+    {
+        for resource in &container.resources {
+            let Some(total) = bytes.get_mut(&resource.name) else {
+                continue;
+            };
+            let request = resource.request.as_deref().and_then(ByteAmount::parse);
+            *total = total.saturating_add(request.map_or(0, |amount| amount.bytes()));
+        }
+    }
+    bytes
+        .into_iter()
+        .map(|(name, bytes)| (name, ByteAmount::from_bytes(bytes)))
+        .collect()
 }
 
 pub(crate) fn node_pod_count(node: &str, pods: &[PodSummary]) -> usize {
@@ -277,6 +306,36 @@ mod tests {
         assert_eq!(memory.bytes(), 128 << 20);
         assert_eq!(node_pod_count("wk-1", &pods), 1);
         assert_eq!(node_pod_count("wk-9", &pods), 0);
+    }
+
+    #[test]
+    fn node_byte_requests_sum_main_and_sidecar_and_skip_init() {
+        let pods = [
+            pod(
+                Some("wk-1"),
+                StatusReason::Running,
+                vec![
+                    container(ContainerKind::Main, &[("ephemeral-storage", "1Gi")]),
+                    container(
+                        ContainerKind::Sidecar,
+                        &[("ephemeral-storage", "512Mi"), ("cpu", "1")],
+                    ),
+                    container(ContainerKind::Init, &[("ephemeral-storage", "9Gi")]),
+                ],
+            ),
+            pod(
+                Some("wk-2"),
+                StatusReason::Running,
+                vec![container(
+                    ContainerKind::Main,
+                    &[("ephemeral-storage", "4Gi")],
+                )],
+            ),
+        ];
+        let requests = node_byte_requests("wk-1", &pods, &["ephemeral-storage", "hugepages-2Mi"]);
+        assert_eq!(requests["ephemeral-storage"].bytes(), 1536 << 20);
+        assert_eq!(requests["hugepages-2Mi"].bytes(), 0);
+        assert_eq!(requests.len(), 2);
     }
 
     #[test]

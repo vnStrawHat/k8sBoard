@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::rc::Rc;
 
 use cluster::{CpuAmount, NodeCondition, NodeSummary, NodeSystemInfo, ResourceUsage};
@@ -15,6 +16,7 @@ use crate::app_shell::AppShell;
 use crate::clipboard_copy::copyable_mono;
 use crate::cluster_metrics::FeedStatus;
 use crate::cluster_session::{ClusterSession, LiveCluster};
+use crate::container_detail::resource_label;
 use crate::drawer::{
     DrawerBody, DrawerHeader, DrawerNavigation, DrawerSize, DrawerState, DrawerTab, TabCounts,
     absent_text, chips, created_text, drawer_frame, drawer_tab_bar, drawer_tabs,
@@ -23,7 +25,9 @@ use crate::drawer::{
 };
 use crate::kind_row::{KindObject, PodOwner};
 use crate::monitor_tab::{MonitorView, monitor_tab};
-use crate::node_usage::{node_allocatable, node_pod_count, node_pod_limit, node_requests};
+use crate::node_usage::{
+    node_allocatable, node_byte_requests, node_pod_count, node_pod_limit, node_requests,
+};
 use crate::object_events::{event_subject, recent_events};
 use crate::related_pods::pods_section;
 use crate::resource_actions::node_menu;
@@ -284,13 +288,15 @@ fn overview(
 struct NodePods {
     cpu_request: CpuAmount,
     memory_request: cluster::ByteAmount,
+    /// The `ephemeral-storage` and `hugepages-*` requests, by resource name.
+    byte_requests: BTreeMap<String, cluster::ByteAmount>,
     count: usize,
 }
 
 /// One line of the "Allocatable used" section.
 #[derive(Debug, PartialEq)]
 struct AllocatableRow {
-    label: &'static str,
+    label: String,
     value: String,
     bar: Option<UsageBar>,
     /// Names the numbers behind the bar: used, requested, and allocatable.
@@ -306,14 +312,14 @@ fn allocatable_rows(
     pods: Option<&NodePods>,
 ) -> Vec<AllocatableRow> {
     let (cpu, memory) = node_allocatable(node);
-    let share = |label: &'static str,
+    let share = |label: &str,
                  measure: Measure,
                  used: Option<f64>,
                  total: Option<f64>,
                  request: Option<f64>| {
         let (Some(used), Some(total)) = (used, total.filter(|total| *total > 0.)) else {
             return AllocatableRow {
-                label,
+                label: label.to_owned(),
                 value: ABSENT_VALUE.to_owned(),
                 bar: None,
                 tooltip: None,
@@ -336,7 +342,7 @@ fn allocatable_rows(
             None => (measure.format_pair(used, total, " / "), None),
         };
         AllocatableRow {
-            label,
+            label: label.to_owned(),
             value,
             bar: Some(bar),
             tooltip,
@@ -361,23 +367,72 @@ fn allocatable_rows(
     if let Some(pods) = pods {
         rows.push(pod_count_row(pods.count, node_pod_limit(node)));
     }
+    for (name, total) in byte_resources(node) {
+        rows.push(byte_row(name, total, pods));
+    }
     rows
 }
 
 fn pod_count_row(count: usize, limit: Option<u64>) -> AllocatableRow {
     let Some(limit) = limit.filter(|limit| *limit > 0) else {
         return AllocatableRow {
-            label: "Pods",
+            label: "Pods".to_owned(),
             value: count.to_string(),
             bar: None,
             tooltip: None,
         };
     };
     AllocatableRow {
-        label: "Pods",
+        label: "Pods".to_owned(),
         value: format!("{count} / {limit}"),
         bar: Some(UsageBar::of_ratio(count as f64 / limit as f64, None)),
         tooltip: None,
+    }
+}
+
+/// The `ephemeral-storage` and `hugepages-*` resources the node allocates, in node order. They are
+/// byte-valued and have no usage feed, so only their requests are counted against them.
+fn byte_resources(node: &NodeSummary) -> Vec<(&str, cluster::ByteAmount)> {
+    node.resources
+        .iter()
+        .filter(|resource| {
+            resource.name == "ephemeral-storage" || resource.name.starts_with("hugepages-")
+        })
+        .filter_map(|resource| {
+            let total = cluster::ByteAmount::parse(resource.allocatable.as_deref()?)?;
+            Some((resource.name.as_str(), total))
+        })
+        .collect()
+}
+
+/// Requested over allocatable for a byte resource; `—` over allocatable without the pods.
+fn byte_row(name: &str, total: cluster::ByteAmount, pods: Option<&NodePods>) -> AllocatableRow {
+    let label = resource_label(name);
+    let total = total.bytes() as f64;
+    let Some(pods) = pods else {
+        return AllocatableRow {
+            label,
+            value: format!("{ABSENT_VALUE} / {}", Measure::Bytes.format(total)),
+            bar: None,
+            tooltip: None,
+        };
+    };
+    let request = pods
+        .byte_requests
+        .get(name)
+        .map_or(0., |request| request.bytes() as f64);
+    let mut texts = Measure::Bytes.format_shared(&[request, total]).into_iter();
+    let (request_text, total_text) = (
+        texts.next().unwrap_or_default(),
+        texts.next().unwrap_or_default(),
+    );
+    AllocatableRow {
+        value: format!("{request_text} requested / {total_text}"),
+        bar: (total > 0.).then(|| UsageBar::of_ratio(request / total, None)),
+        tooltip: Some(format!(
+            "{label}: {request_text} requested, {total_text} allocatable"
+        )),
+        label,
     }
 }
 
@@ -405,9 +460,14 @@ fn allocatable_used(node: &NodeSummary, live: Option<&LiveCluster>, cx: &App) ->
             return None;
         }
         let (cpu_request, memory_request) = node_requests(&node.name, items);
+        let byte_names: Vec<_> = byte_resources(node)
+            .into_iter()
+            .map(|(name, _)| name)
+            .collect();
         Some(NodePods {
             cpu_request,
             memory_request,
+            byte_requests: node_byte_requests(&node.name, items, &byte_names),
             count: node_pod_count(&node.name, items),
         })
     });
@@ -427,7 +487,7 @@ fn allocatable_used(node: &NodeSummary, live: Option<&LiveCluster>, cx: &App) ->
                                 return bar.into_any_element();
                             };
                             div()
-                                .id(row.label)
+                                .id(SharedString::from(row.label.clone()))
                                 .w_full()
                                 .tooltip(move |window, cx| {
                                     Tooltip::new(text.clone()).build(window, cx)

@@ -93,12 +93,13 @@ fn allocatable_rows_show_used_of_allocatable_with_bars() {
     let pods = NodePods {
         cpu_request: CpuAmount::from_nanocores(7_900_000_000),
         memory_request: cluster::ByteAmount::from_bytes(30 << 30),
+        byte_requests: BTreeMap::new(),
         count: 55,
     };
     let rows = allocatable_rows(&node, Some(usage(9.8, 43)), Some(&pods));
     let values: Vec<_> = rows
         .iter()
-        .map(|row| (row.label, row.value.as_str()))
+        .map(|row| (row.label.as_str(), row.value.as_str()))
         .collect();
     assert_eq!(
         values,
@@ -154,9 +155,81 @@ fn allocatable_rows_keep_each_unit_when_they_differ() {
     let pods = NodePods {
         cpu_request: CpuAmount::from_nanocores(250_000_000),
         memory_request: cluster::ByteAmount::from_bytes(1 << 30),
+        byte_requests: BTreeMap::new(),
         count: 3,
     };
     let rows = allocatable_rows(&node, Some(usage(0.5, 2)), Some(&pods));
     assert_eq!(rows[0].value, "500m used · 250m requested / 4 cores");
     assert_eq!(rows[1].value, "2 used · 1 requested / 8Gi");
+}
+
+fn storage_pods(requests: &[(&str, u64)]) -> NodePods {
+    NodePods {
+        cpu_request: CpuAmount::from_nanocores(0),
+        memory_request: cluster::ByteAmount::from_bytes(0),
+        byte_requests: requests
+            .iter()
+            .map(|(name, bytes)| ((*name).to_owned(), cluster::ByteAmount::from_bytes(*bytes)))
+            .collect(),
+        count: 0,
+    }
+}
+
+#[test]
+fn ephemeral_storage_row_reads_requested_over_allocatable_with_a_bar() {
+    let node = node_with(&[("cpu", "4"), ("ephemeral-storage", "50Gi")]);
+    let pods = storage_pods(&[("ephemeral-storage", 1 << 30)]);
+    let rows = allocatable_rows(&node, None, Some(&pods));
+    let row = rows.last().expect("an ephemeral storage row");
+    assert_eq!(row.label, "Ephemeral storage");
+    assert_eq!(row.value, "1 requested / 50Gi");
+    let bar = row.bar.as_ref().expect("a bar");
+    assert!((bar.fill - 0.02).abs() < 0.001, "{}", bar.fill);
+    assert_eq!(bar.marker, None);
+    assert_eq!(
+        row.tooltip.as_deref(),
+        Some("Ephemeral storage: 1 requested, 50Gi allocatable")
+    );
+}
+
+#[test]
+fn ephemeral_storage_row_has_no_bar_under_a_namespace_scope() {
+    let node = node_with(&[("ephemeral-storage", "50Gi")]);
+    let rows = allocatable_rows(&node, None, None);
+    let row = rows.last().expect("an ephemeral storage row");
+    assert_eq!(row.value, "— / 50Gi");
+    assert_eq!(row.bar, None);
+}
+
+#[test]
+fn hugepages_rows_follow_ephemeral_storage_with_a_readable_label() {
+    let node = node_with(&[
+        ("cpu", "4"),
+        ("pods", "110"),
+        ("ephemeral-storage", "50Gi"),
+        ("hugepages-2Mi", "512Mi"),
+    ]);
+    let pods = storage_pods(&[("hugepages-2Mi", 256 << 20)]);
+    let rows = allocatable_rows(&node, None, Some(&pods));
+    let labels: Vec<_> = rows.iter().map(|row| row.label.as_str()).collect();
+    assert_eq!(
+        labels,
+        [
+            "CPU",
+            "Memory",
+            "Pods",
+            "Ephemeral storage",
+            "Hugepages 2Mi"
+        ]
+    );
+    assert_eq!(rows[4].value, "256 requested / 512Mi");
+    assert_eq!(rows[3].value, "0B requested / 50Gi");
+}
+
+#[test]
+fn nodes_without_storage_resources_show_only_cpu_memory_and_pods() {
+    let node = node_with(&[("cpu", "4"), ("memory", "8Gi"), ("pods", "110")]);
+    let rows = allocatable_rows(&node, None, Some(&storage_pods(&[])));
+    let labels: Vec<_> = rows.iter().map(|row| row.label.as_str()).collect();
+    assert_eq!(labels, ["CPU", "Memory", "Pods"]);
 }

@@ -523,7 +523,9 @@ pub(crate) fn resource_label(name: &str) -> String {
         "memory" => "Memory".to_owned(),
         "ephemeral-storage" => "Ephemeral storage".to_owned(),
         "pods" => "Pods".to_owned(),
-        other => other.to_owned(),
+        other => other
+            .strip_prefix("hugepages-")
+            .map_or_else(|| other.to_owned(), |size| format!("Hugepages {size}")),
     }
 }
 

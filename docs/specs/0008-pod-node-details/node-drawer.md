@@ -46,4 +46,6 @@ The Pods tab tags each pod `DS`, `emptyDir`, `PDB 0`, or `no controller` (see 00
 
 The CPU and Memory rows of "Allocatable used" read `3.3 used · 6.9 requested / 26 cores` when the pods of every namespace are known (bar tick = requests; the bar's tooltip names used, requested, and allocatable). The Nodes table has two opt-in columns, `CPU req` and `Mem req` (the pods' requests as a share of allocatable), hidden until ticked in the Columns menu; they read `—` under a namespace scope.
 
+When the node allocates `ephemeral-storage` or `hugepages-*`, a row follows Pods for each (`Ephemeral storage`, then `Hugepages 2Mi` and so on). metrics-server has no usage for them, so the row is requests over allocatable: `1 requested / 50Gi` with a bar (no tick) when the pods are known, `— / 50Gi` without a bar under a namespace scope. A node without the resource gets no row.
+
 The body of the node drawer scrolls with a handle (`DrawerState.scroll`), and every drawer built by `drawer_frame` tracks it. A drawer has the keyboard after Enter opened it (or a left press inside it): PageUp, PageDown, Home, and End then scroll its body (a page is 90 % of the view) instead of moving the table cursor, until the drawer closes or a table row is clicked. The header subtitle has a `Pods (N)` link (tooltip "Show the pods on this node") that switches to the Pods tab.
