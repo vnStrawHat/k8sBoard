@@ -1,0 +1,30 @@
+# git-cliff configuration for release notes (see docs/release.md).
+
+[changelog]
+body = """
+{% for group, commits in commits | group_by(attribute="group") %}\
+### {{ group | striptags | trim | upper_first }}
+{% for commit in commits %}\
+- {% if commit.scope %}{{ commit.scope }}: {% endif %}{{ commit.message | split(pat="\n") | first | upper_first }} ({{ commit.id | truncate(length=7, end="") }})
+{% endfor %}
+{% endfor %}
+"""
+trim = true
+
+[git]
+conventional_commits = true
+filter_unconventional = false
+sort_commits = "newest"
+tag_pattern = "v[0-9]*"
+commit_parsers = [
+  { message = "^chore\\(release\\)", skip = true },
+  { body = ".*BREAKING CHANGE", group = "<!-- 0 -->Breaking changes" },
+  { message = "^[a-z]+(\\([^)]*\\))?!:", group = "<!-- 0 -->Breaking changes" },
+  { message = "^feat", group = "<!-- 1 -->Features" },
+  { message = "^fix", group = "<!-- 2 -->Bug fixes" },
+  { message = "^perf", group = "<!-- 3 -->Performance" },
+  { message = "^refactor", group = "<!-- 4 -->Refactoring" },
+  { message = "^docs", group = "<!-- 5 -->Documentation" },
+  { message = "^(build|ci)", group = "<!-- 6 -->Build and CI" },
+  { message = ".*", group = "<!-- 7 -->Other" },
+]

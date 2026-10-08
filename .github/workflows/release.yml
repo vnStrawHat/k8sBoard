@@ -1,8 +1,16 @@
 name: Release
 
+# Started by hand. Nothing is committed or tagged until the Windows build has succeeded.
 on:
-  push:
-    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: Version bump level
+        type: choice
+        options: [patch, minor, major]
+        default: patch
+
+concurrency: release
 
 permissions:
   contents: write
@@ -13,22 +21,39 @@ env:
 # No toolchain action: rust-toolchain.toml pins 1.96.0, and rustup (preinstalled on every runner)
 # installs it on the first cargo call.
 jobs:
-  check-version:
+  prepare:
     runs-on: ubuntu-22.04
+    outputs:
+      version: ${{ steps.next.outputs.version }}
+      tag: ${{ steps.next.outputs.tag }}
     steps:
       - uses: actions/checkout@v4
 
-      - name: Tag must equal the workspace version
+      - name: Compute the next version
+        id: next
+        env:
+          BUMP: ${{ inputs.bump }}
         run: |
-          version=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name=="k8sboard") | .version')
-          if [ "${GITHUB_REF_NAME#v}" != "$version" ]; then
-            echo "::error::tag $GITHUB_REF_NAME does not match the workspace version $version"
+          # [workspace.package] holds the only line starting with `version = "`.
+          current=$(grep '^version = "' Cargo.toml | head -n 1 | sed 's/^version = "\(.*\)"/\1/')
+          IFS=. read -r major minor patch <<< "$current"
+          case "$BUMP" in
+            major) major=$((major + 1)); minor=0; patch=0 ;;
+            minor) minor=$((minor + 1)); patch=0 ;;
+            patch) patch=$((patch + 1)) ;;
+          esac
+          next="$major.$minor.$patch"
+          if git ls-remote --exit-code --tags origin "refs/tags/v$next" > /dev/null; then
+            echo "::error::tag v$next already exists"
             exit 1
           fi
+          echo "current $current -> next $next"
+          echo "version=$next" >> "$GITHUB_OUTPUT"
+          echo "tag=v$next" >> "$GITHUB_OUTPUT"
 
   build:
     name: build (${{ matrix.name }})
-    needs: check-version
+    needs: prepare
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -38,6 +63,8 @@ jobs:
           - { name: windows-x86_64, os: windows-latest, target: x86_64-pc-windows-msvc }
           # - { name: macos-aarch64, os: macos-latest, target: aarch64-apple-darwin }
           # - { name: linux-x86_64, os: ubuntu-22.04, target: x86_64-unknown-linux-gnu }
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
     steps:
       - uses: actions/checkout@v4
 
@@ -51,16 +78,25 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
+      # Local only: the build must see the new version, but nothing is committed here. The `publish` job
+      # repeats this step and commits it. Keep the two copies identical.
+      - name: Bump the version (local)
+        shell: bash
+        run: |
+          sed -i "0,/^version = \".*\"/s//version = \"${VERSION}\"/" Cargo.toml
+          cargo update --workspace
+          actual=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name=="k8sboard") | .version')
+          [ "$actual" = "$VERSION" ] || { echo "::error::k8sboard reports $actual, expected $VERSION"; exit 1; }
+
       # Default features only: `screenshot` and `lab-writes` are dev-only and must never ship.
       - name: Build
         run: cargo build --release -p k8sboard --locked --target ${{ matrix.target }}
 
-      # Archives hold the binary and the Lilex licence (plus LICENSE once the repo has one).
+      # Archives hold the binary, the Lilex licence, and LICENSE.
       # macOS ships the bare binary; there is no .app bundle yet.
       - name: Package
         shell: bash
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
           bin="target/${{ matrix.target }}/release/k8sboard"
           [ "$RUNNER_OS" = "Windows" ] && bin="$bin.exe"
           mkdir -p stage/third-party dist
@@ -80,21 +116,57 @@ jobs:
           path: dist/*
           if-no-files-found: error
 
-  release:
-    needs: build
+  publish:
+    needs: [prepare, build]
     runs-on: ubuntu-22.04
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
     steps:
+      # git-cliff needs the full history and the tags.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # Notes come first, with an explicit --tag: the range is "everything since the last tag" without
+      # relying on the new tag existing yet, and a failure here leaves nothing pushed.
+      - name: Generate the release notes
+        uses: orhun/git-cliff-action@v4
+        env:
+          OUTPUT: RELEASE_NOTES.md
+        with:
+          config: cliff.toml
+          args: --unreleased --tag v${{ needs.prepare.outputs.version }} --strip header
+
+      # Same step as in `build`; this copy is the one that gets committed.
+      - name: Bump the version
+        run: |
+          sed -i "0,/^version = \".*\"/s//version = \"${VERSION}\"/" Cargo.toml
+          cargo update --workspace
+          actual=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name=="k8sboard") | .version')
+          [ "$actual" = "$VERSION" ] || { echo "::error::k8sboard reports $actual, expected $VERSION"; exit 1; }
+
+      # A push made with GITHUB_TOKEN does not start other workflows (CI will not run on this commit), and
+      # branch protection on `main` must allow github-actions[bot] to push directly.
+      - name: Commit, tag, and push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Cargo.toml Cargo.lock
+          git commit -m "chore(release): v${VERSION}"
+          git tag -a "v${VERSION}" -m "k8sBoard v${VERSION}"
+          git push origin HEAD:main "v${VERSION}"
+
       - uses: actions/download-artifact@v4
         with:
           path: dist
           merge-multiple: true
 
-      - name: Create the draft release
+      - name: Create the release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           cd dist
           sha256sum k8sboard-* > SHA256SUMS.txt
           cat SHA256SUMS.txt
-          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --verify-tag --draft --generate-notes \
-            --title "k8sBoard $GITHUB_REF_NAME" k8sboard-* SHA256SUMS.txt
+          gh release create "v${VERSION}" --repo "$GITHUB_REPOSITORY" --title "k8sBoard v${VERSION}" \
+            --notes-file ../RELEASE_NOTES.md k8sboard-* SHA256SUMS.txt

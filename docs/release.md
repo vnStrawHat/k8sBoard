@@ -2,12 +2,47 @@
 
 ## Cut a release
 
-1. Bump `version` under `[workspace.package]` in the root `Cargo.toml` (and refresh `Cargo.lock`), commit, and merge to `main`.
-2. Tag that commit and push the tag: `git tag vX.Y.Z && git push origin vX.Y.Z`.
-3. The `Release` workflow builds the Windows archive and creates a **draft** GitHub release with generated notes.
-4. Review the draft (notes, archives, `SHA256SUMS.txt`) and publish it.
+1. GitHub: Actions -> Release -> Run workflow on `main`, choose the bump level (`patch`, `minor`, or `major`; default `patch`).
+2. The workflow runs in this order:
+   1. `prepare` reads the version from the root `Cargo.toml`, computes the next one, and fails if the tag `vX.Y.Z` already exists.
+   2. `build` bumps the version **locally only** (so the binary carries it), builds the Windows binary, and packages the archive. Nothing is committed or tagged yet.
+   3. `publish` runs only if `build` succeeded. It generates the notes with git-cliff, bumps the version again, commits `chore(release): vX.Y.Z` (`Cargo.toml` and `Cargo.lock`) as `github-actions[bot]`, creates the annotated tag, pushes the commit and the tag to `main`, and creates the (published, not draft) GitHub release with the archive and `SHA256SUMS.txt`.
+3. Check the release page: notes, archive, `SHA256SUMS.txt`.
 
-The tag must equal the workspace version (`v0.1.0` for `0.1.0`); the `check-version` job fails the run otherwise. A failed run leaves no release, so fix the problem, delete the tag, and tag again.
+A failed `prepare` or `build` leaves the repository untouched: fix the problem and run the workflow again.
+
+### Recovery if `publish` fails after the push
+
+The commit and tag already exist on `main`; only the release is missing. Do not re-run the workflow (the tag exists, so `prepare` would fail or pick the next version). Instead, from the failed run download the `k8sboard-windows-x86_64` artifact, then:
+
+```bash
+sha256sum k8sboard-X.Y.Z-windows-x86_64.zip > SHA256SUMS.txt
+git-cliff --unreleased --tag vX.Y.Z --strip header > RELEASE_NOTES.md   # or write the notes by hand
+gh release create vX.Y.Z --title "k8sBoard vX.Y.Z" --notes-file RELEASE_NOTES.md k8sboard-X.Y.Z-windows-x86_64.zip SHA256SUMS.txt
+```
+
+If the push itself failed, nothing was published and the workflow can simply be run again.
+
+### Requirements
+
+- A push made with `GITHUB_TOKEN` does not start other workflows, so CI does not run on the release commit.
+- Branch protection on `main` must allow `github-actions[bot]` to push directly.
+
+## Commit convention
+
+The release notes are generated from commit subjects, so every commit on `main` uses `type(scope): subject` (scope optional):
+
+| Type | Notes group |
+| --- | --- |
+| `feat` | Features |
+| `fix` | Bug fixes |
+| `perf` | Performance |
+| `refactor` | Refactoring |
+| `docs` | Documentation |
+| `build`, `ci` | Build and CI |
+| `chore`, anything else | Other |
+
+A `!` after the type or scope (`feat(app)!: ...`) or a `BREAKING CHANGE` footer puts the commit in a "Breaking changes" group listed first. `chore(release)` commits are skipped. The grouping lives in `cliff.toml`.
 
 ## What CI checks
 
