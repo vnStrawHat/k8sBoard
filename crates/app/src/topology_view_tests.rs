@@ -357,7 +357,7 @@ fn traffic_button_state_per_source_state() {
         button(SourceState::None, TrafficSources::NotLoaded),
         (
             false,
-            "Choose a metrics source in Settings \u{203a} Metrics".to_owned()
+            "Choose a metrics source in Settings \u{203a} Clusters \u{203a} Metrics".to_owned()
         )
     );
     assert_eq!(

@@ -1,11 +1,16 @@
-//! The Metrics page of the Settings window (spec 0048): where the Monitor tab reads its 7- and 30-day
-//! history and Topology reads traffic. The page lists the Prometheus-compatible services the active
-//! cluster runs, takes one by hand, tests it, and saves it for the cluster. It reaches the cluster
-//! only through the `ActiveConnection` the shell publishes and stores no credential.
+//! The Metrics section of the selected cluster on the Clusters page (specs 0048, 0058): where the
+//! Monitor tab reads its 7- and 30-day history and Topology reads traffic. The section lists the
+//! Prometheus-compatible services the cluster runs, takes one by hand, tests it, and saves it for
+//! the cluster. The open cluster is reached through the `ActiveConnection` the shell publishes; any
+//! other cluster only when the user clicks Detect or Test, through a one-time client opened the way
+//! Test connection opens it. It stores no credential.
+
+use std::sync::Arc;
 
 use cluster::{
-    ClusterError, MetricsCandidate, MetricsError, MetricsScheme, MetricsSource, MetricsSourceError,
-    MetricsSourceFields, SourceCheck, metrics_candidates,
+    ClusterConnection, ClusterError, Kubeconfig, MetricsCandidate, MetricsError, MetricsScheme,
+    MetricsSource, MetricsSourceError, MetricsSourceFields, ProxyChoice, ProxyUrlError,
+    SourceCheck, metrics_candidates,
 };
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
@@ -17,37 +22,40 @@ use gpui_kit::component::{
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     AnyElement, App, AppContext as _, Context, Entity, IntoElement, ParentElement as _, Render,
-    SharedString, Styled as _, Subscription, Task, WeakEntity, Window, div, px,
+    SharedString, Styled as _, Subscription, Task, Window, div, px,
 };
 
 use crate::active_session::ActiveConnection;
-use crate::cluster_form::edit_entry;
+use crate::app_shell::find_cluster;
+use crate::cluster_catalog::ClusterCatalog;
+use crate::cluster_form::{ClusterRow, TEST_CONNECTION_TIMEOUT, edit_entry};
 use crate::cluster_metrics::SourceState;
-use crate::cluster_registry::{ClusterRef, StoredMetrics};
+use crate::cluster_registry::{ClusterRef, StoredMetrics, open_cluster};
 use crate::cluster_runtime::ClusterRuntime;
-use crate::cluster_session::{ClusterSession, error_text};
+use crate::cluster_session::error_text;
 use crate::settings::AppSettings;
 use crate::status_tone::{StatusTone, tone_color};
 use crate::usage_format::group_digits;
 
 #[cfg(test)]
-#[path = "metrics_page_tests.rs"]
-mod metrics_page_tests;
+#[path = "cluster_metrics_section_tests.rs"]
+mod cluster_metrics_section_tests;
 
 const LABEL_WIDTH: f32 = 110.;
 const SHORT_FIELD_WIDTH: f32 = 90.;
 const FIELD_WIDTH: f32 = 170.;
 const METRICS_SERVER_ONLY: &str = "metrics-server only";
 const METRICS_SERVER_DETAIL: &str = "CPU and memory sampled by k8sBoard while it runs; 24 hours";
-const PAGE_INTRO: &str = "Where the Monitor tab reads 7- and 30-day history and Topology reads traffic. k8sBoard reaches it through the API server service proxy with your kubeconfig credentials and stores no credential.";
-const NO_CLUSTER_TEXT: &str = "Connect to a cluster to choose its metrics source.";
+const SECTION_INTRO: &str = "Where the Monitor tab reads 7- and 30-day history and Topology reads traffic. k8sBoard reaches it through the API server service proxy with your kubeconfig credentials and stores no credential.";
+const NOT_OPEN_NOTE: &str =
+    "This cluster is not open. Detect and Test connect to it once with its kubeconfig and proxy.";
 
-/// Marks the launch as `--screen settings-metrics-fixture`: the page shows fixed data.
-#[cfg(feature = "screenshot")]
-pub(crate) struct MetricsFixture;
+/// Marks the launch as `--screen settings-cluster-metrics-fixture`: the section shows fixed data.
+#[cfg(any(feature = "screenshot", test))]
+pub(crate) struct ClusterMetricsFixture;
 
-#[cfg(feature = "screenshot")]
-impl gpui_kit::Global for MetricsFixture {}
+#[cfg(any(feature = "screenshot", test))]
+impl gpui_kit::Global for ClusterMetricsFixture {}
 
 /// What the radio list has selected. A detected row is held by its fields, not by its position:
 /// "Detect again" may reorder or drop rows, and Save must still write what the user picked.
@@ -187,11 +195,45 @@ fn candidate_detail(candidate: &MetricsCandidate) -> String {
     MetricsSource::new(&candidate.fields).map_or_else(|_| String::new(), |source| source.display())
 }
 
-pub(crate) struct MetricsPage {
-    /// The cluster the state below belongs to; `None` without an open one.
+/// How a click reaches the cluster.
+enum Reach {
+    /// `ActiveConnection` is this cluster.
+    Open(ClusterConnection),
+    OneTime {
+        kubeconfig: Arc<Kubeconfig>,
+        context: String,
+        proxy: Result<ProxyChoice, ProxyUrlError>,
+    },
+}
+
+/// Runs on the tokio runtime: `Open` as is; `OneTime` opens a client the way Test connection does,
+/// under the same deadline. The client lives only as long as the future that holds it.
+async fn connect(reach: Reach) -> Result<ClusterConnection, ClusterError> {
+    match reach {
+        Reach::Open(connection) => Ok(connection),
+        Reach::OneTime {
+            kubeconfig,
+            context,
+            proxy,
+        } => {
+            let opening = open_cluster(&kubeconfig, &context, &proxy);
+            match tokio::time::timeout(TEST_CONNECTION_TIMEOUT, opening).await {
+                Ok(opened) => opened,
+                Err(_elapsed) => Err(ClusterError::TimedOut {
+                    context,
+                    action: "connecting",
+                }),
+            }
+        }
+    }
+}
+
+pub(crate) struct ClusterMetricsSection {
+    /// Finds the kubeconfig of a cluster that is not open.
+    catalog: Entity<ClusterCatalog>,
+    /// The cluster the state below belongs to; `None` while the page selects nothing.
     cluster: Option<ClusterRef>,
     label: String,
-    session: Option<WeakEntity<ClusterSession>>,
     detection: Detection,
     choice: Choice,
     /// The user picked a row, so the saved source no longer pre-selects one.
@@ -204,37 +246,110 @@ pub(crate) struct MetricsPage {
     test: TestResult,
     /// A screenshot fixture: nothing is read or sent.
     is_fixture: bool,
+    /// Observes the session of the open cluster while it is the shown one.
     _session_observer: Option<Subscription>,
     _observers: Vec<Subscription>,
 }
 
-impl MetricsPage {
-    /// The page of the Settings window; the fixture under `--screen settings-metrics-fixture`.
-    pub(crate) fn open(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        #[cfg(feature = "screenshot")]
-        if cx.has_global::<MetricsFixture>() {
-            return Self::fixture(window, cx);
+impl ClusterMetricsSection {
+    pub(crate) fn new(
+        catalog: Entity<ClusterCatalog>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let input = |placeholder: &'static str, window: &mut Window, cx: &mut Context<Self>| {
+            cx.new(|cx| InputState::new(window, cx).placeholder(placeholder))
+        };
+        let namespace = input("namespace", window, cx);
+        let service = input("service", window, cx);
+        let port = input("port", window, cx);
+        let prefix = input("path prefix", window, cx);
+        let mut observers = vec![
+            cx.observe_global::<ActiveConnection>(|section, cx| {
+                if !section.is_fixture {
+                    section.follow_session(cx);
+                    cx.notify();
+                }
+            }),
+            cx.observe_global::<AppSettings>(|_, cx| cx.notify()),
+        ];
+        for input in [&namespace, &service, &port, &prefix] {
+            observers.push(cx.subscribe(input, |section, _, event: &InputEvent, cx| {
+                if matches!(event, InputEvent::Change) {
+                    section.on_other_changed(cx);
+                }
+            }));
         }
-        Self::new(window, cx)
+        Self {
+            catalog,
+            cluster: None,
+            label: String::new(),
+            detection: Detection::Idle,
+            choice: Choice::ServerOnly,
+            has_chosen: false,
+            namespace,
+            service,
+            port,
+            prefix,
+            scheme: MetricsScheme::Http,
+            test: TestResult::Idle,
+            is_fixture: false,
+            _session_observer: None,
+            _observers: observers,
+        }
     }
 
-    fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let mut page = Self::empty(window, cx);
-        page.follow_connection(window, cx);
-        page
+    /// The page selected `row` (or nothing). Always resets, even for the same row (Reset to
+    /// defaults): the choice and inputs come from the saved entry, detection and test are idle.
+    /// Under `ClusterMetricsFixture` it applies the fixture data instead.
+    pub(crate) fn show_cluster(
+        &mut self,
+        row: Option<&ClusterRow>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        #[cfg(any(feature = "screenshot", test))]
+        if let Some(row) = row
+            && cx.has_global::<ClusterMetricsFixture>()
+        {
+            self.apply_fixture(row, window, cx);
+            return;
+        }
+        self.has_chosen = false;
+        self.test = TestResult::Idle;
+        self.detection = Detection::Idle;
+        let Some(row) = row else {
+            self.cluster = None;
+            self.label.clear();
+            self._session_observer = None;
+            cx.notify();
+            return;
+        };
+        self.cluster = Some(row.cluster.clone());
+        self.label.clone_from(&row.label);
+        let saved = self.saved_entry(cx);
+        let fields = saved.as_ref().and_then(StoredMetrics::fields);
+        self.choice = initial_choice(fields, &[]);
+        // Another cluster must not inherit what was typed for the last one.
+        self.set_inputs(&blank_fields(fields), window, cx);
+        self.follow_session(cx);
+        // The open cluster detects at its first draw; any other waits for a click.
+        cx.notify();
     }
 
-    /// The `settings-metrics-fixture` screen: no cluster, a fixed candidate list, `Other service`
-    /// filled, and a passed Test.
+    /// The cluster shown; the page reads it to skip a `show_cluster(None)` that changes nothing.
+    pub(crate) fn cluster(&self) -> Option<&ClusterRef> {
+        self.cluster.as_ref()
+    }
+
+    /// The `settings-cluster-metrics-fixture` screen: a fixed candidate list, `Other service`
+    /// filled, and a passed Test, for the selected row.
     #[cfg(any(feature = "screenshot", test))]
-    pub(crate) fn fixture(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let mut page = Self::empty(window, cx);
-        page.is_fixture = true;
-        page.label = "readonly@Monitor".to_owned();
-        page.cluster = Some(ClusterRef {
-            kubeconfig: std::path::PathBuf::from("fixture.yaml"),
-            context: "readonly@Monitor".to_owned(),
-        });
+    fn apply_fixture(&mut self, row: &ClusterRow, window: &mut Window, cx: &mut Context<Self>) {
+        self.is_fixture = true;
+        self._session_observer = None;
+        self.label.clone_from(&row.label);
+        self.cluster = Some(row.cluster.clone());
         let candidate = |flavor, service: &str, port: &str, prefix: &str| MetricsCandidate {
             flavor,
             fields: MetricsSourceFields {
@@ -245,7 +360,7 @@ impl MetricsPage {
                 prefix: prefix.to_owned(),
             },
         };
-        page.detection = Detection::Done(vec![
+        self.detection = Detection::Done(vec![
             candidate(
                 cluster::MetricsFlavor::VictoriaMetricsCluster,
                 "vmselect-vm-victoria-metrics-k8s-stack",
@@ -265,8 +380,8 @@ impl MetricsPage {
                 "",
             ),
         ]);
-        page.choice = Choice::Other;
-        page.set_inputs(
+        self.choice = Choice::Other;
+        self.set_inputs(
             &MetricsSourceFields {
                 namespace: "monitoring".to_owned(),
                 service: "thanos-query".to_owned(),
@@ -277,95 +392,50 @@ impl MetricsPage {
             window,
             cx,
         );
-        page.test = TestResult::Done(Ok(SourceCheck {
+        self.test = TestResult::Done(Ok(SourceCheck {
             latency: std::time::Duration::from_millis(35),
             cpu_series: 1_234,
         }));
-        page
-    }
-
-    fn empty(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let input = |placeholder: &'static str, window: &mut Window, cx: &mut Context<Self>| {
-            cx.new(|cx| InputState::new(window, cx).placeholder(placeholder))
-        };
-        let namespace = input("namespace", window, cx);
-        let service = input("service", window, cx);
-        let port = input("port", window, cx);
-        let prefix = input("path prefix", window, cx);
-        let mut observers =
-            vec![
-                cx.observe_global_in::<ActiveConnection>(window, |page, window, cx| {
-                    if !page.is_fixture {
-                        page.follow_connection(window, cx);
-                    }
-                }),
-            ];
-        observers.push(cx.observe_global::<AppSettings>(|_, cx| cx.notify()));
-        for input in [&namespace, &service, &port, &prefix] {
-            observers.push(cx.subscribe(input, |page, _, event: &InputEvent, cx| {
-                if matches!(event, InputEvent::Change) {
-                    page.on_other_changed(cx);
-                }
-            }));
-        }
-        Self {
-            cluster: None,
-            label: String::new(),
-            session: None,
-            detection: Detection::Idle,
-            choice: Choice::ServerOnly,
-            has_chosen: false,
-            namespace,
-            service,
-            port,
-            prefix,
-            scheme: MetricsScheme::Http,
-            test: TestResult::Idle,
-            is_fixture: false,
-            _session_observer: None,
-            _observers: observers,
-        }
-    }
-
-    /// The published connection changed: a new cluster resets the page and detects again; the same
-    /// cluster after a reconnect only keeps the observer of its session current.
-    fn follow_connection(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let published = cx.try_global::<ActiveConnection>().map(|active| {
-            (
-                active.cluster.clone(),
-                active.label.clone(),
-                active.session.clone(),
-            )
-        });
-        let Some((cluster, label, session)) = published else {
-            self.cluster = None;
-            self.session = None;
-            self._session_observer = None;
-            self.detection = Detection::Idle;
-            self.test = TestResult::Idle;
-            cx.notify();
-            return;
-        };
-        self.label = label;
-        self.session = Some(session.clone());
-        self._session_observer = session
-            .upgrade()
-            .map(|session| cx.observe(&session, |_, _, cx| cx.notify()));
-        if self.cluster.as_ref() == Some(&cluster) {
-            cx.notify();
-            return;
-        }
-        self.cluster = Some(cluster);
-        self.has_chosen = false;
-        self.test = TestResult::Idle;
-        self.detection = Detection::Idle;
-        let saved = self.saved_entry(cx);
-        let fields = saved.as_ref().and_then(StoredMetrics::fields);
-        self.choice = initial_choice(fields, &[]);
-        // Another cluster must not inherit what was typed for the last one.
-        self.set_inputs(&blank_fields(fields), window, cx);
-        // The first render starts the detection, so a window opened for another page lists nothing.
         cx.notify();
+    }
+
+    /// Whether the shell has this cluster open, so its connection is the one to use.
+    fn is_open_cluster(&self, cx: &App) -> bool {
+        self.cluster.as_ref().is_some_and(|cluster| {
+            cx.try_global::<ActiveConnection>()
+                .is_some_and(|active| active.cluster == *cluster)
+        })
+    }
+
+    /// Keeps the observer of the session current: set while this cluster is the open one.
+    fn follow_session(&mut self, cx: &mut Context<Self>) {
+        let session = cx
+            .try_global::<ActiveConnection>()
+            .filter(|active| self.cluster.as_ref() == Some(&active.cluster))
+            .and_then(|active| active.session.upgrade());
+        self._session_observer =
+            session.map(|session| cx.observe(&session, |_, _, cx| cx.notify()));
+    }
+
+    /// How a click reaches the cluster; `None` while the row is no longer in the catalog.
+    fn reach(&self, cx: &App) -> Option<Reach> {
+        let cluster = self.cluster.as_ref()?;
+        if let Some(active) = cx
+            .try_global::<ActiveConnection>()
+            .filter(|active| active.cluster == *cluster)
+        {
+            return Some(Reach::Open(active.connection.clone()));
+        }
+        let kubeconfigs: Vec<Arc<Kubeconfig>> =
+            self.catalog.read(cx).kubeconfigs().cloned().collect();
+        let (kubeconfig, summary) = find_cluster(&kubeconfigs, cluster)?;
+        // The stored choice, read now, as Test connection reads it.
+        let proxy = AppSettings::get(cx).registry.profile(&summary).proxy;
+        Some(Reach::OneTime {
+            kubeconfig,
+            context: summary.name,
+            proxy,
+        })
     }
 
     fn set_inputs(
@@ -384,7 +454,7 @@ impl MetricsPage {
         self.scheme = fields.scheme;
     }
 
-    /// What Settings stores for the open cluster.
+    /// What Settings stores for the shown cluster.
     fn saved_entry(&self, cx: &App) -> Option<StoredMetrics> {
         let cluster = self.cluster.as_ref()?;
         AppSettings::get(cx)
@@ -399,17 +469,14 @@ impl MetricsPage {
         if self.is_fixture {
             return;
         }
-        let Some(connection) = cx
-            .try_global::<ActiveConnection>()
-            .map(|active| active.connection.clone())
-        else {
+        let Some(reach) = self.reach(cx) else {
             return;
         };
         let runtime = cx.global::<ClusterRuntime>().clone();
-        let listing = runtime.spawn(async move { connection.list_all_services().await });
+        let listing = runtime.spawn(async move { connect(reach).await?.list_all_services().await });
         let task = cx.spawn(async move |this, cx| {
             let result = listing.await;
-            let _ = this.update(cx, |page, cx| page.finish_detection(result, cx));
+            let _ = this.update(cx, |section, cx| section.finish_detection(result, cx));
         });
         self.detection = Detection::Running { _task: task };
         cx.notify();
@@ -495,22 +562,27 @@ impl MetricsPage {
         let Ok(Some(source)) = self.selected(cx) else {
             return;
         };
-        let Some(connection) = cx
-            .try_global::<ActiveConnection>()
-            .map(|active| active.connection.clone())
-        else {
+        let Some(reach) = self.reach(cx) else {
             return;
         };
         let runtime = cx.global::<ClusterRuntime>().clone();
-        let checking = runtime.spawn(async move { connection.check_metrics_source(&source).await });
+        let checking = runtime.spawn(async move {
+            match connect(reach).await {
+                Ok(connection) => connection.check_metrics_source(&source).await,
+                Err(error) => Err(MetricsError::Unexpected(format!(
+                    "cannot connect: {}",
+                    error_text(&error)
+                ))),
+            }
+        });
         let task = cx.spawn(async move |this, cx| {
             let result = checking.await.unwrap_or_else(|_| {
                 Err(MetricsError::Unexpected(
                     "the test stopped unexpectedly".to_owned(),
                 ))
             });
-            let _ = this.update(cx, |page, cx| {
-                page.test = TestResult::Done(result);
+            let _ = this.update(cx, |section, cx| {
+                section.test = TestResult::Done(result);
                 cx.notify();
             });
         });
@@ -538,7 +610,7 @@ impl MetricsPage {
         self.on_other_changed(cx);
     }
 
-    /// Whether the page shows what a screenshot waits for: a fixture, or a connected cluster whose
+    /// Whether the section shows what a screenshot waits for: a fixture, or a cluster whose
     /// detection ended.
     #[cfg(any(feature = "screenshot", test))]
     pub(crate) fn is_settled(&self) -> bool {
@@ -555,7 +627,7 @@ fn muted(text: impl Into<SharedString>, cx: &App) -> gpui_kit::Div {
         .child(text.into())
 }
 
-impl MetricsPage {
+impl ClusterMetricsSection {
     fn render_choices(&self, cx: &mut Context<Self>) -> AnyElement {
         let mono = cx.theme().mono_font_family.clone();
         let muted_color = cx.theme().muted_foreground;
@@ -580,7 +652,7 @@ impl MetricsPage {
         };
         RadioGroup::vertical("metrics-source")
             .selected_index(selected)
-            .on_change(cx.listener(|page, index: &usize, _, cx| page.choose(*index, cx)))
+            .on_change(cx.listener(|section, index: &usize, _, cx| section.choose(*index, cx)))
             .children(
                 rows.into_iter()
                     .enumerate()
@@ -613,7 +685,7 @@ impl MetricsPage {
             })
         };
         let scheme = self.scheme;
-        let page = cx.entity();
+        let section = cx.entity();
         let scheme_menu = Button::new("metrics-scheme")
             .small()
             .outline()
@@ -629,12 +701,12 @@ impl MetricsPage {
                 ]
                 .into_iter()
                 .fold(menu, |menu, (choice, label)| {
-                    let page = page.clone();
+                    let section = section.clone();
                     menu.item(
                         PopupMenuItem::new(label)
                             .checked(choice == scheme)
                             .on_click(move |_, _, cx| {
-                                page.update(cx, |page, cx| page.pick_scheme(choice, cx));
+                                section.update(cx, |section, cx| section.pick_scheme(choice, cx));
                             }),
                     )
                 })
@@ -702,16 +774,20 @@ impl MetricsPage {
             .child(
                 Button::new("metrics-detect")
                     .small()
-                    .label("Detect again")
-                    .disabled(is_detecting || self.is_fixture)
-                    .on_click(cx.listener(|page, _, _, cx| page.start_detection(cx))),
+                    .label(if matches!(self.detection, Detection::Idle) {
+                        "Detect"
+                    } else {
+                        "Detect again"
+                    })
+                    .disabled(is_detecting || self.is_fixture || self.reach(cx).is_none())
+                    .on_click(cx.listener(|section, _, _, cx| section.start_detection(cx))),
             )
             .child(
                 Button::new("metrics-test")
                     .small()
                     .label("Test")
                     .disabled(!can_run || is_testing)
-                    .on_click(cx.listener(|page, _, _, cx| page.start_test(cx))),
+                    .on_click(cx.listener(|section, _, _, cx| section.start_test(cx))),
             )
             .children(result)
             .child(div().flex_1())
@@ -721,24 +797,29 @@ impl MetricsPage {
                     .primary()
                     .label("Save")
                     .disabled(!can_save || self.is_fixture)
-                    .on_click(cx.listener(|page, _, _, cx| page.save(cx))),
+                    .on_click(cx.listener(|section, _, _, cx| section.save(cx))),
             )
             .into_any_element()
     }
 }
 
-impl Render for MetricsPage {
+impl Render for ClusterMetricsSection {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if self.cluster.is_none() {
-            return muted(NO_CLUSTER_TEXT, cx).into_any_element();
+            return div().into_any_element();
         }
-        // Detection lists every service of the cluster, so it starts when the page is first shown,
-        // not when the Settings window opens on another page.
-        if matches!(self.detection, Detection::Idle) {
+        let is_open = self.is_open_cluster(cx);
+        // Detection lists every service of the cluster, so it starts when the section is first
+        // drawn for the open cluster. Any other cluster is never probed without a click: its
+        // kubeconfig may come from a watched folder and run an exec plugin.
+        if is_open && matches!(self.detection, Detection::Idle) {
             self.start_detection(cx);
         }
         let saved = self.saved_entry(cx);
-        let session = self.session.as_ref().and_then(|session| session.upgrade());
+        let session = cx
+            .try_global::<ActiveConnection>()
+            .filter(|_| is_open)
+            .and_then(|active| active.session.upgrade());
         let live_state = session
             .as_ref()
             .and_then(|session| session.read(cx).live())
@@ -751,9 +832,13 @@ impl Render for MetricsPage {
                 div()
                     .text_sm()
                     .font_semibold()
+                    .pb_1()
+                    .border_b_1()
+                    .border_color(cx.theme().border)
                     .child(format!("Metrics · {}", self.label)),
             )
-            .child(muted(PAGE_INTRO, cx))
+            .child(muted(SECTION_INTRO, cx))
+            .children((!is_open).then(|| muted(NOT_OPEN_NOTE, cx)))
             .child(self.render_choices(cx))
             .child(self.render_other(cx))
             .children(self.render_detection_note(cx))

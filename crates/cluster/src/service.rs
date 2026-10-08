@@ -68,7 +68,7 @@ impl ClusterConnection {
     }
 
     /// Lists the services of every namespace once, following continue tokens; no watch. The
-    /// Settings › Metrics page reads it to propose a metrics source.
+    /// Metrics section of Settings › Clusters reads it to propose a metrics source.
     pub async fn list_all_services(&self) -> Result<Vec<ServiceSummary>, ClusterError> {
         let api = Api::<Service>::all(self.client().clone());
         let services = self.list_all(api, "listing services").await?;

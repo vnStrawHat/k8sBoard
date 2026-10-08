@@ -4355,8 +4355,8 @@ impl AppShell {
         SettleInput {
             target,
             is_catalog_loading: self.catalog.read(cx).is_loading(),
-            is_metrics_page_pending: target != TargetState::Unavailable
-                && crate::settings_window::is_metrics_page_pending(cx),
+            is_cluster_metrics_pending: target != TargetState::Unavailable
+                && crate::settings_window::is_cluster_metrics_pending(cx),
             // An empty list opens no drawer, but the launch request is resolved then, so it settles.
             is_drawer_ready: is_drawer_ready(
                 self.drawer_subject().is_some(),

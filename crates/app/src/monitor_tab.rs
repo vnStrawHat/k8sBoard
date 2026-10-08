@@ -35,7 +35,7 @@ const MAX_TABLE_ROWS: usize = if SAMPLER_ROWS > SOURCE_ROWS {
 } else {
     SOURCE_ROWS
 };
-const SHORT_HISTORY_TIP: &str = "Showing data since k8sBoard connected; choose a metrics source in Settings › Metrics for up to 30 days";
+const SHORT_HISTORY_TIP: &str = "Showing data since k8sBoard connected; choose a metrics source in Settings › Clusters › Metrics for up to 30 days";
 const SOURCE_NOTE: &str = "CPU and memory: metrics-server, sampled by k8sBoard every 15s while the app is open. Network and disk I/O: kubelet stats summary and cAdvisor through the API server node proxy, sampled every 15s while needed. Kept 24 hours.";
 const METRICS_UNAVAILABLE_TITLE: &str = "Metrics unavailable";
 const KUBELET_UNAVAILABLE_TITLE: &str = "Network and disk I/O unavailable";

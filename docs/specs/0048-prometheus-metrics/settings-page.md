@@ -1,5 +1,7 @@
 # 0048 · Settings key, session state (step 3a), Metrics page (step 3b)
 
+Superseded by [0058](../0058-cluster-metrics-settings/README.md): the page is now the Metrics section of Settings › Clusters.
+
 [Back to index](README.md) · Step 3a (app): `cluster_registry.rs`, `settings_tests.rs`, `cluster_metrics.rs`, `active_session.rs`, `app_shell.rs`. Step 3b (app): `metrics_page.rs` (new) + `metrics_page_tests.rs`, `settings_window.rs`, `clusters_page.rs`, `launch_options.rs`, `screenshot.rs`.
 
 ## Setting (3a)

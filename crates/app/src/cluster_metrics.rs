@@ -116,16 +116,16 @@ pub(crate) enum TrafficSources {
 pub(crate) fn source_note(state: &SourceState) -> Option<String> {
     match state {
         SourceState::None => None,
-        SourceState::Invalid => {
-            Some("Metrics source in settings is not valid (Settings › Metrics)".to_owned())
-        }
+        SourceState::Invalid => Some(
+            "Metrics source in settings is not valid (Settings › Clusters › Metrics)".to_owned(),
+        ),
         SourceState::Checking { .. } => Some("Metrics source: checking…".to_owned()),
         SourceState::Ready { check, .. } if check.cpu_series == 0 => {
             Some("Metrics source has no container CPU series".to_owned())
         }
         SourceState::Ready { .. } => None,
         SourceState::Failed { error, .. } => Some(format!(
-            "Metrics source unreachable: {error} (Settings › Metrics)"
+            "Metrics source unreachable: {error} (Settings › Clusters › Metrics)"
         )),
     }
 }

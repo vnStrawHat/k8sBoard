@@ -212,7 +212,9 @@ pub(crate) fn traffic_button(metrics: &crate::cluster_metrics::ClusterMetrics) -
     };
     let source = match &metrics.source {
         SourceState::None => {
-            return disabled("Choose a metrics source in Settings \u{203a} Metrics".to_owned());
+            return disabled(
+                "Choose a metrics source in Settings \u{203a} Clusters \u{203a} Metrics".to_owned(),
+            );
         }
         SourceState::Invalid => {
             return disabled("The metrics source in Settings is not valid".to_owned());

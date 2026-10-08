@@ -199,7 +199,6 @@ fn pages_follow_w2_order() {
             "Safety",
             "Terminal & Shell",
             "Logs",
-            "Metrics",
             "About"
         ]
     );
@@ -210,8 +209,8 @@ fn default_page_is_clusters() {
     assert_eq!(PAGES[1], SettingsPage::Clusters);
     assert_eq!(SettingsPage::Clusters.index(), 1);
     assert_eq!(PAGES[2], SettingsPage::Environments);
-    assert_eq!(PAGES.len(), 10);
-    assert_eq!(SettingsPage::About.index(), 9);
+    assert_eq!(PAGES.len(), 9);
+    assert_eq!(SettingsPage::About.index(), 8);
 }
 
 #[gpui_kit::test]
@@ -537,11 +536,26 @@ fn settings_page_icons_are_distinct() {
     }
 }
 
-// ---- The Metrics page ----
+// ---- The Metrics section of the Clusters page (spec 0058) ----
+
+/// A chain file with two contexts; the second is the open cluster of the shell. Returns the
+/// directory and that cluster.
+fn two_context_chain(name: &str) -> (PathBuf, PathBuf, ClusterRef) {
+    let dir = temp_dir(name);
+    let file = dir.join("chain.yaml");
+    let text = "apiVersion: v1\nkind: Config\nclusters:\n  - name: c\n    cluster: { server: \"https://127.0.0.1:1\" }\nusers:\n  - name: u\n    user: { token: fixture-token-value }\ncontexts:\n  - name: first-ctx\n    context: { cluster: c, user: u }\n  - name: second-ctx\n    context: { cluster: c, user: u }\n";
+    std::fs::write(&file, text).expect("write fixture");
+    let open = ClusterRef {
+        kubeconfig: file.clone(),
+        context: "second-ctx".to_owned(),
+    };
+    (dir, file, open)
+}
 
 #[gpui_kit::test]
-fn a_window_on_another_page_lists_no_service_until_the_metrics_page_shows(cx: &mut TestAppContext) {
-    install(None, &[], cx);
+fn cluster_metrics_redirect_detects_only_when_shown(cx: &mut TestAppContext) {
+    let (dir, file, open) = two_context_chain("metrics-redirect");
+    install(None, &[file], cx);
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(1)
         .enable_all()
@@ -562,34 +576,74 @@ fn a_window_on_another_page_lists_no_service_until_the_metrics_page_shows(cx: &m
             runtime.handle().clone(),
         ));
         cx.set_global(crate::active_session::ActiveConnection {
-            cluster: target_cluster(),
-            label: "ctx".to_owned(),
+            cluster: open.clone(),
+            label: "second-ctx".to_owned(),
             connection,
             session: WeakEntity::new_invalid(),
             generation: 1,
         });
     });
-    let window = open_settings(cx);
+    let window = cx
+        .update(|cx| open_settings_window(SettingsPage::General, SettingsSize::Standard, cx))
+        .expect("the Settings window opens");
+    // Tall enough to hold the whole Clusters page: the kit list draws only what is in view, and
+    // it does not scroll to a default group on open.
+    cx.update_window(window, |_, window, _| {
+        window.resize(gpui_kit::size(gpui_kit::px(1000.), gpui_kit::px(2400.)));
+    })
+    .expect("the window is open");
     render(window, cx);
     render(window, cx);
     std::thread::sleep(std::time::Duration::from_millis(100));
     cx.run_until_parked();
     assert!(
         api.requests().is_empty(),
-        "opening Settings on Clusters lists nothing: {:?}",
+        "opening Settings on General lists nothing: {:?}",
         api.requests()
     );
-    cx.update(show_metrics_page);
-    render(window, cx);
+    let shown = cx.update(show_cluster_metrics).expect("the window is open");
+    assert_eq!(shown.window_id(), window.window_id());
     for _ in 0..500 {
-        cx.run_until_parked();
+        render(window, cx);
         if !api.requests().is_empty() {
             break;
         }
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
+    let drawn = cx
+        .update_window(window, |_, window, _| {
+            window.try_find("metrics-detect").is_some()
+        })
+        .expect("the window is open");
+    assert!(drawn, "the Metrics group is drawn");
+    let view = cx
+        .update(|cx| open_window_of(cx).and_then(|open| open.view.upgrade()))
+        .expect("the Settings view");
+    view.read_with(cx, |view, cx| {
+        assert_eq!(view.first_page, SettingsPage::Clusters);
+        assert_eq!(view.first_group, Some(CLUSTER_METRICS_GROUP));
+        let section = view.clusters.read(cx).metrics_section();
+        assert_eq!(section.read(cx).cluster(), Some(&open));
+    });
     assert_eq!(api.requests().len(), 1);
     assert_eq!(api.requests()[0].path, "/api/v1/services");
+    close(window, cx);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[gpui_kit::test]
+fn show_page_clears_the_metrics_group(cx: &mut TestAppContext) {
+    install(None, &[], cx);
+    let window = open_settings(cx);
+    cx.update(show_cluster_metrics);
+    let view = cx
+        .update(|cx| open_window_of(cx).and_then(|open| open.view.upgrade()))
+        .expect("the Settings view");
+    view.read_with(cx, |view, _| {
+        assert_eq!(view.first_group, Some(CLUSTER_METRICS_GROUP));
+    });
+    view.update(cx, |view, cx| view.show_page(SettingsPage::General, cx));
+    view.read_with(cx, |view, _| assert_eq!(view.first_group, None));
     close(window, cx);
 }
 

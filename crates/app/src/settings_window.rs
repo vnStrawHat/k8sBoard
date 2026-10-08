@@ -18,13 +18,14 @@ use gpui_kit::{
     WindowOptions, div, prelude::FluentBuilder as _, px, size,
 };
 
+use crate::active_session::ActiveConnection;
 use crate::audit_log::audit_path;
 use crate::cluster_catalog::CatalogHandle;
 use crate::cluster_form::MoveStep;
+use crate::cluster_registry::ClusterRef;
 use crate::clusters_page::{ClustersPage, add_cluster_button};
 use crate::environment::{CustomEnvironment, EnvironmentTier, usable_environments};
 use crate::environments_page::EnvironmentsPage;
-use crate::metrics_page::MetricsPage;
 use crate::settings::{
     AppSettings, COLOR_THEME_OPTIONS, DENSITY_OPTIONS, FONT_SIZE_OPTIONS, OptionTable,
     SCROLLBACK_OPTIONS, SHELL_OPTIONS, Settings as SettingsData, TAIL_OPTIONS, theme_choices,
@@ -52,10 +53,13 @@ const TALL_WINDOW_HEIGHT: f32 = 900.;
 const SIDEBAR_WIDTH: f32 = 200.;
 /// The search box of the Clusters header (W2).
 const SEARCH_WIDTH: f32 = 200.;
+/// The kit group of the Clusters page that holds the Metrics section. The group has no title, so
+/// the kit sidebar gets no sub-item; the kit scrolls to a group by its index.
+const CLUSTER_METRICS_GROUP: usize = 1;
 
 /// The pages in W2 nav order, keeping only those with content. A later spec inserts its page
 /// at its W2 position.
-const PAGES: [SettingsPage; 10] = [
+const PAGES: [SettingsPage; 9] = [
     SettingsPage::General,
     SettingsPage::Clusters,
     SettingsPage::Environments,
@@ -64,7 +68,6 @@ const PAGES: [SettingsPage; 10] = [
     SettingsPage::Safety,
     SettingsPage::TerminalAndShell,
     SettingsPage::Logs,
-    SettingsPage::Metrics,
     SettingsPage::About,
 ];
 
@@ -78,7 +81,6 @@ pub(crate) enum SettingsPage {
     Safety,
     TerminalAndShell,
     Logs,
-    Metrics,
     About,
 }
 
@@ -93,7 +95,6 @@ impl SettingsPage {
             Self::Safety => "Safety",
             Self::TerminalAndShell => "Terminal & Shell",
             Self::Logs => "Logs",
-            Self::Metrics => "Metrics",
             Self::About => "About",
         }
     }
@@ -108,7 +109,6 @@ impl SettingsPage {
             Self::Safety => IconName::ShieldCheck,
             Self::TerminalAndShell => IconName::SquareTerminal,
             Self::Logs => IconName::FileText,
-            Self::Metrics => IconName::ChartLine,
             Self::About => IconName::Info,
         }
     }
@@ -230,15 +230,18 @@ pub(crate) fn add_cluster(how: ClusterAddition, cx: &mut App) {
     });
 }
 
-/// "Choose on the Metrics page…": the Settings window on the Metrics page, opened or brought
-/// forward.
-pub(crate) fn show_metrics_page(cx: &mut App) {
-    if let Some(open) = open_window_of(cx) {
-        let _ = open
-            .view
-            .update(cx, |view, cx| view.show_page(SettingsPage::Metrics, cx));
-    }
-    open_settings_window(SettingsPage::Metrics, SettingsSize::Standard, cx);
+/// Settings › Clusters with the open cluster selected and its Metrics section scrolled into view;
+/// opens the window or brings it forward. `None` when the window could not open.
+pub(crate) fn show_cluster_metrics(cx: &mut App) -> Option<AnyWindowHandle> {
+    let cluster = cx
+        .try_global::<ActiveConnection>()
+        .map(|active| active.cluster.clone());
+    let window = open_settings_window(SettingsPage::Clusters, SettingsSize::Standard, cx)?;
+    let view = open_window_of(cx).and_then(|open| open.view.upgrade())?;
+    let _ = window.update(cx, |_, _, cx| {
+        view.update(cx, |view, cx| view.select_cluster_metrics(cluster, cx));
+    });
+    Some(window)
 }
 
 fn open_window_of(cx: &App) -> Option<OpenWindow> {
@@ -246,15 +249,21 @@ fn open_window_of(cx: &App) -> Option<OpenWindow> {
         .and_then(|handle| handle.0.clone())
 }
 
-/// Whether the open Settings window shows the Metrics page and that page still waits for its
-/// cluster or its detection; a screenshot of it waits too.
+/// Whether the open Settings window is scrolled to the Metrics section and that section still
+/// waits for its detection; a screenshot of it waits too.
 #[cfg(feature = "screenshot")]
-pub(crate) fn is_metrics_page_pending(cx: &App) -> bool {
+pub(crate) fn is_cluster_metrics_pending(cx: &App) -> bool {
     let Some(view) = open_window_of(cx).and_then(|open| open.view.upgrade()) else {
         return false;
     };
     let window = view.read(cx);
-    window.first_page == SettingsPage::Metrics && !window.metrics.read(cx).is_settled()
+    window.first_group == Some(CLUSTER_METRICS_GROUP)
+        && !window
+            .clusters
+            .read(cx)
+            .metrics_section()
+            .read(cx)
+            .is_settled()
 }
 
 /// Clears the handle when the Settings window closes.
@@ -291,11 +300,12 @@ pub(crate) fn quit_when_main_window_closes(
 /// Holds no clipboard text or credential: the pages read the shared globals when they render.
 pub(crate) struct SettingsWindow {
     first_page: SettingsPage,
+    /// The kit group of `first_page` to scroll to; `None` is the top of the page.
+    first_group: Option<usize>,
     /// Changes with each `show_page`: a new key gives the kit `Settings` a fresh selection.
     page_generation: usize,
     clusters: Entity<ClustersPage>,
     environments: Entity<EnvironmentsPage>,
-    metrics: Entity<MetricsPage>,
     focus_handle: FocusHandle,
     _observers: Vec<Subscription>,
 }
@@ -307,13 +317,12 @@ impl SettingsWindow {
         catalog.update(cx, |catalog, cx| catalog.reset_paste_status(cx));
         let clusters = cx.new(|cx| ClustersPage::new(catalog.clone(), window, cx));
         let environments = cx.new(|cx| EnvironmentsPage::new(window, cx));
-        let metrics = cx.new(|cx| MetricsPage::open(window, cx));
         Self {
             first_page,
+            first_group: None,
             page_generation: 0,
             clusters,
             environments,
-            metrics,
             focus_handle: cx.focus_handle(),
             _observers: vec![
                 cx.observe_global::<AppSettings>(|_, cx| cx.notify()),
@@ -324,7 +333,20 @@ impl SettingsWindow {
 
     fn show_page(&mut self, page: SettingsPage, cx: &mut Context<Self>) {
         self.first_page = page;
+        self.first_group = None;
         self.page_generation += 1;
+        cx.notify();
+    }
+
+    /// Clusters page scrolled to the Metrics section, with `cluster` selected when there is one.
+    fn select_cluster_metrics(&mut self, cluster: Option<ClusterRef>, cx: &mut Context<Self>) {
+        self.first_page = SettingsPage::Clusters;
+        self.first_group = Some(CLUSTER_METRICS_GROUP);
+        self.page_generation += 1;
+        if let Some(cluster) = cluster {
+            self.clusters
+                .update(cx, |clusters, cx| clusters.select(cluster, cx));
+        }
         cx.notify();
     }
 
@@ -341,7 +363,6 @@ impl SettingsWindow {
                     SettingsPage::Safety => safety_page(),
                     SettingsPage::TerminalAndShell => terminal_page(),
                     SettingsPage::Logs => logs_page(),
-                    SettingsPage::Metrics => metrics_page(&self.metrics),
                     SettingsPage::About => about_page(cx),
                 };
                 built.icon(page.icon())
@@ -384,7 +405,7 @@ impl Render for SettingsWindow {
                         .sidebar_width(px(SIDEBAR_WIDTH))
                         .default_selected_index(SelectIndex {
                             page_ix: self.first_page.index(),
-                            group_ix: None,
+                            group_ix: self.first_group,
                         })
                         .pages(self.pages(cx)),
                 ),
@@ -396,6 +417,7 @@ impl Render for SettingsWindow {
 /// only gets the app context.
 fn clusters_page(page: &Entity<ClustersPage>, cx: &App) -> SettingPage {
     let (body, add) = (page.clone(), page.clone());
+    let metrics = page.read(cx).metrics_section();
     let search = page.read(cx).search_input();
     let blocked = ClustersPage::paste_blocked_reason(cx);
     SettingPage::new(SettingsPage::Clusters.title())
@@ -409,6 +431,8 @@ fn clusters_page(page: &Entity<ClustersPage>, cx: &App) -> SettingPage {
                 .child(add_cluster_button(add.clone(), blocked))
         })
         .group(SettingGroup::new().item(SettingItem::render(move |_, _, _| body.clone())))
+        // Always present, so group 1 exists on the first frame (the kit drops a missing index).
+        .group(SettingGroup::new().item(SettingItem::render(move |_, _, _| metrics.clone())))
 }
 
 /// The Environments page: one element item, because the rows and their inputs are a view of their
@@ -418,15 +442,6 @@ fn environments_page(page: &Entity<EnvironmentsPage>) -> SettingPage {
     SettingPage::new(SettingsPage::Environments.title())
         .resettable(false)
         .description("Group clusters and choose how changes to them are confirmed.")
-        .group(SettingGroup::new().item(SettingItem::render(move |_, _, _| body.clone())))
-}
-
-/// The Metrics page: one element item, because the radio list and the inputs are a view of their
-/// own (the item closure only gets the app context).
-fn metrics_page(page: &Entity<MetricsPage>) -> SettingPage {
-    let body = page.clone();
-    SettingPage::new(SettingsPage::Metrics.title())
-        .resettable(false)
         .group(SettingGroup::new().item(SettingItem::render(move |_, _, _| body.clone())))
 }
 

@@ -24,18 +24,18 @@ A direct URL or credential (0048 decision 3); any change to `registry.clusters[]
 
 ## Acceptance criteria
 
-- [ ] 1. Gate passes, plus `cargo clippy -p k8sboard --features screenshot --all-targets -- -D warnings`; no new `#[allow]`, no `unsafe`, no new dependency; `crates/cluster` unchanged except one doc comment (`service.rs`).
-- [ ] 2. Every test in [test-plan.md](test-plan.md) exists under its name and passes offline; no test reaches a cluster (fake API, or `https://127.0.0.1:1`).
-- [ ] 3. The Settings sidebar reads General, Clusters, Environments, Appearance, Keyboard Shortcuts, Safety, Terminal & Shell, Logs, About (9 pages). `SettingsPage::Metrics`, `metrics_page.rs`, `show_metrics_page`, and `settings-metrics[-fixture]` are gone (grep clean).
-- [ ] 4. The Clusters page has two kit groups: list + form (group 0) and the Metrics section of the selected cluster (group 1, full page width). The form no longer has a `Metrics · Source ▾` row.
-- [ ] 5. For the open cluster the section detects at its first draw, preselects the saved source, tests and saves exactly as the 0048 page did, and shows `Saved: … · {state}` from the session.
-- [ ] 6. For a cluster that is not open the section shows its saved source and the note of [section.md](section.md); nothing is sent until Detect or Test is clicked; then one client is opened with that cluster's kubeconfig and stored proxy (`open_cluster`, 15 s open deadline) and only `list services` or the check `query` GET is sent.
-- [ ] 7. Selecting another row, Reset to defaults, or removing the row resets the section (inputs from the new saved entry, running detection and test dropped).
-- [ ] 8. Save writes `registry.clusters[<selected>].metrics` only (shape unchanged); `metrics-server only` clears it; the open session re-checks when the saved cluster is the open one (0048 rule, unchanged).
-- [ ] 9. `show_cluster_metrics` opens or brings forward Settings on Clusters, selects the open cluster when there is one, and scrolls to group 1. `--screen settings-cluster-metrics-fixture` uses it and draws fixed data with no request.
-- [ ] 10. Tooltips and notes that said `Settings › Metrics` say `Settings › Clusters › Metrics` (Monitor range tip, Topology Traffic tip, `source_note`).
-- [ ] 11. Theme tokens only (0003 color-literal grep clean); English only.
-- [ ] 12. ui-verifier (light, dark): `settings-cluster-metrics-fixture` and `settings` show no high-severity defect against W2; the live UAT check of [test-plan.md](test-plan.md) lists the two VictoriaMetrics rows for `readonly@Monitor`.
+- [x] 1. Gate passes, plus `cargo clippy -p k8sboard --features screenshot --all-targets -- -D warnings`; no new `#[allow]`, no `unsafe`, no new dependency; `crates/cluster` unchanged except one doc comment (`service.rs`).
+- [x] 2. Every test in [test-plan.md](test-plan.md) exists under its name and passes offline; no test reaches a cluster (fake API, or `https://127.0.0.1:1`).
+- [x] 3. The Settings sidebar reads General, Clusters, Environments, Appearance, Keyboard Shortcuts, Safety, Terminal & Shell, Logs, About (9 pages). `SettingsPage::Metrics`, `metrics_page.rs`, `show_metrics_page`, and `settings-metrics[-fixture]` are gone (grep clean).
+- [x] 4. The Clusters page has two kit groups: list + form (group 0) and the Metrics section of the selected cluster (group 1, full page width). The form no longer has a `Metrics · Source ▾` row.
+- [x] 5. For the open cluster the section detects at its first draw, preselects the saved source, tests and saves exactly as the 0048 page did, and shows `Saved: … · {state}` from the session.
+- [x] 6. For a cluster that is not open the section shows its saved source and the note of [section.md](section.md); nothing is sent until Detect or Test is clicked; then one client is opened with that cluster's kubeconfig and stored proxy (`open_cluster`, 15 s open deadline) and only `list services` or the check `query` GET is sent.
+- [x] 7. Selecting another row, Reset to defaults, or removing the row resets the section (inputs from the new saved entry, running detection and test dropped).
+- [x] 8. Save writes `registry.clusters[<selected>].metrics` only (shape unchanged); `metrics-server only` clears it; the open session re-checks when the saved cluster is the open one (0048 rule, unchanged).
+- [ ] 9. (scroll part open, see [as-built.md](as-built.md)) `show_cluster_metrics` opens or brings forward Settings on Clusters, selects the open cluster when there is one, and scrolls to group 1. `--screen settings-cluster-metrics-fixture` uses it and draws fixed data with no request.
+- [x] 10. Tooltips and notes that said `Settings › Metrics` say `Settings › Clusters › Metrics` (Monitor range tip, Topology Traffic tip, `source_note`).
+- [x] 11. Theme tokens only (0003 color-literal grep clean); English only.
+- [ ] 12. (pending: ui-verifier and live check, not part of the coder step) ui-verifier (light, dark): `settings-cluster-metrics-fixture` and `settings` show no high-severity defect against W2; the live UAT check of [test-plan.md](test-plan.md) lists the two VictoriaMetrics rows for `readonly@Monitor`.
 
 ## Open items
 

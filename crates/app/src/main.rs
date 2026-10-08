@@ -16,6 +16,7 @@ mod cluster_catalog;
 mod cluster_form;
 mod cluster_health;
 mod cluster_metrics;
+mod cluster_metrics_section;
 mod cluster_registry;
 mod cluster_runtime;
 mod cluster_session;
@@ -93,7 +94,6 @@ mod log_window;
 mod log_workload;
 mod metadata_edits;
 mod metrics_history;
-mod metrics_page;
 mod monitor_data;
 mod monitor_notices;
 mod monitor_source;
@@ -325,9 +325,10 @@ fn run(
             });
             cx.on_action(|_: &ManageClusters, cx| manage_clusters(cx));
             let settings_screen = options.screen.settings_screen();
+            let opens_cluster_metrics = options.screen.opens_cluster_metrics();
             #[cfg(feature = "screenshot")]
-            if options.screen == launch_options::LaunchScreen::SettingsMetricsFixture {
-                cx.set_global(metrics_page::MetricsFixture);
+            if options.screen.opens_cluster_metrics() {
+                cx.set_global(cluster_metrics_section::ClusterMetricsFixture);
             }
 
             let window_width = options.window_width.map_or(WINDOW_WIDTH, f32::from);
@@ -370,6 +371,9 @@ fn run(
                 Some((page, size)) => open_settings_window(page, size, cx).unwrap_or(window),
                 None => window,
             };
+            if opens_cluster_metrics {
+                settings_window::show_cluster_metrics(cx);
+            }
             #[cfg(feature = "screenshot")]
             if let Some(request) = screenshot_request {
                 screenshot::capture(window, shell, request, hook_outcome, cx);

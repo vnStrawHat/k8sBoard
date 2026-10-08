@@ -300,7 +300,7 @@ fn source_note_texts() {
     );
     assert_eq!(
         source_note(&SourceState::Invalid).as_deref(),
-        Some("Metrics source in settings is not valid (Settings › Metrics)")
+        Some("Metrics source in settings is not valid (Settings › Clusters › Metrics)")
     );
     let checking = SourceState::Checking {
         source: source(),
@@ -317,7 +317,7 @@ fn source_note_texts() {
     assert_eq!(
         source_note(&failed).as_deref(),
         Some(
-            "Metrics source unreachable: the metrics backend did not answer within 20 s (Settings › Metrics)"
+            "Metrics source unreachable: the metrics backend did not answer within 20 s (Settings › Clusters › Metrics)"
         )
     );
 }

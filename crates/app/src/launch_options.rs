@@ -32,7 +32,7 @@ Options:
            node-taints-editor|node-taints-editor-invalid|node-labels-editor|node-labels-bulk-editor|drain-dialog|drain-dialog-skip-pdbs|drain-progress|drain-progress-stuck|drain-progress-pending|
            namespaces|events|deployments|statefulsets|daemonsets|replicasets|jobs|cronjobs|
            services|ingresses|configmaps|<kind>-drawer|<kind>-events|<kind>-monitor|<kind>-yaml|releases-values|releases-manifest|
-           customresourcedefinitions|custom:<crd-name>[-drawer|-events|-yaml]|who-can|check-permissions|account-permissions|test-traffic|settings|settings-tall|settings-general|settings-environments|settings-appearance|settings-terminal|settings-logs|settings-metrics|settings-metrics-fixture|settings-shortcuts
+           customresourcedefinitions|custom:<crd-name>[-drawer|-events|-yaml]|who-can|check-permissions|account-permissions|test-traffic|settings|settings-tall|settings-general|settings-environments|settings-appearance|settings-terminal|settings-logs|settings-cluster-metrics-fixture|settings-shortcuts
                          screen to open (default: overview)
   --palette <text>       open the command palette with <text> typed (for example :po or > rest)
   --window-width <px>    window width, 800 to 3840 (default: 1320)
@@ -246,12 +246,10 @@ pub(crate) enum LaunchScreen {
     /// `--screen settings|settings-appearance|settings-shortcuts`: the main window opens as usual,
     /// then the Settings window on that page, which is what the screenshot captures.
     Settings(SettingsPage, SettingsSize),
-    /// `--screen settings-metrics` (spec 0048): the Settings window on the Metrics page of the
-    /// connected cluster, captured once detection settled.
-    SettingsMetrics,
-    /// `--screen settings-metrics-fixture`: the same page drawn from fixed data, for no cluster.
-    /// Screenshot builds only.
-    SettingsMetricsFixture,
+    /// `--screen settings-cluster-metrics-fixture` (spec 0058): Settings › Clusters scrolled to the
+    /// Metrics section of the selected cluster, drawn from fixed data. Screenshot builds only; it
+    /// sends nothing.
+    SettingsClusterMetricsFixture,
     /// `--screen <plural>`, e.g. `deployments`.
     Kind(ResourceKind),
     /// `--screen <plural>-drawer|<plural>-events|<plural>-yaml`: the kind's first row selected, on that tab.
@@ -336,9 +334,7 @@ impl LaunchScreen {
             Self::Custom { .. } => Screen::Kind(ResourceKind::Crds),
             Self::Nodes | Self::NodeDrawer(_) | Self::NodesSelected => Screen::Nodes,
             Self::Issues | Self::IssuesDrawer => Screen::Issues,
-            Self::Settings(..) | Self::SettingsMetrics | Self::SettingsMetricsFixture => {
-                Screen::Overview
-            }
+            Self::Settings(..) | Self::SettingsClusterMetricsFixture => Screen::Overview,
             Self::Topology
             | Self::TopologyProblems
             | Self::TopologyRbac
@@ -361,11 +357,16 @@ impl LaunchScreen {
     pub(crate) fn settings_screen(self) -> Option<(SettingsPage, SettingsSize)> {
         match self {
             Self::Settings(page, size) => Some((page, size)),
-            Self::SettingsMetrics | Self::SettingsMetricsFixture => {
-                Some((SettingsPage::Metrics, SettingsSize::Standard))
+            Self::SettingsClusterMetricsFixture => {
+                Some((SettingsPage::Clusters, SettingsSize::Standard))
             }
             _ => None,
         }
+    }
+
+    /// Whether the Settings window is then scrolled to the Metrics section of its cluster.
+    pub(crate) fn opens_cluster_metrics(self) -> bool {
+        matches!(self, Self::SettingsClusterMetricsFixture)
     }
 
     /// Whether a screenshot opens the ⋯ menu of the drawer before it captures.
@@ -730,8 +731,7 @@ impl LaunchScreen {
                 SettingsPage::Appearance,
                 SettingsSize::Standard,
             )),
-            "settings-metrics" => Some(Self::SettingsMetrics),
-            "settings-metrics-fixture" => Some(Self::SettingsMetricsFixture),
+            "settings-cluster-metrics-fixture" => Some(Self::SettingsClusterMetricsFixture),
             "settings-shortcuts" => Some(Self::Settings(
                 SettingsPage::KeyboardShortcuts,
                 SettingsSize::Tall,

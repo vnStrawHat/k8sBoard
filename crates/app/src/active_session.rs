@@ -34,8 +34,8 @@ impl ActiveSession {
 
 /// The live connection of the open cluster, for the Settings window: it is a window of its own and
 /// cannot reach the shell. Set when the session goes Live (again after a reconnect) and removed on
-/// a switch and when the shell is released; the Metrics page reads it and never opens a connection
-/// of its own.
+/// a switch and when the shell is released; the Metrics section of the Clusters page reads it for
+/// the open cluster.
 pub(crate) struct ActiveConnection {
     pub(crate) cluster: ClusterRef,
     pub(crate) label: String,

@@ -1204,21 +1204,22 @@ fn screen_new_config_map_parses() {
 }
 
 #[test]
-fn screen_settings_metrics_parses() {
-    for (text, screen) in [
-        ("settings-metrics", LaunchScreen::SettingsMetrics),
-        (
-            "settings-metrics-fixture",
-            LaunchScreen::SettingsMetricsFixture,
-        ),
-    ] {
-        let parsed = run_options(&["--screen", text]).screen;
-        assert_eq!(parsed, screen);
-        assert_eq!(
-            parsed.settings_screen(),
-            Some((SettingsPage::Metrics, SettingsSize::Standard))
+fn screen_settings_cluster_metrics_fixture_parses() {
+    let parsed = run_options(&["--screen", "settings-cluster-metrics-fixture"]).screen;
+    assert_eq!(parsed, LaunchScreen::SettingsClusterMetricsFixture);
+    assert_eq!(
+        parsed.settings_screen(),
+        Some((SettingsPage::Clusters, SettingsSize::Standard))
+    );
+    assert!(parsed.opens_cluster_metrics());
+    assert_eq!(parsed.screen(), Screen::Overview);
+    assert!(USAGE.contains("settings-cluster-metrics-fixture"));
+    // The old Metrics page screens are gone.
+    for text in ["settings-metrics", "settings-metrics-fixture"] {
+        assert!(
+            parse(&["--kubeconfig", "k", "--screen", text]).is_err(),
+            "{text}"
         );
-        assert_eq!(parsed.screen(), Screen::Overview);
     }
 }
 
