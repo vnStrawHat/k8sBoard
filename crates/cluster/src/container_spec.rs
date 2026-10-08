@@ -16,6 +16,7 @@ use crate::workload::{int_or_string_text, non_empty};
 
 const DEFAULT_PROBE_PERIOD_SECONDS: i32 = 10;
 const DEFAULT_PROBE_FAILURE_THRESHOLD: i32 = 3;
+const DEFAULT_PROBE_TIMEOUT_SECONDS: i32 = 1;
 const CONTAINER_RESOURCE_ORDER: [&str; 3] = ["cpu", "memory", "ephemeral-storage"];
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -43,6 +44,8 @@ pub struct ProbeSummary {
     pub failure_threshold: u32,
     /// `initialDelaySeconds`; defaults to 0.
     pub initial_delay_seconds: u32,
+    /// `timeoutSeconds`; defaults to 1.
+    pub timeout_seconds: u32,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -225,6 +228,11 @@ fn probe_summary(probe: &Probe) -> ProbeSummary {
                 .unwrap_or(DEFAULT_PROBE_FAILURE_THRESHOLD),
         ),
         initial_delay_seconds: non_negative(probe.initial_delay_seconds.unwrap_or(0)),
+        timeout_seconds: non_negative(
+            probe
+                .timeout_seconds
+                .unwrap_or(DEFAULT_PROBE_TIMEOUT_SECONDS),
+        ),
     }
 }
 

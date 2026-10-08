@@ -23,8 +23,8 @@ use crate::age::{format_age, format_countdown};
 use crate::app_shell::AppShell;
 use crate::clipboard_copy::copyable_mono;
 use crate::drawer::{
-    ContainerTab, absent_text, detail_row, link_text, section_title, truncated_text,
-    value_or_absent,
+    ContainerTab, LABEL_WIDTH, absent_text, chips, detail_row, link_text, section_title,
+    truncated_text, value_or_absent,
 };
 use crate::kubelet_history::KubeletHistory;
 use crate::monitor_tab::{MonitorView, monitor_tab};
@@ -363,22 +363,29 @@ fn probe_row(
     kind: ProbeKind,
     cx: &Context<AppShell>,
 ) -> AnyElement {
-    let probe = probe_of(input.container, kind);
+    let terms = probe_of(input.container, kind)
+        .map(probe_chips)
+        .unwrap_or_default();
     let result = probe_result(input.pod, input.container, kind, input.events);
     let result_label = probe_result_label(result);
     h_flex()
+        .w_full()
         .gap_3()
         .py_1()
         .items_start()
         .text_sm()
         .child(
-            truncated_text(
-                SharedString::from(format!("probe-{}", kind.name())),
-                probe_text(kind, probe),
-            )
-            .flex_1()
-            .min_w_0(),
+            div()
+                .w(LABEL_WIDTH)
+                .flex_shrink_0()
+                .text_color(cx.theme().muted_foreground)
+                .child(kind.name()),
         )
+        .child(div().flex_1().min_w_0().overflow_hidden().child(chips(
+            SharedString::from(format!("probe-{}", kind.name())),
+            &terms,
+            cx,
+        )))
         .child(
             toned_text(result_label, cx)
                 .flex_shrink_0()
@@ -616,20 +623,43 @@ fn exec_text(command: &[String]) -> String {
     if command.is_empty() {
         return "exec command".to_owned();
     }
+    format!("exec `{}`", exec_command(command))
+}
+
+/// The argv joined by spaces and cut at `EXEC_TEXT_CHARS`; `command` for none.
+fn exec_command(command: &[String]) -> String {
+    if command.is_empty() {
+        return "command".to_owned();
+    }
     let joined = command.join(" ");
     let mut cut: String = joined.chars().take(EXEC_TEXT_CHARS).collect();
     if cut.len() < joined.len() {
         cut.push('…');
     }
-    format!("exec `{cut}`")
+    cut
 }
 
-/// `Readiness · HTTP GET :8080/ready · every 5s`, or just the kind when the probe is not set.
-fn probe_text(kind: ProbeKind, probe: Option<&ProbeSummary>) -> String {
-    match probe {
-        Some(probe) => format!("{} · {}", kind.name(), probe_summary_text(probe)),
-        None => kind.name().to_owned(),
-    }
+/// The probe's facts, one chip each: protocol, method, port, path or command, then the timings.
+pub(crate) fn probe_chips(probe: &ProbeSummary) -> Vec<SharedString> {
+    let mut terms: Vec<String> = match &probe.action {
+        ProbeAction::HttpGet { scheme, port, path } => vec![
+            scheme.clone(),
+            "GET".to_owned(),
+            format!("port {port}"),
+            format!("path {path}"),
+        ],
+        ProbeAction::TcpSocket { port } => vec!["TCP".to_owned(), format!("port {port}")],
+        ProbeAction::Grpc { port } => vec!["gRPC".to_owned(), format!("port {port}")],
+        ProbeAction::Exec { command } => vec!["exec".to_owned(), exec_command(command)],
+        ProbeAction::Unknown => vec!["unknown action".to_owned()],
+    };
+    terms.extend([
+        format!("delay {}s", probe.initial_delay_seconds),
+        format!("timeout {}s", probe.timeout_seconds),
+        format!("period {}s", probe.period_seconds),
+        format!("failures {}", probe.failure_threshold),
+    ]);
+    terms.into_iter().map(SharedString::from).collect()
 }
 
 /// The right-hand text of a probe row; muted results use the `Done` tone, which is the muted

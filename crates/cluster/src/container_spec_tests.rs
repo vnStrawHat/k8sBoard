@@ -179,6 +179,18 @@ fn probe_defaults_period_and_threshold() {
 }
 
 #[test]
+fn probe_defaults_timeout_to_one_second() {
+    let bare = readiness(&container_with_probe(Probe::default()));
+    assert_eq!(bare.timeout_seconds, 1);
+
+    let tuned = readiness(&container_with_probe(Probe {
+        timeout_seconds: Some(4),
+        ..Default::default()
+    }));
+    assert_eq!(tuned.timeout_seconds, 4);
+}
+
+#[test]
 fn probes_are_read_per_kind() {
     let container = Container {
         liveness_probe: Some(Probe::default()),

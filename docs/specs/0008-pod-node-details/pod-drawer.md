@@ -42,7 +42,7 @@ impl AppShell { pub(crate) fn set_container_tab(&mut self, tab: ContainerTab, cx
 | Image | Image; Digest (mono, truncated with tooltip; "—"); Pull policy ("—") |
 | Ports | one `port_row` per port, text `{port}/{protocol}` + ` · {name}`; "—" when none |
 | Resources | one row per `ContainerResource`: label `resource_label` (CPU, Memory, Ephemeral storage, else the raw name), value `resource_text`; muted "No requests or limits" when empty |
-| Probes | three rows, Liveness, Readiness, Startup: left `probe_text`, right `probe_result(pod, container, kind, events)` text in its tone |
+| Probes | three rows, Liveness, Readiness, Startup, in three columns: the kind name (muted, `LABEL_WIDTH`), the `probe_chips` (mono chips via `drawer::chips`: click copies, wrap, truncate; muted "—" when the probe is not set), and the right-aligned `probe_result(pod, container, kind, events)` text in its tone |
 | Env & mounts | `env_summary` with an `Env →` link and `mount_summary` with a `Mounts →` link (each calls `set_container_tab`); a row is left out when its summary is None |
 
 Text builders (pure, `container_detail.rs`):
@@ -50,7 +50,7 @@ Text builders (pure, `container_detail.rs`):
 | Fn | Example |
 |---|---|
 | `resource_text(&ContainerResource)` | `request 250m · limit 1`, `request 250m · no limit`, `no request · limit 512Mi` |
-| `probe_text(ProbeKind, Option<&ProbeSummary>)` | `Readiness · HTTP GET :8080/ready · every 5s`, `Liveness · TCP :5432 · every 10s`, `Startup · gRPC :9090 · every 10s`, `Liveness · exec `test -f /tmp/ready` · every 10s` (`exec command` when the argv is empty), `Startup` (not set). HTTPS → `HTTPS GET` |
+| `probe_chips(&ProbeSummary)` | one chip per fact, in order: protocol (`HTTP`/`HTTPS` scheme, `TCP`, `gRPC`, `exec`), `GET` (HTTP only), `port 8080` or `port http`, `path /ready` (HTTP) or the exec argv without backticks (cut at 100 chars with `…`; `command` when empty); `unknown action` alone for an unknown action; then always `delay 5s` (also `delay 0s`), `timeout 1s`, `period 10s`, `failures 3` |
 | `env_summary(&ContainerSummary)` | `14 env vars · 6 from configmap/api-config · 3 from secret/api-db · all of secret/extra`; sources in first-seen order, at most 3, then ` · +{n} more`; `1 env var`; None when both lists are empty |
 | `mount_summary(&ContainerSummary)` | `/etc/api ← configmap/api-config (read-only) · +3 more`; first mount in spec order; None when empty |
 | `last_run_text(&Termination, now)` | `ran 4m, ended 2m ago` |

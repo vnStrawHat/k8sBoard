@@ -52,7 +52,9 @@ pub struct ContainerProbes { pub liveness: Option<ProbeSummary>, pub readiness: 
     pub startup: Option<ProbeSummary> }
 pub struct ProbeSummary { pub action: ProbeAction,
     pub period_seconds: u32,     // default 10
-    pub failure_threshold: u32 } // default 3
+    pub failure_threshold: u32,  // default 3
+    pub initial_delay_seconds: u32, // default 0
+    pub timeout_seconds: u32 }   // default 1
 pub enum ProbeAction {
     HttpGet { scheme: String /* default "HTTP" */, port: String, path: String /* default "/" */ },
     TcpSocket { port: String },
@@ -89,7 +91,7 @@ All derive `Clone, Debug, PartialEq, Eq` like the other summaries.
 | `port` texts | `IntOrString` → `int_or_string_text` (`8080` or `http`) |
 | HTTP `path` | text before the first `?`; the query string is dropped (decision 9). `httpHeaders` are never read |
 | Grpc port | `u16::try_from(port).ok()`; out of range → `Unknown` action |
-| `period_seconds`, `failure_threshold` | `optional_count` with the API defaults 10 and 3 when absent |
+| `period_seconds`, `failure_threshold`, `timeout_seconds` | `optional_count` with the API defaults 10, 3, and 1 when absent |
 | resources | union of `requests` and `limits` keys; `Quantity.0` as written; order cpu, memory, ephemeral-storage, then by name |
 | `env` | `value` → `Literal` (also when `value` is absent and `valueFrom` is `None`) |
 | mounts | `volumeMounts`; the source is looked up by `volume` name in `spec.volumes`; `readOnly` absent → false; empty `subPath` → None |

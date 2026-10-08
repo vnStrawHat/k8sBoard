@@ -79,7 +79,7 @@ pub(crate) fn drawer_width(size: DrawerSize, workspace: Pixels) -> Pixels {
     };
     px((workspace * share).max(DRAWER_MIN_WIDTH).min(workspace))
 }
-const LABEL_WIDTH: Pixels = px(104.);
+pub(crate) const LABEL_WIDTH: Pixels = px(104.);
 /// The longest label column `fitted_label_width` gives.
 const FITTED_LABEL_MAX: Pixels = px(260.);
 /// Average glyph width of a `text_sm` label (14 px proportional UI font, about 0.55 em).

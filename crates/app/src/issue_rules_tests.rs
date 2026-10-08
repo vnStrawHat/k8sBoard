@@ -439,6 +439,7 @@ fn startup_pod(
         period_seconds,
         failure_threshold,
         initial_delay_seconds,
+        timeout_seconds: 1,
     });
     running_pod(vec![starting])
 }

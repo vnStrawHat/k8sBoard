@@ -16,7 +16,7 @@
 | `pod_tests.rs` | `terminated_message_is_not_kept` | a distinctive termination message is absent from `format!("{summary:?}")` |
 | `container_spec_tests.rs` | `resources_union_requests_and_limits_in_order` | cpu, memory, ephemeral-storage, then by name; one-sided entries |
 | `container_spec_tests.rs` | `probe_actions_map_each_handler` | HTTP (scheme, port name or number, path default `/`), TCP, gRPC, exec, none → Unknown |
-| `container_spec_tests.rs` | `probe_defaults_period_and_threshold` | absent → 10 and 3 |
+| `container_spec_tests.rs` | `probe_defaults_period_and_threshold`, `probe_defaults_timeout_to_one_second` | absent → 10 and 3; timeout 1 |
 | `container_spec_tests.rs` | `http_probe_path_drops_query_and_headers` | `/ready?token=SECRETQ` → `/ready`; header value absent from `Debug` |
 | `container_spec_tests.rs` | `exec_probe_command_is_not_kept` | distinctive command text absent from `Debug` |
 | `container_spec_tests.rs` | `env_keeps_names_and_sources_never_values` | every `EnvSource` variant; a distinctive literal value absent from `Debug` of the whole `PodSummary` |
@@ -44,7 +44,7 @@
 | 2 | `pod_diagnosis_tests.rs` | `probe_failures_use_newest_event_count` (two matches with counts 7 and 3, newest 3 → `Failing { failures: 3 }`) |
 | 2 | `status_tone_tests.rs` | `new_reasons_are_bad` (the three variants toned Bad) |
 | 2 | `pod_diagnosis_tests.rs` | `next_retry_from_back_off_message` (`5m0s`, `40s`, `1h0m0s`, past → None, bad text → None, not CrashLoopBackOff → None) |
-| 2 | `container_detail_tests.rs` | `resource_text_forms`, `resource_label_names`, `probe_text_forms` |
+| 2 | `container_detail_tests.rs` | `resource_text_forms`, `resource_label_names`, `probe_summary_text_forms`, the `*_probe_chips_*` tests |
 | 2 | `container_detail_tests.rs` | `env_summary_groups_sources_and_caps_at_three`, `mount_summary_first_and_more` |
 | 2 | `container_detail_tests.rs` | `env_rows_list_env_from_first_with_targets` (ConfigMap target in the pod namespace; Secret target None; literal text) |
 | 2 | `container_detail_tests.rs` | `mount_rows_text_and_targets`, `last_run_text_needs_both_times` |

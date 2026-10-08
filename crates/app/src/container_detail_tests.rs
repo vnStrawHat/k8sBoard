@@ -52,6 +52,7 @@ fn probe(action: ProbeAction, period_seconds: u32) -> ProbeSummary {
         period_seconds,
         failure_threshold: 3,
         initial_delay_seconds: 0,
+        timeout_seconds: 1,
     }
 }
 
@@ -113,69 +114,16 @@ fn resource_label_names() {
 }
 
 #[test]
-fn probe_text_forms() {
-    let http = probe(
-        ProbeAction::HttpGet {
-            scheme: "HTTP".to_owned(),
-            port: "8080".to_owned(),
-            path: "/ready".to_owned(),
-        },
-        5,
-    );
-    assert_eq!(
-        probe_text(ProbeKind::Readiness, Some(&http)),
-        "Readiness · HTTP GET :8080/ready · every 5s"
-    );
-    let https = probe(
-        ProbeAction::HttpGet {
-            scheme: "HTTPS".to_owned(),
-            port: "web".to_owned(),
-            path: "/".to_owned(),
-        },
-        10,
-    );
-    assert_eq!(
-        probe_text(ProbeKind::Liveness, Some(&https)),
-        "Liveness · HTTPS GET :web/ · every 10s"
-    );
-    let tcp = probe(
-        ProbeAction::TcpSocket {
-            port: "5432".to_owned(),
-        },
-        10,
-    );
-    assert_eq!(
-        probe_text(ProbeKind::Liveness, Some(&tcp)),
-        "Liveness · TCP :5432 · every 10s"
-    );
-    let grpc = probe(ProbeAction::Grpc { port: 9090 }, 10);
-    assert_eq!(
-        probe_text(ProbeKind::Startup, Some(&grpc)),
-        "Startup · gRPC :9090 · every 10s"
-    );
+fn probe_summary_text_forms() {
     let exec = probe(
         ProbeAction::Exec {
-            command: vec![
-                "test".to_owned(),
-                "-f".to_owned(),
-                "/tmp/never-ready".to_owned(),
-            ],
+            command: vec!["test".to_owned(), "-f".to_owned(), "/tmp/ready".to_owned()],
         },
         5,
     );
     assert_eq!(
-        probe_text(ProbeKind::Readiness, Some(&exec)),
-        "Readiness · exec `test -f /tmp/never-ready` · every 5s"
-    );
-    let bare = probe(
-        ProbeAction::Exec {
-            command: Vec::new(),
-        },
-        10,
-    );
-    assert_eq!(
-        probe_text(ProbeKind::Liveness, Some(&bare)),
-        "Liveness · exec command · every 10s"
+        probe_summary_text(&exec),
+        "exec `test -f /tmp/ready` · every 5s"
     );
     let long = probe(
         ProbeAction::Exec {
@@ -187,7 +135,98 @@ fn probe_text_forms() {
         probe_summary_text(&long),
         format!("exec `{}…` · every 10s", "x".repeat(100))
     );
-    assert_eq!(probe_text(ProbeKind::Startup, None), "Startup");
+}
+
+fn chip_texts(probe: &ProbeSummary) -> Vec<String> {
+    probe_chips(probe).iter().map(ToString::to_string).collect()
+}
+
+#[test]
+fn http_probe_chips_name_scheme_method_port_path_and_timings() {
+    let mut http = probe(
+        ProbeAction::HttpGet {
+            scheme: "HTTP".to_owned(),
+            port: "8080".to_owned(),
+            path: "/ready".to_owned(),
+        },
+        10,
+    );
+    http.initial_delay_seconds = 5;
+    assert_eq!(
+        chip_texts(&http),
+        [
+            "HTTP",
+            "GET",
+            "port 8080",
+            "path /ready",
+            "delay 5s",
+            "timeout 1s",
+            "period 10s",
+            "failures 3"
+        ]
+    );
+}
+
+#[test]
+fn https_probe_chips_keep_the_scheme_and_a_named_port() {
+    let https = probe(
+        ProbeAction::HttpGet {
+            scheme: "HTTPS".to_owned(),
+            port: "web".to_owned(),
+            path: "/".to_owned(),
+        },
+        10,
+    );
+    assert_eq!(
+        chip_texts(&https)[..4],
+        ["HTTPS", "GET", "port web", "path /"]
+    );
+}
+
+#[test]
+fn tcp_and_grpc_probe_chips_have_protocol_and_port_only() {
+    let tcp = probe(
+        ProbeAction::TcpSocket {
+            port: "5432".to_owned(),
+        },
+        10,
+    );
+    assert_eq!(chip_texts(&tcp)[..3], ["TCP", "port 5432", "delay 0s"]);
+    let grpc = probe(ProbeAction::Grpc { port: 9090 }, 10);
+    assert_eq!(chip_texts(&grpc)[..3], ["gRPC", "port 9090", "delay 0s"]);
+}
+
+#[test]
+fn exec_probe_chips_carry_the_command_cut_at_the_limit() {
+    let exec = probe(
+        ProbeAction::Exec {
+            command: vec!["test".to_owned(), "-f".to_owned(), "/tmp/ready".to_owned()],
+        },
+        5,
+    );
+    assert_eq!(chip_texts(&exec)[..2], ["exec", "test -f /tmp/ready"]);
+    let long = probe(
+        ProbeAction::Exec {
+            command: vec!["x".repeat(150)],
+        },
+        10,
+    );
+    assert_eq!(chip_texts(&long)[1], format!("{}…", "x".repeat(100)));
+}
+
+#[test]
+fn unknown_probe_action_is_one_chip_before_the_timings() {
+    let unknown = probe(ProbeAction::Unknown, 7);
+    assert_eq!(
+        chip_texts(&unknown),
+        [
+            "unknown action",
+            "delay 0s",
+            "timeout 1s",
+            "period 7s",
+            "failures 3"
+        ]
+    );
 }
 
 #[test]

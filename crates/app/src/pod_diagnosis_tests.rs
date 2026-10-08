@@ -115,6 +115,7 @@ fn http_probe() -> ProbeSummary {
         period_seconds: 5,
         failure_threshold: 3,
         initial_delay_seconds: 0,
+        timeout_seconds: 1,
     }
 }
 
@@ -1010,6 +1011,7 @@ fn an_exec_probe_failure_names_the_command() {
         period_seconds: 5,
         failure_threshold: 3,
         initial_delay_seconds: 0,
+        timeout_seconds: 1,
     });
     let pod = running_pod(vec![idle]);
     let events = [unhealthy("api", "Readiness probe failed:", 12, 9_700)];
