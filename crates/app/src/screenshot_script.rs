@@ -6,7 +6,7 @@ use std::time::Duration;
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{
     App, InputEvent as _, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point,
-    Window, point, px,
+    ScrollDelta, ScrollWheelEvent, TouchPhase, Window, point, px,
 };
 #[cfg(feature = "screenshot")]
 use {
@@ -55,6 +55,11 @@ pub(crate) enum Input {
         position: Point<Pixels>,
     },
     Hover(Point<Pixels>),
+    /// A wheel turn at `position`; a positive `delta_y` scrolls the content down.
+    Scroll {
+        position: Point<Pixels>,
+        delta_y: Pixels,
+    },
 }
 
 #[cfg(feature = "screenshot")]
@@ -112,6 +117,18 @@ fn parse_step(line: &str) -> Result<Step, String> {
             Ok(Step::Input(Input::Click { button, position }))
         }
         "hover" => Ok(Step::Input(Input::Hover(parse_position(argument)?))),
+        "scroll" => {
+            let invalid = || format!("`scroll {argument}` is not `scroll <x>,<y> <dy>`");
+            let (position, delta) = argument
+                .split_once(char::is_whitespace)
+                .ok_or_else(invalid)?;
+            let position = parse_position(position)?;
+            let delta_y = delta.trim().parse::<f32>().map_err(|_| invalid())?;
+            Ok(Step::Input(Input::Scroll {
+                position,
+                delta_y: px(delta_y),
+            }))
+        }
         "shot" => {
             let is_plain = argument
                 .chars()
@@ -217,6 +234,22 @@ pub(crate) fn dispatch_input(input: &Input, window: &mut Window, cx: &mut App) {
             window.render_frame(cx);
             move_pointer(window, *position, cx);
         }
+        Input::Scroll { position, delta_y } => {
+            window.render_frame(cx);
+            move_pointer(window, *position, cx);
+            // gpui wheel deltas follow the content: a negative y moves it up, i.e. scrolls down.
+            window.dispatch_event(
+                ScrollWheelEvent {
+                    position: *position,
+                    delta: ScrollDelta::Pixels(point(px(0.), -*delta_y)),
+                    modifiers: Default::default(),
+                    touch_phase: TouchPhase::Moved,
+                }
+                .to_platform_input(),
+                cx,
+            );
+            window.render_frame(cx);
+        }
         Input::Click { button, position } => {
             window.render_frame(cx);
             move_pointer(window, *position, cx);
@@ -288,6 +321,7 @@ type hello world
 click 10, 20.5
 rclick 3,4
 hover 5,6
+scroll 100,200 -300
 shot menu-1
 expect Pods
 ";
@@ -307,6 +341,10 @@ expect Pods
                     position: point(px(3.), px(4.)),
                 }),
                 Step::Input(Input::Hover(point(px(5.), px(6.)))),
+                Step::Input(Input::Scroll {
+                    position: point(px(100.), px(200.)),
+                    delta_y: px(-300.),
+                }),
                 Step::Shot("menu-1".to_owned()),
                 Step::Expect("Pods".to_owned()),
             ]
@@ -338,6 +376,8 @@ expect Pods
         assert!(error("wait soon").contains("`wait` takes"));
         assert!(error("click 10").contains("x,y"));
         assert!(error("hover a,b").contains("x,y"));
+        assert!(error("scroll 100,200").contains("scroll"));
+        assert!(error("scroll 100,200 abc").contains("scroll"));
         assert!(error("shot ../x").contains("letters"));
         assert!(error("expect").contains("needs an argument"));
     }

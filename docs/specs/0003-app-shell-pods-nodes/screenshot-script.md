@@ -20,6 +20,7 @@ Plain text, one step per line. Blank lines and lines starting with `#` are ignor
 | `type <text>` | Types the characters into the focused text input (the rest of the line, spaces kept) |
 | `click <x>,<y>` / `rclick <x>,<y>` | Left / right button down and up at window pixels |
 | `hover <x>,<y>` | Moves the pointer there and waits for a tooltip |
+| `scroll <x>,<y> <dy>` | Turns the mouse wheel at that point; positive `dy` scrolls the content down, in window pixels |
 | `shot <name>` | Saves the window to `<dir>/<name>.png` (`name`: letters, digits, `-`, `_`) |
 | `expect <text>` | Fails unless one of the shell's reported texts contains `<text>` |
 

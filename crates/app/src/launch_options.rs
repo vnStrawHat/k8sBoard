@@ -38,7 +38,7 @@ Options:
   --window-width <px>    window width, 800 to 3840 (default: 1320)
   --zoom <factor>        Topology zoom of the first view, 0.2 to 1.95 (default: the first view's own)
   --screenshot <path>    write a PNG and exit (needs a build with --features screenshot)
-  --script <path>        with --screenshot, play a step file first (keys, clicks, shot <name>)
+  --script <path>        with --screenshot, play a step file first (keys, clicks, scroll, shot <name>)
   --help                 print this help
 ";
 
