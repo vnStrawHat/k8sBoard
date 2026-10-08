@@ -56,7 +56,7 @@ const ISSUE_COLUMNS: [KindColumn; 8] = [
     column("Kind", 88., Align::Left).grows(1).up_to(130.),
     column("Object", 170., Align::Left).grows(3).up_to(320.),
     column("Namespace", 88., Align::Left).grows(1).up_to(150.),
-    column("Cause", 106., Align::Left).grows(6),
+    column("Cause", 76., Align::Left).grows(6),
     column("Count", 62., Align::Right),
     column("Age", 50., Align::Right),
 ];

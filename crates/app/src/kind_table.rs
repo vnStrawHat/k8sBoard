@@ -1048,7 +1048,7 @@ mod tests {
     #[test]
     fn secrets_name_holds_the_victoria_names_at_1320_px() {
         let mut secrets = delegate(Some(ResourceKind::Secrets));
-        // A 1320 px window less the 220 px sidebar, drawer closed.
+        // A 1320 px window less the 250 px sidebar, drawer closed.
         secrets.fit_width(px(1100.));
         let name = secrets.layout.columns.columns.get(1).map(|c| c.width);
         // 37 mono characters of about 9.6 px each, plus the cell padding: the least at which
@@ -1080,7 +1080,7 @@ mod tests {
                 .map(|column| column.width)
                 .expect("a column of that name")
         };
-        // A 1320 px window less the 220 px sidebar, drawer closed: Status shows `Scaling inactive`
+        // A 1320 px window less the 250 px sidebar, drawer closed: Status shows `Scaling inactive`
         // whole, and Name (the longest text of the row on UAT) is wider than Target.
         assert!(width_at(1100., "Status") >= px(130.));
         assert!(width_at(1100., "Name") > width_at(1100., "Target"));
@@ -1092,7 +1092,7 @@ mod tests {
     #[test]
     fn pv_claim_is_whole_left_of_a_half_width_drawer_at_1320_px() {
         let mut volumes = delegate(Some(ResourceKind::PersistentVolumes));
-        // A 1320 px window less the 220 px sidebar; the standard drawer covers its right half.
+        // A 1320 px window less the 250 px sidebar; the standard drawer covers its right half.
         volumes.fit_width(px(1100.));
         let mut right_edge = px(0.);
         for column in &volumes.layout.columns.columns {

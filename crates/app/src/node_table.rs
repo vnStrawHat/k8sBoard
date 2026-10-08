@@ -66,12 +66,12 @@ const HIDDEN_BY_DEFAULT: [usize; 3] = [CPU_REQUESTED, MEMORY_REQUESTED, LABELS];
 const NODE_COLUMNS: [KindColumn; 12] = [
     column("Name", 190., Align::Left).grows(2).up_to(300.),
     column("Status", 84., Align::Left),
-    column("Roles", 84., Align::Left).sheds(3),
+    column("Roles", 74., Align::Left).sheds(3),
     column("Taints", 100., Align::Left).grows(6).up_to(150.),
     column("Version", 90., Align::Left).sheds(2),
     column("Internal IP", 140., Align::Left),
-    column("CPU", 80., Align::Left),
-    column("Memory", 80., Align::Left),
+    column("CPU", 70., Align::Left),
+    column("Memory", 70., Align::Left),
     column("CPU req", 92., Align::Left),
     column("Mem req", 92., Align::Left),
     column("Age", 56., Align::Right).sheds(1),
@@ -910,8 +910,8 @@ mod tests {
 
     #[test]
     fn the_columns_that_stay_fit_a_1024_px_window_and_taints_grow_before_name() {
-        // The window less the 220 px sidebar, the table gutter, and the checkbox column.
-        let room = 1024. - 220. - 28. - 32.;
+        // The window less the 250 px sidebar, the table gutter, and the checkbox column.
+        let room = 1024. - 250. - 28. - 32.;
         // The request columns are hidden by default, so they take no room until asked for; the columns
         // that shed (Age, Version, Roles) are not counted, they leave when the table is too narrow.
         let base: f32 = NODE_COLUMNS
@@ -935,11 +935,11 @@ mod tests {
     }
 
     /// The mono characters that fit in column `column` (a logical index) of a window `window` px
-    /// wide: the table is the window less the 220 px sidebar, and a mono glyph is about 9.6 px.
+    /// wide: the table is the window less the 250 px sidebar, and a mono glyph is about 9.6 px.
     fn capacity_of(column: usize, window: f32) -> usize {
         let plan = node_plan();
         let hidden = BTreeSet::from(HIDDEN_BY_DEFAULT);
-        let layout = layout_columns(&plan.specs, plan.flexible, px(window - 220.), &hidden);
+        let layout = layout_columns(&plan.specs, plan.flexible, px(window - 250.), &hidden);
         // The checkbox column comes first; the columns shown by default are in logical order.
         let width = layout.columns.get(column + 1).expect("a column").width;
         (f32::from(width - px(24.)) / 9.6) as usize
@@ -953,7 +953,7 @@ mod tests {
     fn at_1320_px_the_node_table_keeps_every_default_column() {
         let plan = node_plan();
         let hidden = BTreeSet::from(HIDDEN_BY_DEFAULT);
-        let layout = layout_columns(&plan.specs, plan.flexible, px(1320. - 220.), &hidden);
+        let layout = layout_columns(&plan.specs, plan.flexible, px(1320. - 250.), &hidden);
         assert_eq!(layout.columns.len(), 1 + 9);
     }
 
@@ -961,7 +961,7 @@ mod tests {
     fn at_1024_px_the_node_table_sheds_age_version_and_roles_and_keeps_taints_readable() {
         let plan = node_plan();
         let hidden = BTreeSet::from(HIDDEN_BY_DEFAULT);
-        let layout = layout_columns(&plan.specs, plan.flexible, px(1024. - 220.), &hidden);
+        let layout = layout_columns(&plan.specs, plan.flexible, px(1024. - 250.), &hidden);
         let names: Vec<_> = layout.columns.iter().map(|c| c.name.to_string()).collect();
         assert!(!names.contains(&"Age".to_owned()), "{names:?}");
         assert!(!names.contains(&"Roles".to_owned()), "{names:?}");

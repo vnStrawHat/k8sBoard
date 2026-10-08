@@ -18,7 +18,7 @@ use crate::issue_board::IssueBoard;
 use crate::resource_kind::{NODE_ICON, POD_ICON, ResourceKind};
 use crate::status_tone::tone_color;
 
-pub(crate) const SIDEBAR_WIDTH: Pixels = px(220.);
+pub(crate) const SIDEBAR_WIDTH: Pixels = px(250.);
 
 /// The items above the groups.
 const TOP_ITEMS: [&str; 3] = ["Overview", ISSUES_ITEM, TOPOLOGY_ITEM];

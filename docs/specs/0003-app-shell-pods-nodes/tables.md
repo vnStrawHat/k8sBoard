@@ -100,7 +100,7 @@ pub(crate) fn format_age(created_at: Option<jiff::Timestamp>, now: jiff::Timesta
 
 ## As built (2026-10-07): narrow windows shed columns
 
-A column with a `shed_order` (`KindColumn::sheds(n)`) is dropped when the table is too narrow for the base widths of the columns shown, the lowest number first, so a 1024 px window needs no horizontal scroll. The Name column and columns without an order always stay. Pods: Age, then Memory, then CPU (Name base 280 px). Nodes: Age, then Version, then Roles (Name base 190 px). Every kind table sheds Age. A shed column still shows as ticked in the Columns menu; it returns when the window is wider. The sidebar stays 220 px: the kit's icon mode hides the group items and the count badges, so a rail would cut navigation.
+A column with a `shed_order` (`KindColumn::sheds(n)`) is dropped when the table is too narrow for the base widths of the columns shown, the lowest number first, so a 1024 px window needs no horizontal scroll. The Name column and columns without an order always stay. Pods: Age, then Memory, then CPU (Name base 280 px). Nodes: Age, then Version, then Roles (Name base 190 px). Every kind table sheds Age. A shed column still shows as ticked in the Columns menu; it returns when the window is wider. The sidebar stays 250 px: the kit's icon mode hides the group items and the count badges, so a rail would cut navigation.
 
 ## As built (2026-10-07): the last column ends at the right edge
 

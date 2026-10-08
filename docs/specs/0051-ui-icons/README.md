@@ -12,7 +12,7 @@ One kind → icon mapping and one row action → icon mapping, used in the scree
 - **No official Kubernetes icons** (kubernetes/community, CC-BY-4.0): they are filled blue hexagons with hard-coded colors (breaks the theme-token rule), unreadable at 12–16 px, and would need an extra asset source plus attribution.
 - **Wireframes are text-only** (`ic:"Po"` badges, plain `menuHTML` rows, text sidebar). This spec departs on purpose, by user request; layout and labels stay as drawn.
 - **Mapping lives with the domain data:** `KindSpec.icon` (per-kind data, like `badge`), `TopologyKind::icon`, `RowAction::icon` (moved from `command_palette.rs`), `SettingsPage::icon`, `screen_icon(Screen)` in `navigation.rs`. Matches are exhaustive, no `_` arm.
-- **Sidebar: icons on top items and group headers only**; kind children stay text (30 icons in a 220 px column is noise; the chevron + indent already shows hierarchy).
+- **Sidebar: icons on top items and group headers only**; kind children stay text (30 icons in a 250 px column is noise; the chevron + indent already shows hierarchy).
 - **Screen header:** `screen_icon` before every screen title (always visible; the biggest win).
 - **Colors: inherited.** Icons take the text color of their row (kit sets foreground / muted when disabled / active tone). Only the Topology chip sets a color (`colors.kind_text(hue)`, as the badge text did). No new theme tokens. Delete keeps a neutral `Trash` (confirmed).
 

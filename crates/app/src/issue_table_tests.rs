@@ -128,7 +128,7 @@ fn the_cause_tooltip_names_the_container() {
     );
 }
 
-/// The widths of the columns of a window `window` px wide: the table is the window less the 220 px
+/// The widths of the columns of a window `window` px wide: the table is the window less the 250 px
 /// sidebar.
 fn widths_at(window: f32) -> Vec<f32> {
     let plan = ColumnPlan {
@@ -138,7 +138,7 @@ fn widths_at(window: f32) -> Vec<f32> {
     let layout = crate::table_layout::layout_columns(
         &plan.specs,
         plan.flexible,
-        gpui_kit::px(window - 220.),
+        gpui_kit::px(window - 250.),
         &std::collections::BTreeSet::new(),
     );
     layout
@@ -154,7 +154,7 @@ fn count_and_age_stay_inside_the_window_at_1100_and_1320_px() {
     for window in [1100., 1320.] {
         let widths = widths_at(window);
         // The window less the sidebar, the table gutter, and the checkbox column.
-        let room = window - 220. - 28. - 32.;
+        let room = window - 250. - 28. - 32.;
         let total: f32 = widths.iter().sum();
         assert!(
             total <= room + 0.5,

@@ -654,7 +654,7 @@ mod tests {
     }
     #[test]
     fn target_takes_what_the_fixed_columns_leave() {
-        // 1100 and 1320 px windows, less the 220 px sidebar, drawer closed.
+        // 1100 and 1320 px windows, less the 250 px sidebar, drawer closed.
         assert_eq!(target_width(880., None), 880. - 32. - 584. - 48.);
         assert_eq!(target_width(1100., None), 1100. - 32. - 584. - 48.);
     }
