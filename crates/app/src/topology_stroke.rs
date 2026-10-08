@@ -27,7 +27,7 @@ pub(crate) struct Dash {
 /// How the path shader of the renderer turns a triangle into coverage.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum PathCoverage {
-    /// Windows (gpui-pre-windows 0.3.7): `t` is read as the signed distance to the edge, so a
+    /// Windows (gpui-pre-windows 0.3.8): `t` is read as the signed distance to the edge, so a
     /// feathered ribbon gets one device pixel of analytic coverage.
     SignedDistance,
     /// Metal and WGSL read `s == 0` as solid, so a feather band would draw opaque: the ribbon is a

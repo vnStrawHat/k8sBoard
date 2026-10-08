@@ -289,7 +289,7 @@ fn feather_is_half_a_device_pixel_on_windows_only() {
 #[test]
 fn the_renderer_version_the_coverage_relies_on_is_pinned() {
     // `PathCoverage::SignedDistance` reads `t` as a distance because of how gpui-pre-windows
-    // 0.3.7 evaluates `path_rasterization_fragment`. A newer version may fix its inverted curve
+    // 0.3.8 evaluates `path_rasterization_fragment`. A newer version may fix its inverted curve
     // branch, which would change what a feathered ribbon draws.
     let lock = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../Cargo.lock")).replace(
         "
@@ -299,7 +299,7 @@ fn the_renderer_version_the_coverage_relies_on_is_pinned() {
     assert!(
         lock.contains(
             "name = \"gpui-pre-windows\"
-version = \"0.3.7\"
+version = \"0.3.8\"
 "
         ),
         "re-check shaders.hlsl path_rasterization_fragment; if the branch is fixed set PathCoverage to MsaaOnly (root-cause.md)"
@@ -336,7 +336,7 @@ fn a_dashed_stroke_equals_the_ribbons_of_its_runs() {
     }
 }
 
-/// `path_rasterization_fragment` of `shaders.hlsl` (gpui-pre-windows 0.3.7, l. 1004-1012), line for
+/// `path_rasterization_fragment` of `shaders.hlsl` (gpui-pre-windows 0.3.8, l. 1004-1012), line for
 /// line. `ds` and `dt` are the screen derivatives of `s` and `t`, per device pixel.
 fn hlsl_path_alpha(s: f32, t: f32, ds: (f32, f32), dt: (f32, f32)) -> f32 {
     let (dx, dy) = ((ds.0, dt.0), (ds.1, dt.1));
