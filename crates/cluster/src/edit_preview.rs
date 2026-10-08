@@ -13,7 +13,7 @@ use crate::edit_placeholders::{
     name_of,
 };
 use crate::object_edit::{ObjectEdit, set_target_kind, strip_server_fields};
-use crate::object_yaml::{ObjectKind, mask_object, to_yaml_text};
+use crate::object_yaml::{ObjectKind, mask_object};
 use crate::quota_demand::{DemandChange, workload_demand};
 
 const LAST_APPLIED: &str = "kubectl.kubernetes.io/last-applied-configuration";
@@ -84,10 +84,6 @@ fn is_plain_key(key: &str) -> bool {
 /// audited and never in a notification.
 #[derive(Clone, PartialEq, Eq)]
 pub struct EditPreview {
-    /// The object as it is now, masked, without the edit header.
-    pub before: String,
-    /// The object the dry-run answered, masked, without the edit header.
-    pub after: String,
     pub changes: Vec<FieldChange>,
     /// Changes beyond the cap of `changes`.
     pub more_changes: usize,
@@ -357,14 +353,14 @@ fn mark_changed(after: &mut Value, raw_after: &Value, raw_before: Option<&Value>
     }
 }
 
-/// The preview of `edit`: the object before (`fresh`) and after (`response`), masked, with the
-/// changes and checks. The raw objects are dropped here. The error is a fixed message.
+/// The preview of `edit`: the changes and checks between the object before (`fresh`) and after
+/// (`response`), masked. The raw objects are dropped here.
 pub(crate) fn build_preview(
     edit: &ObjectEdit,
     mut fresh: Value,
     mut response: Value,
     restored: &Restored,
-) -> Result<EditPreview, &'static str> {
+) -> EditPreview {
     // Computed before `strip_server_fields` drops `status`: a DaemonSet's pod count is
     // `status.desiredNumberScheduled`.
     let demand = demand_change(edit, &fresh, &response);
@@ -408,14 +404,12 @@ pub(crate) fn build_preview(
             .iter()
             .map(|line| EditCheck::LeadingZero { line: *line }),
     );
-    Ok(EditPreview {
-        before: to_yaml_text(&before, None)?,
-        after: to_yaml_text(&after, None)?,
+    EditPreview {
         changes,
         more_changes,
         checks,
         demand,
-    })
+    }
 }
 
 /// The demand before and after, when both are known and differ.

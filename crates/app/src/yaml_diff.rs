@@ -1,5 +1,5 @@
-//! The line diff of Edit YAML (spec 0031): the object as it is now against the server's dry-run
-//! answer, both masked and without the edit header, as rows for the Diff tab. Pure.
+//! The line diff of Edit YAML (spec 0031, 0059): rows for the Diff tab and the revision diff dialog.
+//! Pure.
 
 use std::ops::Range;
 use std::time::Duration;

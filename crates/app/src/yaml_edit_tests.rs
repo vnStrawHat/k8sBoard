@@ -1,6 +1,7 @@
 use cluster::WriteError;
 
 use super::*;
+use crate::yaml_diff::DiffRowKind;
 
 fn conflict() -> CheckedWriteError {
     CheckedWriteError::Write(WriteError::Conflict {
@@ -83,7 +84,6 @@ fn footer_follows_the_preview_and_the_text() {
         more_changes: 0,
         checks: Vec::new(),
         quota: QuotaLine::None,
-        rows: Vec::new(),
         elapsed: Duration::from_millis(412),
     }));
     assert_eq!(
@@ -398,4 +398,73 @@ fn the_audit_keeps_the_old_and_new_value_of_a_label_only() {
             ),
         ]
     );
+}
+
+const LOCAL_DIFF_SAMPLE: &str = "# Edit header\napiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: api\nspec:\n  replicas: 3\n";
+
+/// The opened object as the cluster crate writes it: serializer output.
+fn serializer_base() -> String {
+    format_yaml(LOCAL_DIFF_SAMPLE).expect("the sample formats")
+}
+
+/// The rows of a text that `format_yaml` accepts.
+fn rows_between(base: &str, text: &str) -> Vec<DiffRow> {
+    local_diff_rows(base, text).expect("a text that formats")
+}
+
+#[test]
+fn local_diff_of_the_base_text_has_no_rows() {
+    let base = serializer_base();
+    assert!(rows_between(&base, &base).is_empty());
+}
+
+#[test]
+fn a_whitespace_or_key_order_change_has_no_rows() {
+    let reshaped = "# Edit header\nspec:\n\n    replicas: 3\n\nmetadata:\n    name: api\nkind: Deployment\napiVersion: apps/v1\n";
+    assert!(rows_between(&serializer_base(), reshaped).is_empty());
+}
+
+#[test]
+fn a_header_comment_change_has_no_rows() {
+    let base = serializer_base();
+    let edited = base.replacen("# Edit header", "# Another header", 1);
+    assert_ne!(edited, base);
+    assert!(rows_between(&base, &edited).is_empty());
+    let without = LOCAL_DIFF_SAMPLE.replacen("# Edit header\n", "", 1);
+    assert!(rows_between(&base, &without).is_empty());
+}
+
+#[test]
+fn a_value_change_has_a_removed_and_an_added_row() {
+    let base = serializer_base();
+    let edited = base.replacen("replicas: 3", "replicas: 5", 1);
+    let rows = rows_between(&base, &edited);
+    let of = |kind| {
+        rows.iter()
+            .filter(|row| row.kind == kind)
+            .map(|row| row.text.trim().to_owned())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(of(DiffRowKind::Removed), ["replicas: 3"]);
+    assert_eq!(of(DiffRowKind::Added), ["replicas: 5"]);
+}
+
+#[test]
+fn a_text_that_does_not_parse_is_an_error() {
+    let base = serializer_base();
+    assert!(matches!(
+        local_diff_rows(&base, "a: ["),
+        Err(EditError::Syntax { .. })
+    ));
+    assert!(matches!(
+        local_diff_rows(&base, "- a"),
+        Err(EditError::NotAnObject)
+    ));
+}
+
+#[test]
+fn the_header_is_only_the_leading_comment_lines() {
+    assert_eq!(without_header("# a\n# b\nkind: x\n# c\n"), "kind: x\n# c\n");
+    assert_eq!(without_header("kind: x\n"), "kind: x\n");
+    assert_eq!(without_header("# only"), "");
 }

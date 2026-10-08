@@ -1,6 +1,7 @@
 //! The Edit YAML view (spec 0031, wireframe W10): the object in the kit code editor, a Diff tab
-//! from the server's dry-run, a side panel of changes and checks, and the Apply flow. It replaces the
-//! table and the drawer in the workspace while it is open.
+//! computed locally against the opened object (spec 0059), a side panel of changes and checks, a
+//! Dry-run button, and the Apply flow. It replaces the table and the drawer in the workspace while it
+//! is open.
 //!
 //! The editor holds the masked YAML of the cluster crate (`<hidden>` means "keep the server's
 //! value"), so the app never holds a raw secret. Nothing here logs, writes to disk, or sends a
@@ -69,13 +70,28 @@ pub(crate) enum PreviewState {
     Failed(PreviewFailure),
 }
 
+/// The Diff tab: the editor text against the opened object, both in serializer form. Local only;
+/// no request is sent for it (spec 0059).
+enum LocalDiff {
+    /// Not computed since the text or the base last changed (the Diff tab was hidden).
+    Idle,
+    Running {
+        _task: Task<()>,
+    },
+    /// `Ok(rows)`, empty when nothing changed; `Err` holds the `EditError` text.
+    Ready {
+        for_text: SharedString,
+        rows: Result<Vec<DiffRow>, SharedString>,
+    },
+}
+
 /// A dry-run that passed. It is the display form of the cluster crate's `EditPreview`, which never
 /// leaves this module's call: it holds masked values and paths, and it reaches neither the audit
 /// nor a notification (decision 9).
 pub(crate) struct PassedPreview {
     /// The editor text the check was for; a different text makes the preview stale.
     pub(crate) for_text: SharedString,
-    /// The request the second press of Apply hands to the confirm dialog. `None` in a fixture.
+    /// The request Apply hands to the confirm dialog. `None` in a fixture.
     pub(crate) request: Option<WriteRequest>,
     pub(crate) changes: Vec<ChangeLine>,
     /// Changes beyond the cap of `changes`.
@@ -83,7 +99,6 @@ pub(crate) struct PassedPreview {
     pub(crate) checks: Vec<SharedString>,
     /// What the namespace quotas say about the pods and resources the change adds (advisory).
     pub(crate) quota: QuotaLine,
-    pub(crate) rows: Vec<DiffRow>,
     pub(crate) elapsed: Duration,
 }
 
@@ -228,7 +243,8 @@ pub(crate) struct YamlEditView {
     is_apply_key_held: bool,
     /// The tint over the line the shown failure points at; it follows edits, and any edit clears it.
     error_mark: RangeDecorationCollection,
-    /// The Diff tab rows; its count follows `PassedPreview::rows`, and its rows wrap.
+    local_diff: LocalDiff,
+    /// The Diff tab rows; its count follows `local_diff`, and its rows wrap.
     diff_list: ListState,
     /// The Revision history tab, created on its first show and dropped with the view.
     history: Option<Entity<RevisionHistory>>,
@@ -314,6 +330,7 @@ impl YamlEditView {
             server_changed: Vec::new(),
             overwritten: Vec::new(),
             is_apply_key_held: false,
+            local_diff: LocalDiff::Idle,
             diff_list: ListState::new(0, ListAlignment::Top, px(200.)),
             history: None,
             focus_handle: cx.focus_handle(),
@@ -351,7 +368,8 @@ impl YamlEditView {
         self.editor.read(cx).value()
     }
 
-    fn refresh_dirty(&mut self, cx: &gpui_kit::App) {
+    /// Re-reads the dirty flag after the text or the base changed, and keeps the Diff tab in step.
+    fn refresh_dirty(&mut self, cx: &mut Context<Self>) {
         let text = self.text(cx);
         // A Secret value refused as typed is a verdict on that text: Apply is on again for the next.
         if self.is_secret_values_refused() {
@@ -361,6 +379,40 @@ impl YamlEditView {
             .base
             .as_ref()
             .is_some_and(|base| base.text() != text.as_ref());
+        if self.tab == EditTab::Diff {
+            self.refresh_local_diff(cx);
+        } else {
+            self.local_diff = LocalDiff::Idle;
+        }
+    }
+
+    /// Computes the Diff tab for the current text off the main thread. Rows are drawn only for the
+    /// text they were computed for, so an answer that arrives after another edit is dropped.
+    fn refresh_local_diff(&mut self, cx: &mut Context<Self>) {
+        let Some(base) = &self.base else {
+            return;
+        };
+        let (base_text, text) = (base.text().to_owned(), self.text(cx));
+        let task = cx.spawn(async move |this, cx| {
+            let for_text = text.clone();
+            let rows = cx
+                .background_executor()
+                .spawn(async move {
+                    local_diff_rows(&base_text, &text)
+                        .map_err(|error| SharedString::from(error.to_string()))
+                })
+                .await;
+            let _ = this.update(cx, |view, cx| {
+                if view.text(cx) != for_text {
+                    return;
+                }
+                view.diff_list
+                    .reset(rows.as_ref().map_or(0, |rows| rows.len()));
+                view.local_diff = LocalDiff::Ready { for_text, rows };
+                cx.notify();
+            });
+        });
+        self.local_diff = LocalDiff::Running { _task: task };
     }
 
     /// The 1-based line the shown failure points at in `text`: a syntax error's own line, or the
@@ -496,9 +548,8 @@ impl YamlEditView {
                 });
                 self.base = Some(base);
                 self.refresh_dirty(cx);
-                // The old check was for the old text: ask again for the moved one.
+                // The old check was for the old text; the user asks again with Dry-run.
                 self.preview = PreviewState::NotChecked;
-                self.apply(window, cx);
             }
             Some(Err(EditError::Recreated)) => {
                 // Another object has the old one's name. The text stays for the user to copy; the
@@ -519,9 +570,9 @@ impl YamlEditView {
                 self.server_changed.clear();
                 self.overwritten.clear();
                 self.base = Some(base);
+                self.tab = EditTab::Editor;
                 self.refresh_dirty(cx);
                 self.preview = PreviewState::NotChecked;
-                self.tab = EditTab::Editor;
                 self.editor
                     .update(cx, |editor, cx| editor.focus(window, cx));
             }
@@ -541,13 +592,10 @@ impl YamlEditView {
     // ---- commands ----
 
     pub(crate) fn show_tab(&mut self, tab: EditTab, cx: &mut Context<Self>) {
-        // The Diff shows the server's answer for the text in the editor, so opening it asks, unless a
-        // passed check already covers this text.
-        if tab == EditTab::Diff && self.can_check() && !self.is_checked(&self.text(cx)) {
-            let text = self.text(cx);
-            self.run_preview(text, cx);
-        }
         self.tab = tab;
+        if tab == EditTab::Diff {
+            self.refresh_local_diff(cx);
+        }
         // A failed list (the Deployment was not loaded yet, a network error) is asked again.
         let needs_history = self
             .history
@@ -652,23 +700,51 @@ impl YamlEditView {
         )
     }
 
-    /// Why Apply is off, or `None`. Only a running check or an unchanged text switch it off: a quota
-    /// warning never does (spec 0041, decision 11).
-    pub(super) fn apply_block_reason(&self) -> Option<&'static str> {
-        if self.is_running() {
-            Some("Waiting for the dry-run…")
+    /// Why the Dry-run button is off, or `None`: nothing to check, a check or a reload in flight, a
+    /// Secret value the check refused, or a recreated object that cannot take the text (only Discard
+    /// leaves that banner).
+    pub(super) fn dry_run_block_reason(&self) -> Option<&'static str> {
+        if self.base.is_none() {
+            Some("Reading the object…")
+        } else if self.is_running() {
+            Some("Dry-run running…")
         } else if !self.is_dirty {
             Some("No changes")
         } else if self.is_secret_values_refused() {
             Some(SECRET_VALUES_REASON)
+        } else if matches!(self.banner, Some(EditBanner::Recreated)) {
+            Some("The object was deleted and created again")
         } else {
             None
         }
     }
 
-    /// Ctrl S and Apply…: the first press checks the edit with the server and shows the Diff, the
-    /// next one for the same text opens the confirm dialog. Nothing while a check runs or while the
-    /// text is unchanged (decision 15).
+    /// Why Apply is off, or `None`: the Dry-run reasons, and no passed dry-run for `text`. A quota
+    /// warning never switches it off (spec 0041, decision 11).
+    pub(super) fn apply_block_reason(&self, text: &str) -> Option<&'static str> {
+        if self.is_running() {
+            Some("Waiting for the dry-run…")
+        } else if let Some(reason) = self.dry_run_block_reason() {
+            Some(reason)
+        } else if !self.is_checked(text) {
+            Some("Run the dry-run first")
+        } else {
+            None
+        }
+    }
+
+    /// The Dry-run button: asks the server to check the text. It is the only caller of
+    /// `run_preview`, so a dry-run is sent only when the user clicks (spec 0059, decision 34).
+    pub(crate) fn dry_run(&mut self, cx: &mut Context<Self>) {
+        if self.dry_run_block_reason().is_some() {
+            return;
+        }
+        let text = self.text(cx);
+        self.run_preview(text, cx);
+    }
+
+    /// Ctrl S and Apply…: open the confirm dialog for a text a passed dry-run covers. Nothing
+    /// otherwise: the dry-run is its own button (decision 35).
     pub(crate) fn apply(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.apply_press(KeyPress::Fresh, window, cx);
     }
@@ -694,40 +770,19 @@ impl YamlEditView {
         }
     }
 
-    /// Whether the text can be checked with the server now: it holds changes, the object is read,
-    /// and no check runs. A recreated object cannot take the text; only Discard leaves the banner.
-    fn can_check(&self) -> bool {
-        #[cfg(feature = "screenshot")]
-        if self.is_fixture {
-            return false;
-        }
-        let is_recreated = matches!(self.banner, Some(EditBanner::Recreated));
-        !(self.is_running()
-            || self.base.is_none()
-            || !self.is_dirty
-            || is_recreated
-            || self.is_secret_values_refused())
-    }
-
     /// Whether a passed dry-run is for exactly `text`.
     fn is_checked(&self, text: &str) -> bool {
         matches!(&self.preview, PreviewState::Passed(passed) if passed.for_text == text)
     }
 
     fn apply_press(&mut self, press: KeyPress, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.can_check() {
-            return;
-        }
         let text = self.text(cx);
-        // A dry-run that passed for this text, from this key or from opening the Diff, goes straight
-        // to the confirm dialog.
-        if self.is_checked(&text) {
-            if press == KeyPress::Fresh {
-                self.confirm(window, cx);
-            }
+        if self.apply_block_reason(&text).is_some() {
             return;
         }
-        self.run_preview(text, cx);
+        if press == KeyPress::Fresh {
+            self.confirm(window, cx);
+        }
     }
 
     /// The second press: the confirm dialog of the write flow, with its own dry-run.
@@ -807,27 +862,11 @@ impl YamlEditView {
         let shell = self.shell.clone();
         let task = cx.spawn(async move |this, cx| {
             let result = checked_write(&shell, step, cx).await;
-            // The two sides are masked and without a header; the diff runs off the main thread.
-            let rows = match &result {
-                Ok(WriteOutcome {
-                    effect: WriteEffect::Replaced(preview),
-                    ..
-                }) => {
-                    let (before, after) = (preview.before.clone(), preview.after.clone());
-                    Some(
-                        cx.background_executor()
-                            .spawn(async move { diff_rows(&before, &after) })
-                            .await,
-                    )
-                }
-                _ => None,
-            };
             let _ = this.update(cx, |view, cx| {
-                view.finish_preview(text, request, result, rows, cx);
+                view.finish_preview(text, request, result, cx);
             });
         });
         self.preview = PreviewState::Running { _task: task };
-        self.tab = EditTab::Diff;
         self.sync_error_mark(cx);
         cx.notify();
     }
@@ -837,25 +876,21 @@ impl YamlEditView {
         text: SharedString,
         request: WriteRequest,
         result: Result<WriteOutcome, CheckedWriteError>,
-        rows: Option<Vec<DiffRow>>,
         cx: &mut Context<Self>,
     ) {
-        match (result, rows) {
-            (
-                Ok(WriteOutcome {
-                    effect: WriteEffect::Replaced(preview),
-                    elapsed,
-                    ..
-                }),
-                Some(rows),
-            ) => {
+        match result {
+            Ok(WriteOutcome {
+                effect: WriteEffect::Replaced(preview),
+                elapsed,
+                ..
+            }) => {
                 let checks = preview
                     .checks
                     .iter()
                     .map(|check| check_text(check, &text).into())
                     .collect();
                 let quota = self.quota_line_of(&preview, cx);
-                self.diff_list.reset(rows.len());
+
                 self.preview = PreviewState::Passed(Box::new(PassedPreview {
                     for_text: text,
                     request: Some(request),
@@ -863,16 +898,15 @@ impl YamlEditView {
                     more_changes: preview.more_changes,
                     checks,
                     quota,
-                    rows,
                     elapsed,
                 }));
             }
-            (Ok(_), _) => {
+            Ok(_) => {
                 self.preview = PreviewState::Failed(PreviewFailure::Server(
                     "The server answered with something other than the edited object".into(),
                 ));
             }
-            (Err(error), _) => self.apply_failure(edit_failure_of(&error), true),
+            Err(error) => self.apply_failure(edit_failure_of(&error), true),
         }
         self.sync_error_mark(cx);
         cx.notify();
@@ -959,6 +993,19 @@ impl YamlEditView {
     #[cfg(test)]
     pub(crate) fn server_changed(&self) -> &[SharedString] {
         &self.server_changed
+    }
+
+    /// What the Diff tab draws now: the rows (or the error) of the current text, `None` while they
+    /// are not computed or are for another text.
+    #[cfg(test)]
+    pub(crate) fn local_diff_for_test(
+        &self,
+        cx: &gpui_kit::App,
+    ) -> Option<&Result<Vec<DiffRow>, SharedString>> {
+        match &self.local_diff {
+            LocalDiff::Ready { for_text, rows } if *for_text == self.text(cx) => Some(rows),
+            _ => None,
+        }
     }
 
     /// The byte ranges the editor tints as the line of the shown failure.
@@ -1183,6 +1230,28 @@ fn leading_zero_text(line: usize, text: &str) -> String {
     }
 }
 
+/// The Diff tab's rows: the text in serializer form against `base_text`, which is serializer output
+/// already. The header comments are dropped on both sides: they are never sent, so a change to them
+/// is no change. A text `format_yaml` refuses has no diff.
+fn local_diff_rows(base_text: &str, text: &str) -> Result<Vec<DiffRow>, EditError> {
+    let formatted = format_yaml(text)?;
+    let (before, after) = (without_header(base_text), without_header(&formatted));
+    // `diff_rows` folds a text that did not change into one row; the tab says `No changes` instead.
+    if before == after {
+        return Ok(Vec::new());
+    }
+    Ok(diff_rows(before, after))
+}
+
+/// `text` after its leading `#` lines (the edit header).
+fn without_header(text: &str) -> &str {
+    let mut rest = text;
+    while rest.starts_with('#') {
+        rest = rest.split_once('\n').map_or("", |(_, tail)| tail);
+    }
+    rest
+}
+
 /// The footer line under the editor, from what the preview and the text say now.
 pub(crate) fn footer_text(preview: &PreviewState, current: &str) -> String {
     match preview {
@@ -1230,8 +1299,14 @@ impl YamlEditView {
             };
             view.history = Some(history_fixture(&view.target.key, offer, cx));
         }
-        let rows = diff_rows(before, &after);
-        view.diff_list.reset(rows.len());
+        let rows =
+            local_diff_rows(before, &after).map_err(|error| SharedString::from(error.to_string()));
+        view.diff_list
+            .reset(rows.as_ref().map_or(0, |rows| rows.len()));
+        view.local_diff = LocalDiff::Ready {
+            for_text: after.clone().into(),
+            rows,
+        };
         view.preview = PreviewState::Passed(Box::new(PassedPreview {
             for_text: after.clone().into(),
             request: None,
@@ -1258,7 +1333,6 @@ impl YamlEditView {
                 .into(),
             ],
             quota: crate::edit_quota::fixture_line(),
-            rows,
             elapsed: Duration::from_millis(412),
         }));
         view

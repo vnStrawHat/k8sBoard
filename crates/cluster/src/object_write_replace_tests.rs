@@ -355,9 +355,12 @@ async fn index_matched_placeholder_is_marked_moved() {
         panic!("{outcome:?}");
     };
     assert!(
-        preview.after.contains("<hidden, moved>"),
-        "{}",
-        preview.after
+        preview
+            .changes
+            .iter()
+            .any(|change| change.new.as_deref() == Some("<hidden, moved>")),
+        "{:?}",
+        preview.changes
     );
     assert!(
         preview
@@ -381,7 +384,12 @@ async fn the_outcome_carries_a_masked_preview() {
     };
     assert_eq!(preview.changes.len(), 1);
     assert_eq!(preview.changes[0].path.to_string(), "spec.replicas");
-    for text in [&preview.before, &preview.after] {
+    for side in preview
+        .changes
+        .iter()
+        .flat_map(|change| [&change.old, &change.new])
+    {
+        let text = side.as_deref().unwrap_or_default();
         assert!(!text.contains(ENV_LITERAL), "{text}");
         assert!(!text.contains(APPLIED), "{text}");
     }
@@ -629,9 +637,21 @@ async fn a_secret_is_masked_by_its_target_even_when_the_answer_names_no_kind() {
     let WriteEffect::Replaced(preview) = outcome.effect else {
         panic!("{outcome:?}");
     };
-    for text in [&preview.before, &preview.after] {
+    assert!(
+        preview
+            .changes
+            .iter()
+            .any(|change| change.path.to_string() == "metadata.labels.app"),
+        "{:?}",
+        preview.changes
+    );
+    for side in preview
+        .changes
+        .iter()
+        .flat_map(|change| [&change.old, &change.new])
+    {
+        let text = side.as_deref().unwrap_or_default();
         assert!(!text.contains(SECRET_DATA), "{text}");
-        assert!(text.contains("password: <hidden>"), "{text}");
     }
 }
 

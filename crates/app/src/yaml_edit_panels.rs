@@ -21,8 +21,8 @@ use gpui_kit::{
 };
 
 use super::{
-    EditBanner, EditTab, LoadState, PassedPreview, PreviewFailure, PreviewState, YamlEditView,
-    elide_middle, footer_text,
+    EditBanner, EditTab, LoadState, LocalDiff, PassedPreview, PreviewFailure, PreviewState,
+    YamlEditView, elide_middle, footer_text,
 };
 use crate::drawer::truncated_text_with_tooltip;
 use crate::edit_error_line::line_of_field;
@@ -154,9 +154,10 @@ impl YamlEditView {
             .into_any_element()
     }
 
-    fn render_tabs(&self, cx: &Context<Self>) -> AnyElement {
+    fn render_tabs(&self, text: &str, cx: &Context<Self>) -> AnyElement {
+        // The count is the passed check's, so it shows only while that check covers the text.
         let diff_label = match &self.preview {
-            PreviewState::Passed(passed) => {
+            PreviewState::Passed(passed) if self.is_checked(text) => {
                 format!("Diff vs cluster · {}", passed.changes.len())
             }
             _ => "Diff vs cluster".to_owned(),
@@ -277,7 +278,7 @@ impl YamlEditView {
         )
     }
 
-    fn render_body(&self, cx: &mut Context<Self>) -> AnyElement {
+    fn render_body(&self, text: &str, cx: &mut Context<Self>) -> AnyElement {
         match &self.load {
             LoadState::Loading { .. } => return busy("Reading the object…", cx),
             LoadState::Failed(message) => {
@@ -293,7 +294,7 @@ impl YamlEditView {
                 .text_xs()
                 .size_full()
                 .into_any_element(),
-            EditTab::Diff => self.render_diff(cx),
+            EditTab::Diff => self.render_diff(text, cx),
             EditTab::History => self.history.as_ref().map_or_else(
                 || div().into_any_element(),
                 |history| history.clone().into_any_element(),
@@ -301,36 +302,35 @@ impl YamlEditView {
         }
     }
 
-    fn render_diff(&self, cx: &mut Context<Self>) -> AnyElement {
-        let theme = cx.theme();
-        match &self.preview {
-            PreviewState::Running { .. } => busy("Server dry-run…", cx),
-            PreviewState::Passed(_) => list(
-                self.diff_list.clone(),
-                cx.processor(|view, row: usize, _, cx| view.diff_row_at(row, cx)),
-            )
-            .size_full()
-            .into_any_element(),
-            PreviewState::NotChecked => muted_center(
-                "Nothing to check: the text is unchanged",
-                theme.muted_foreground,
-            ),
-            PreviewState::Failed(failure) => {
-                let text = match failure {
-                    PreviewFailure::Local(error) => error.to_string(),
-                    PreviewFailure::Invalid { message, .. } => message.to_string(),
-                    PreviewFailure::Server(text) => text.to_string(),
-                };
-                muted_center(text, tone_color(StatusTone::Bad, cx))
+    /// The local diff of the current text. Rows computed for another text are never drawn.
+    fn render_diff(&self, text: &str, cx: &mut Context<Self>) -> AnyElement {
+        match &self.local_diff {
+            LocalDiff::Ready {
+                for_text,
+                rows: Ok(rows),
+            } if for_text == text => {
+                if rows.is_empty() {
+                    return muted_center("No changes", cx.theme().muted_foreground);
+                }
+                list(
+                    self.diff_list.clone(),
+                    cx.processor(|view, row: usize, _, cx| view.diff_row_at(row, cx)),
+                )
+                .size_full()
+                .into_any_element()
             }
+            LocalDiff::Ready {
+                for_text,
+                rows: Err(message),
+            } if for_text == text => muted_center(message.clone(), tone_color(StatusTone::Bad, cx)),
+            _ => busy("Comparing…", cx),
         }
     }
 
-    /// Row `row` of the passed preview, drawn on demand by the list.
+    /// Row `row` of the local diff, drawn on demand by the list.
     fn diff_row_at(&self, row: usize, cx: &App) -> AnyElement {
-        match &self.preview {
-            PreviewState::Passed(passed) => passed
-                .rows
+        match &self.local_diff {
+            LocalDiff::Ready { rows: Ok(rows), .. } => rows
                 .get(row)
                 .map_or_else(div, |row| diff_row_element(row, cx))
                 .into_any_element(),
@@ -359,9 +359,10 @@ impl YamlEditView {
             .overflow_y_scroll();
         // The history tab compares revisions of the cluster, not the text of the editor: the editor's
         // changes would read as the diff beside it.
+        // A check of another text lists nothing: its changes may no longer be in the editor.
         match &self.preview {
             _ if self.tab == EditTab::History => {}
-            PreviewState::Passed(passed) => {
+            PreviewState::Passed(passed) if self.is_checked(text) => {
                 side = side.child(heading(changes_heading(passed)));
                 for (index, change) in passed.changes.iter().enumerate() {
                     let shown =
@@ -409,7 +410,9 @@ impl YamlEditView {
                     .child(HELM_MANAGED_WARNING),
             );
         }
-        if let PreviewState::Passed(passed) = &self.preview {
+        if let PreviewState::Passed(passed) = &self.preview
+            && self.is_checked(text)
+        {
             for check in &passed.checks {
                 side = side.child(
                     div()
@@ -504,13 +507,23 @@ impl YamlEditView {
         let theme = cx.theme();
         let (_, tone) = dry_run_line(&self.preview, text, cx);
         let status = footer_text(&self.preview, text);
-        let apply_reason = self.apply_block_reason();
+        let apply_reason = self.apply_block_reason(text);
+        let dry_run_reason = self.dry_run_block_reason();
+        let dry_run = Button::new("edit-dry-run")
+            .label("Dry-run")
+            .small()
+            .outline()
+            .disabled(dry_run_reason.is_some())
+            .tooltip(
+                dry_run_reason.unwrap_or("Ask the server to check the change; nothing is saved"),
+            )
+            .on_click(cx.listener(|view, _, _, cx| view.dry_run(cx)));
         let apply = Button::new("edit-apply")
             .label("Apply…")
             .small()
             .primary()
-            .disabled(apply_reason.is_some() || self.base.is_none())
-            .tooltip(apply_reason.unwrap_or("Check the change with the server, then apply it"))
+            .disabled(apply_reason.is_some())
+            .tooltip(apply_reason.unwrap_or("Apply the checked change"))
             .on_click(cx.listener(|view, _, window, cx| view.apply(window, cx)));
         let key = Kbd::binding_for_action(&ApplyEdit, Some(YAML_EDIT), window);
         h_flex()
@@ -549,6 +562,7 @@ impl YamlEditView {
                     .outline()
                     .on_click(cx.listener(|view, _, _, cx| view.cancel(cx))),
             )
+            .child(dry_run)
             .child(h_flex().gap_1().items_center().child(apply).children(key))
             .into_any_element()
     }
@@ -557,7 +571,7 @@ impl YamlEditView {
 impl Render for YamlEditView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let text = self.text(cx);
-        let body = self.render_body(cx);
+        let body = self.render_body(&text, cx);
         v_flex()
             .key_context(YAML_EDIT)
             .track_focus(&self.focus_handle)
@@ -573,7 +587,7 @@ impl Render for YamlEditView {
             .size_full()
             .min_h_0()
             .child(self.render_header(cx))
-            .child(self.render_tabs(cx))
+            .child(self.render_tabs(&text, cx))
             .children(self.render_banner(cx))
             .child(
                 h_flex()

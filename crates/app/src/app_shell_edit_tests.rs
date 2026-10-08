@@ -24,6 +24,7 @@ use crate::resource_actions::{ActionAvailability, ResourceAction, RowAction, act
 use crate::workload_actions::workload_actions_tests::deployment;
 use crate::workload_rows::deployment_row;
 use crate::write_guard::{DialogConfirm, WriteLock};
+use crate::yaml_diff::{DiffRow, DiffRowKind};
 use crate::yaml_edit::{EditBanner, EditTab, PreviewFailure, PreviewState, YamlEditView};
 
 const PATH: &str = "/apis/apps/v1/namespaces/team-a/deployments/api";
@@ -291,6 +292,27 @@ impl EditTest {
         self.t.fixture.with_window(cx, |window, cx| {
             view.update(cx, |view, cx| view.apply(window, cx));
         });
+    }
+
+    /// The Dry-run button.
+    fn dry_run(&self, cx: &mut TestAppContext) {
+        self.view(cx).update(cx, |view, cx| view.dry_run(cx));
+    }
+
+    /// What the Diff tab draws now; `None` until the diff of the current text is computed.
+    fn local_rows(&self, cx: &mut TestAppContext) -> Option<Result<Vec<DiffRow>, SharedString>> {
+        self.view(cx)
+            .read_with(cx, |view, cx| view.local_diff_for_test(cx).cloned())
+    }
+
+    fn wait_for_local_diff(&self, cx: &mut TestAppContext) {
+        self.t
+            .wait_for("the local diff", cx, |cx| self.local_rows(cx).is_some());
+    }
+
+    fn apply_reason(&self, cx: &mut TestAppContext) -> Option<&'static str> {
+        self.view(cx)
+            .read_with(cx, |view, cx| view.apply_block_reason(&view.text(cx)))
     }
 
     fn is_passed(&self, cx: &mut TestAppContext) -> bool {
@@ -617,19 +639,18 @@ fn a_helm_release_record_is_refused_on_load(cx: &mut TestAppContext) {
 // ---- the check ----
 
 #[gpui_kit::test]
-fn ctrl_s_runs_the_preview_and_shows_diff(cx: &mut TestAppContext) {
+fn the_dry_run_button_sends_one_dry_run_and_keeps_the_tab(cx: &mut TestAppContext) {
     let t = edit_test("edit-preview", cx);
     t.open(cx);
     t.change("replicas: 3", "replicas: 5", cx);
-    // The real key, from the editor: the chord is bound in the view.
-    t.t.fixture.press("ctrl-s", cx);
+    t.dry_run(cx);
     t.wait_for_preview(cx);
     let dry_runs = t.puts();
     assert_eq!(dry_runs.len(), 1, "{dry_runs:?}");
     assert_eq!(dry_runs[0].path, PATH);
     assert!(dry_runs[0].has_query("dryRun", "All"));
     assert!(dry_runs[0].has_query("fieldManager", "k8sboard"));
-    assert_eq!(t.with_view(cx, |view| view.tab()), EditTab::Diff);
+    assert_eq!(t.with_view(cx, |view| view.tab()), EditTab::Editor);
     t.with_view(cx, |view| {
         let PreviewState::Passed(passed) = view.preview_state() else {
             panic!("the dry-run did not pass");
@@ -638,25 +659,12 @@ fn ctrl_s_runs_the_preview_and_shows_diff(cx: &mut TestAppContext) {
         assert_eq!(paths, ["spec.replicas"]);
         assert_eq!(passed.changes[0].old.as_deref(), Some("3"));
         assert_eq!(passed.changes[0].new.as_deref(), Some("5"));
-        assert!(
-            passed
-                .rows
-                .iter()
-                .any(|row| row.text.contains("replicas: 5"))
-        );
         // The object carries last-applied-configuration, which a replace leaves stale.
         assert!(
             passed
                 .checks
                 .iter()
                 .any(|check| check.starts_with("kubectl apply users:"))
-        );
-        // Nothing the server knows beyond the masked tree reaches the preview.
-        assert!(
-            passed
-                .rows
-                .iter()
-                .all(|row| !row.text.contains("s3cr3t-env"))
         );
     });
     t.t.fixture.draw_twice(cx);
@@ -667,7 +675,7 @@ fn a_template_change_warns_that_pods_are_replaced(cx: &mut TestAppContext) {
     let t = edit_test("edit-rollout", cx);
     t.open(cx);
     t.change("image: api:1", "image: api:2", cx);
-    t.apply(cx);
+    t.dry_run(cx);
     t.wait_for_preview(cx);
     t.with_view(cx, |view| {
         let PreviewState::Passed(passed) = view.preview_state() else {
@@ -685,17 +693,21 @@ fn a_template_change_warns_that_pods_are_replaced(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-fn ctrl_s_while_running_does_nothing(cx: &mut TestAppContext) {
+fn the_dry_run_is_off_while_clean_or_running(cx: &mut TestAppContext) {
     let t = edit_test("edit-running", cx);
     t.open(cx);
+    assert_eq!(
+        t.with_view(cx, YamlEditView::dry_run_block_reason),
+        Some("No changes")
+    );
     t.change("replicas: 3", "replicas: 5", cx);
+    assert_eq!(t.with_view(cx, YamlEditView::dry_run_block_reason), None);
     let view = t.view(cx);
-    // Two presses before the first answer: the second finds the check running.
-    t.t.fixture.with_window(cx, |window, cx| {
-        view.update(cx, |view, cx| {
-            view.apply(window, cx);
-            view.apply(window, cx);
-        });
+    // Two clicks before the first answer: the second finds the check running.
+    view.update(cx, |view, cx| {
+        view.dry_run(cx);
+        assert_eq!(view.dry_run_block_reason(), Some("Dry-run running…"));
+        view.dry_run(cx);
     });
     t.wait_for_preview(cx);
     assert_eq!(t.puts().len(), 1, "one dry-run, not two");
@@ -707,7 +719,7 @@ fn local_error_stays_on_editor_tab(cx: &mut TestAppContext) {
     let t = edit_test("edit-local", cx);
     t.open(cx);
     t.set_text("kind: [unclosed\n", cx);
-    t.apply(cx);
+    t.dry_run(cx);
     cx.run_until_parked();
     assert_eq!(t.with_view(cx, |view| view.tab()), EditTab::Editor);
     t.with_view(cx, |view| {
@@ -724,7 +736,7 @@ fn an_unmatched_placeholder_blocks_locally_and_names_its_path(cx: &mut TestAppCo
     let t = edit_test("edit-placeholder", cx);
     t.open(cx);
     t.change("name: DB_PASS", "name: DB_PASS2", cx);
-    t.apply(cx);
+    t.dry_run(cx);
     cx.run_until_parked();
     t.with_view(cx, |view| {
         let PreviewState::Failed(PreviewFailure::Local(error)) = view.preview_state() else {
@@ -740,7 +752,7 @@ fn diff_marker_text_never_leaves_the_editor(cx: &mut TestAppContext) {
     let t = edit_test("edit-marker", cx);
     t.open(cx);
     t.change("value: <hidden>", "value: <hidden, changed>", cx);
-    t.apply(cx);
+    t.dry_run(cx);
     cx.run_until_parked();
     t.with_view(cx, |view| {
         assert!(matches!(
@@ -757,7 +769,7 @@ fn a_422_of_the_preview_lists_its_fields_verbatim(cx: &mut TestAppContext) {
     *lock(&t.server.dry_run_answer) = Some((422, INVALID.to_owned()));
     t.open(cx);
     t.change("replicas: 3", "replicas: -1", cx);
-    t.apply(cx);
+    t.dry_run(cx);
     t.wait_for_preview(cx);
     t.with_view(cx, |view| {
         let PreviewState::Failed(PreviewFailure::Invalid { fields, .. }) = view.preview_state()
@@ -775,7 +787,7 @@ fn a_syntax_error_marks_its_line_and_the_footer_jumps_there(cx: &mut TestAppCont
     let t = edit_test("edit-error-line", cx);
     t.open(cx);
     t.set_text("kind: Deployment\nspec: [unclosed\nreplicas: 3\n", cx);
-    t.apply(cx);
+    t.dry_run(cx);
     cx.run_until_parked();
     let (line, marks) = t.view(cx).read_with(cx, |view, cx| {
         (
@@ -811,7 +823,7 @@ fn a_422_field_path_resolves_to_its_line_in_the_editor(cx: &mut TestAppContext) 
     *lock(&t.server.dry_run_answer) = Some((422, INVALID.to_owned()));
     t.open(cx);
     t.change("replicas: 3", "replicas: -1", cx);
-    t.apply(cx);
+    t.dry_run(cx);
     t.wait_for_preview(cx);
     let (line, expected, marks) = t.view(cx).read_with(cx, |view, cx| {
         let text = view.text(cx);
@@ -846,7 +858,7 @@ fn the_lock_stops_the_preview_before_anything_is_sent(cx: &mut TestAppContext) {
     t.open(cx);
     t.change("replicas: 3", "replicas: 5", cx);
     t.t.set_lock(&t.t.stg, WriteLock::Locked, cx);
-    t.apply(cx);
+    t.dry_run(cx);
     cx.run_until_parked();
     t.with_view(cx, |view| {
         let PreviewState::Failed(PreviewFailure::Server(text)) = view.preview_state() else {
@@ -860,11 +872,11 @@ fn the_lock_stops_the_preview_before_anything_is_sent(cx: &mut TestAppContext) {
 // ---- the commit ----
 
 #[gpui_kit::test]
-fn second_ctrl_s_opens_the_confirm_dialog(cx: &mut TestAppContext) {
+fn apply_after_a_passed_dry_run_opens_the_confirm(cx: &mut TestAppContext) {
     let t = edit_test("edit-dialog", cx);
     t.open(cx);
     t.change("replicas: 3", "replicas: 5", cx);
-    t.apply(cx);
+    t.dry_run(cx);
     t.wait_for_preview(cx);
     assert!(!t.t.has_dialog(cx));
     t.apply(cx);
@@ -883,7 +895,7 @@ fn dialog_lists_paths_and_check_warnings(cx: &mut TestAppContext) {
     let t = edit_test("edit-dialog-lines", cx);
     t.open(cx);
     t.change("replicas: 3", "replicas: 5", cx);
-    t.apply(cx);
+    t.dry_run(cx);
     t.wait_for_preview(cx);
     t.apply(cx);
     t.t.dialog(cx).read_with(cx, |dialog, _| {
@@ -904,15 +916,55 @@ fn stale_preview_needs_a_new_check(cx: &mut TestAppContext) {
     let t = edit_test("edit-stale", cx);
     t.open(cx);
     t.change("replicas: 3", "replicas: 5", cx);
-    t.apply(cx);
+    t.dry_run(cx);
     t.wait_for_preview(cx);
     t.change("replicas: 5", "replicas: 6", cx);
-    // The preview was for the other text: a press checks again instead of opening the dialog.
+    // The check was for the other text: Apply sends nothing and opens nothing.
+    assert_eq!(t.apply_reason(cx), Some("Run the dry-run first"));
     t.apply(cx);
-    t.wait_for_preview(cx);
+    cx.run_until_parked();
     assert!(!t.t.has_dialog(cx));
+    assert_eq!(t.puts().len(), 1);
+    t.dry_run(cx);
+    t.wait_for_preview(cx);
     assert_eq!(t.puts().len(), 2);
     assert!(t.is_passed(cx));
+}
+
+#[gpui_kit::test]
+fn apply_is_off_until_the_dry_run_passes(cx: &mut TestAppContext) {
+    let t = edit_test("edit-apply-gated", cx);
+    t.open(cx);
+    t.change("replicas: 3", "replicas: 5", cx);
+    assert_eq!(t.apply_reason(cx), Some("Run the dry-run first"));
+    t.apply(cx);
+    cx.run_until_parked();
+    assert!(!t.t.has_dialog(cx));
+    assert!(t.puts().is_empty());
+    t.dry_run(cx);
+    t.wait_for_preview(cx);
+    assert_eq!(t.apply_reason(cx), None);
+    t.apply(cx);
+    assert_eq!(
+        t.t.dialog(cx).read_with(cx, |dialog, _| dialog.label()),
+        Some("Apply changes".into())
+    );
+}
+
+#[gpui_kit::test]
+fn ctrl_s_does_nothing_before_the_dry_run(cx: &mut TestAppContext) {
+    let t = edit_test("edit-ctrl-s-gated", cx);
+    t.open(cx);
+    t.change("replicas: 3", "replicas: 5", cx);
+    t.t.fixture.press("ctrl-s", cx);
+    cx.run_until_parked();
+    assert!(t.puts().is_empty());
+    assert!(!t.t.has_dialog(cx));
+    assert_eq!(t.with_view(cx, |view| view.tab()), EditTab::Editor);
+    assert!(t.with_view(cx, |view| matches!(
+        view.preview_state(),
+        PreviewState::NotChecked
+    )));
 }
 
 #[gpui_kit::test]
@@ -921,7 +973,7 @@ fn commit_success_closes_the_editor(cx: &mut TestAppContext) {
     let dir = audit_dir(&t, "edit-commit", cx);
     t.open(cx);
     t.change("replicas: 3", "replicas: 5", cx);
-    t.apply(cx);
+    t.dry_run(cx);
     t.wait_for_preview(cx);
     t.apply(cx);
     t.confirm_dialog(cx);
@@ -973,7 +1025,7 @@ fn commit_rechecks_the_row_cluster(cx: &mut TestAppContext) {
     t.t.fixture.press("e", cx);
     t.wait_for_base(cx);
     t.change("replicas: 3", "replicas: 5", cx);
-    t.apply(cx);
+    t.dry_run(cx);
     t.wait_for_preview(cx);
     t.apply(cx);
     t.t.wait_for_dry_run(cx);
@@ -1004,7 +1056,7 @@ fn commit_conflict_shows_the_banner(cx: &mut TestAppContext) {
     *lock(&t.server.commit_answer) = Some((409, CONFLICT.to_owned()));
     t.open(cx);
     t.change("replicas: 3", "replicas: 5", cx);
-    t.apply(cx);
+    t.dry_run(cx);
     t.wait_for_preview(cx);
     t.apply(cx);
     t.confirm_dialog(cx);
@@ -1029,7 +1081,7 @@ fn invalid_lists_fields_in_the_side_panel(cx: &mut TestAppContext) {
     *lock(&t.server.commit_answer) = Some((422, INVALID.to_owned()));
     t.open(cx);
     t.change("replicas: 3", "replicas: -1", cx);
-    t.apply(cx);
+    t.dry_run(cx);
     t.wait_for_preview(cx);
     t.apply(cx);
     t.confirm_dialog(cx);
@@ -1052,7 +1104,7 @@ fn stale_base_is_a_conflict_without_a_put(cx: &mut TestAppContext) {
     t.open(cx);
     t.change("replicas: 3", "replicas: 5", cx);
     *lock(&t.server.object) = deployment_object("200");
-    t.apply(cx);
+    t.dry_run(cx);
     t.wait_for_preview(cx);
     assert!(t.puts().is_empty(), "the stale base stops before any PUT");
     t.with_view(cx, |view| {
@@ -1061,7 +1113,7 @@ fn stale_base_is_a_conflict_without_a_put(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-fn reload_and_keep_my_changes_rebases_and_checks_again(cx: &mut TestAppContext) {
+fn reload_and_keep_my_changes_rebases_without_a_check(cx: &mut TestAppContext) {
     let t = edit_test("edit-rebase", cx);
     t.open(cx);
     t.change("replicas: 3", "replicas: 5", cx);
@@ -1069,14 +1121,22 @@ fn reload_and_keep_my_changes_rebases_and_checks_again(cx: &mut TestAppContext) 
     let mut newer = deployment_object("200");
     newer["metadata"]["labels"] = json!({"app": "api", "tier": "backend"});
     *lock(&t.server.object) = newer;
-    t.apply(cx);
+    t.dry_run(cx);
     t.wait_for_preview(cx);
-    let view = t.view(cx);
-    t.t.fixture.with_window(cx, |window, cx| {
-        view.update(cx, |view, cx| view.keep_my_changes(window, cx));
+    assert!(t.puts().is_empty(), "the stale base stops before any PUT");
+    t.keep_my_changes(cx);
+    t.t.wait_for("the rebase", cx, |cx| {
+        t.with_view(cx, |view| {
+            matches!(view.banner(), Some(EditBanner::Rebased { .. }))
+        })
     });
-    t.t.wait_for("the new check", cx, |_| t.puts().len() == 1);
     t.wait_for_preview(cx);
+    cx.run_until_parked();
+    assert!(t.puts().is_empty(), "no request after the GET");
+    assert!(t.with_view(cx, |view| matches!(
+        view.preview_state(),
+        PreviewState::NotChecked
+    )));
     let text = t.text(cx);
     assert!(text.contains("replicas: 5"), "{text}");
     assert!(text.contains("tier: backend"), "{text}");
@@ -1088,8 +1148,12 @@ fn reload_and_keep_my_changes_rebases_and_checks_again(cx: &mut TestAppContext) 
         let changed: Vec<&str> = view.server_changed().iter().map(AsRef::as_ref).collect();
         assert_eq!(changed, ["metadata.labels.tier"]);
     });
-    // The check ran against the new base.
-    let body: Value = serde_json::from_str(&t.puts()[0].body).expect("a JSON body");
+    // The user asks again; the check runs against the new base.
+    t.dry_run(cx);
+    t.wait_for_preview(cx);
+    let puts = t.puts();
+    assert_eq!(puts.len(), 1);
+    let body: Value = serde_json::from_str(&puts[0].body).expect("a JSON body");
     assert_eq!(body["metadata"]["resourceVersion"], json!("200"));
     assert_eq!(body["metadata"]["labels"]["tier"], json!("backend"));
     t.t.fixture.draw_twice(cx);
@@ -1106,7 +1170,7 @@ fn rebase_lists_a_path_that_no_longer_exists(cx: &mut TestAppContext) {
         .expect("containers");
     containers.retain(|container| container["name"] != "sidecar");
     *lock(&t.server.object) = newer;
-    t.apply(cx);
+    t.dry_run(cx);
     t.wait_for_preview(cx);
     let view = t.view(cx);
     t.t.fixture.with_window(cx, |window, cx| {
@@ -1139,7 +1203,7 @@ fn discard_my_changes_reads_the_newest_object(cx: &mut TestAppContext) {
     let mut newer = deployment_object("200");
     newer["spec"]["replicas"] = json!(8);
     *lock(&t.server.object) = newer;
-    t.apply(cx);
+    t.dry_run(cx);
     t.wait_for_preview(cx);
     let view = t.view(cx);
     t.t.fixture.with_window(cx, |window, cx| {
@@ -1380,7 +1444,7 @@ fn preview_never_reaches_audit_or_notice(cx: &mut TestAppContext) {
     *lock(&t.server.commit_answer) = Some((422, INVALID.to_owned()));
     t.open(cx);
     t.change("replicas: 3", "replicas: -1", cx);
-    t.apply(cx);
+    t.dry_run(cx);
     t.wait_for_preview(cx);
     t.apply(cx);
     t.confirm_dialog(cx);
@@ -1428,7 +1492,7 @@ impl EditTest {
         let mut newer = deployment_object("200");
         change(&mut newer);
         *lock(&self.server.object) = newer;
-        self.apply(cx);
+        self.dry_run(cx);
         self.wait_for_preview(cx);
     }
 
@@ -1452,6 +1516,7 @@ fn rebase_onto_a_recreated_object_offers_only_discard(cx: &mut TestAppContext) {
     });
     // The text is kept, and nothing can be applied to the new object.
     assert!(t.text(cx).contains("replicas: 5"));
+    t.dry_run(cx);
     t.apply(cx);
     cx.run_until_parked();
     assert!(t.puts().is_empty());
@@ -1475,7 +1540,13 @@ fn a_rebase_that_overwrites_a_server_change_says_so_and_warns_in_the_dialog(
     let t = edit_test("edit-overwrite", cx);
     t.conflict_with(|object| object["spec"]["replicas"] = json!(7), cx);
     t.keep_my_changes(cx);
-    t.t.wait_for("the new check", cx, |_| t.puts().len() == 1);
+    t.t.wait_for("the rebase", cx, |cx| {
+        t.with_view(cx, |view| {
+            matches!(view.banner(), Some(EditBanner::Rebased { .. }))
+        })
+    });
+    t.wait_for_preview(cx);
+    t.dry_run(cx);
     t.wait_for_preview(cx);
     let line = "spec.replicas: your value replaces a change made on the server";
     t.with_view(cx, |view| {
@@ -1546,7 +1617,7 @@ fn a_text_over_two_mebibytes_is_refused_without_a_request(cx: &mut TestAppContex
     t.open(cx);
     let big = format!("{}# {}\n", t.base_text(cx), "x".repeat(2 * 1024 * 1024));
     t.set_text(&big, cx);
-    t.apply(cx);
+    t.dry_run(cx);
     cx.run_until_parked();
     t.with_view(cx, |view| {
         assert!(matches!(
@@ -1597,7 +1668,7 @@ fn a_held_ctrl_s_never_opens_the_confirm_dialog(cx: &mut TestAppContext) {
     let t = edit_test("edit-held", cx);
     t.open(cx);
     t.change("replicas: 3", "replicas: 5", cx);
-    t.press_event(key_down("ctrl-s", false), cx);
+    t.dry_run(cx);
     t.wait_for_preview(cx);
     assert!(t.is_passed(cx));
     // The repeat of the held key finds the passed check, and still opens nothing.
@@ -1751,14 +1822,14 @@ fn apply_stays_enabled_when_quota_exceeds(cx: &mut TestAppContext) {
     // 1 pod left; the change adds 2.
     set_quotas(&t, quota_snapshot("4", "3"), cx);
     t.change("replicas: 3", "replicas: 5", cx);
-    t.apply(cx);
+    t.dry_run(cx);
     t.wait_for_preview(cx);
     let expected = "Quota compute: pods needs 2 more, 1 left";
     assert_eq!(
         quota_of(&t, cx),
         crate::edit_quota::QuotaLine::Exceeds(vec![expected.into()])
     );
-    assert_eq!(t.with_view(cx, YamlEditView::apply_block_reason), None);
+    assert_eq!(t.apply_reason(cx), None);
     // Apply still opens the confirm dialog, which repeats the warning next to the other checks.
     t.apply(cx);
     t.t.dialog(cx).read_with(cx, |dialog, _| {
@@ -1777,7 +1848,7 @@ fn quota_fits_reads_the_namespace_headroom(cx: &mut TestAppContext) {
     t.open(cx);
     set_quotas(&t, quota_snapshot("10", "3"), cx);
     t.change("replicas: 3", "replicas: 5", cx);
-    t.apply(cx);
+    t.dry_run(cx);
     t.wait_for_preview(cx);
     assert_eq!(
         quota_of(&t, cx),
@@ -1790,7 +1861,7 @@ fn quota_feed_off_says_not_checked_and_adds_no_warning(cx: &mut TestAppContext) 
     let t = edit_test("edit-quota-off", cx);
     t.open(cx);
     t.change("replicas: 3", "replicas: 5", cx);
-    t.apply(cx);
+    t.dry_run(cx);
     t.wait_for_preview(cx);
     // The fake server has no quotas route, so the feed never loaded.
     let line = quota_of(&t, cx);
@@ -1799,7 +1870,7 @@ fn quota_feed_off_says_not_checked_and_adds_no_warning(cx: &mut TestAppContext) 
     };
     assert!(text.starts_with("Quota not checked: "), "{text}");
     assert!(line.warnings().is_empty());
-    assert_eq!(t.with_view(cx, YamlEditView::apply_block_reason), None);
+    assert_eq!(t.apply_reason(cx), None);
 }
 
 // ---- Spec 0041: a click on a Deployment row of the timeline ----
@@ -2033,57 +2104,93 @@ impl EditTest {
 }
 
 #[gpui_kit::test]
-fn opening_the_diff_runs_the_dry_run_without_ctrl_s(cx: &mut TestAppContext) {
-    let t = edit_test("edit-diff-opens", cx);
+fn restoring_the_base_text_after_a_dry_run_leaves_the_diff_empty(cx: &mut TestAppContext) {
+    let t = edit_test("edit-diff-restore", cx);
     t.open(cx);
     t.change("replicas: 3", "replicas: 5", cx);
-    assert!(t.puts().is_empty());
-    t.show_tab(EditTab::Diff, cx);
+    t.dry_run(cx);
     t.wait_for_preview(cx);
-    let dry_runs = t.puts();
-    assert_eq!(dry_runs.len(), 1, "{dry_runs:?}");
-    assert!(dry_runs[0].has_query("dryRun", "All"));
     assert!(t.is_passed(cx));
-    assert_eq!(t.with_view(cx, |view| view.tab()), EditTab::Diff);
+    let base = t.base_text(cx);
+    t.set_text(&base, cx);
+    t.show_tab(EditTab::Diff, cx);
+    t.wait_for_local_diff(cx);
+    assert_eq!(t.local_rows(cx), Some(Ok(Vec::new())));
+    assert_eq!(t.apply_reason(cx), Some("No changes"));
+    // The old change list does not outlive the text it was for.
+    t.t.fixture.draw_twice(cx);
 }
 
 #[gpui_kit::test]
-fn the_diff_asks_again_only_for_a_text_no_check_covers(cx: &mut TestAppContext) {
-    let t = edit_test("edit-diff-once", cx);
-    t.open(cx);
-    // An unchanged text has nothing to check.
-    t.show_tab(EditTab::Diff, cx);
-    assert!(t.puts().is_empty());
-    t.change("replicas: 3", "replicas: 5", cx);
-    t.show_tab(EditTab::Diff, cx);
-    t.wait_for_preview(cx);
-    // Back and forth over the same text: the passed check stands.
-    t.show_tab(EditTab::Editor, cx);
-    t.show_tab(EditTab::Diff, cx);
-    t.wait_for_preview(cx);
-    assert_eq!(t.puts().len(), 1);
-    // A new text is a new question.
-    t.change("replicas: 5", "replicas: 6", cx);
-    t.show_tab(EditTab::Editor, cx);
-    t.show_tab(EditTab::Diff, cx);
-    t.wait_for_preview(cx);
-    assert_eq!(t.puts().len(), 2);
-}
-
-#[gpui_kit::test]
-fn ctrl_s_after_the_diff_opened_goes_straight_to_the_confirm(cx: &mut TestAppContext) {
-    let t = edit_test("edit-diff-then-confirm", cx);
+fn showing_the_diff_never_sends_a_request(cx: &mut TestAppContext) {
+    let t = edit_test("edit-diff-local", cx);
     t.open(cx);
     t.change("replicas: 3", "replicas: 5", cx);
     t.show_tab(EditTab::Diff, cx);
-    t.wait_for_preview(cx);
-    assert!(!t.t.has_dialog(cx));
-    t.t.fixture.press("ctrl-s", cx);
+    t.wait_for_local_diff(cx);
     cx.run_until_parked();
-    assert!(t.t.has_dialog(cx), "the one Ctrl S opens the confirm");
-    t.t.wait_for_dry_run(cx);
-    // The editor's check and the dialog's own.
-    assert_eq!(t.puts().len(), 2);
+    assert!(t.puts().is_empty());
+    let Some(Ok(rows)) = t.local_rows(cx) else {
+        panic!("expected rows");
+    };
+    assert!(
+        rows.iter()
+            .any(|row| row.kind == DiffRowKind::Added && row.text.contains("replicas: 5")),
+        "{rows:?}"
+    );
+    assert!(rows.iter().all(|row| !row.text.contains("s3cr3t-env")));
+    assert!(t.with_view(cx, |view| matches!(
+        view.preview_state(),
+        PreviewState::NotChecked
+    )));
+    t.t.fixture.draw_twice(cx);
+}
+
+#[gpui_kit::test]
+fn a_format_only_difference_shows_no_changes(cx: &mut TestAppContext) {
+    let t = edit_test("edit-diff-format", cx);
+    t.open(cx);
+    // The same object with blank lines and the header comment dropped.
+    let text = t
+        .base_text(cx)
+        .lines()
+        .filter(|line| !line.starts_with('#'))
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    t.set_text(&text, cx);
+    assert!(t.with_view(cx, |view| view.is_dirty()));
+    t.show_tab(EditTab::Diff, cx);
+    t.wait_for_local_diff(cx);
+    assert_eq!(t.local_rows(cx), Some(Ok(Vec::new())));
+}
+
+#[gpui_kit::test]
+fn a_parse_error_shows_in_the_diff_tab(cx: &mut TestAppContext) {
+    let t = edit_test("edit-diff-error", cx);
+    t.open(cx);
+    t.set_text("a: [", cx);
+    t.show_tab(EditTab::Diff, cx);
+    t.wait_for_local_diff(cx);
+    let Some(Err(message)) = t.local_rows(cx) else {
+        panic!("expected an error");
+    };
+    assert!(message.starts_with("YAML error at line"), "{message}");
+    assert!(t.puts().is_empty());
+    t.t.fixture.draw_twice(cx);
+}
+
+#[gpui_kit::test]
+fn the_diff_follows_the_text_while_it_is_shown(cx: &mut TestAppContext) {
+    let t = edit_test("edit-diff-follows", cx);
+    t.open(cx);
+    t.change("replicas: 3", "replicas: 5", cx);
+    t.show_tab(EditTab::Diff, cx);
+    t.wait_for_local_diff(cx);
+    assert!(matches!(t.local_rows(cx), Some(Ok(rows)) if !rows.is_empty()));
+    let base = t.base_text(cx);
+    t.set_text(&base, cx);
+    t.wait_for_local_diff(cx);
+    assert_eq!(t.local_rows(cx), Some(Ok(Vec::new())));
 }
 
 #[gpui_kit::test]
@@ -2096,7 +2203,7 @@ fn the_confirm_lists_old_and_new_for_each_scalar_and_the_helm_warning(cx: &mut T
     t.open(cx);
     t.change("replicas: 3", "replicas: 5", cx);
     t.change("image: api:1", "image: api:2", cx);
-    t.apply(cx);
+    t.dry_run(cx);
     t.wait_for_preview(cx);
     t.apply(cx);
     cx.run_until_parked();
@@ -2124,17 +2231,18 @@ fn apply_is_off_after_a_secret_value_is_refused_and_on_again_after_an_edit(
     let t = edit_test("edit-secret-refused", cx);
     t.open(cx);
     t.change("replicas: 3", "replicas: 5", cx);
-    assert_eq!(t.with_view(cx, YamlEditView::apply_block_reason), None);
+    assert_eq!(t.apply_reason(cx), Some("Run the dry-run first"));
     t.view(cx)
         .update(cx, |view, _| view.refuse_secret_values_for_test());
-    assert_eq!(
-        t.with_view(cx, YamlEditView::apply_block_reason),
-        Some("Secret values are changed with Edit values")
-    );
-    // Apply sends nothing while the refusal stands.
+    let reason = Some("Secret values are changed with Edit values");
+    assert_eq!(t.apply_reason(cx), reason);
+    assert_eq!(t.with_view(cx, YamlEditView::dry_run_block_reason), reason);
+    // Neither button sends anything while the refusal stands.
+    t.dry_run(cx);
     t.apply(cx);
     assert!(!t.is_passed(cx));
+    assert!(t.puts().is_empty());
     // Any change of the text is a new text: the refusal belonged to the old one.
     t.change("replicas: 5", "replicas: 6", cx);
-    assert_eq!(t.with_view(cx, YamlEditView::apply_block_reason), None);
+    assert_eq!(t.apply_reason(cx), Some("Run the dry-run first"));
 }

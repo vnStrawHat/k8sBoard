@@ -1169,8 +1169,7 @@ impl ClusterConnection {
                 let response =
                     serde_json::to_value(&response).map_err(|_| self.unusable_object(mode))?;
                 let preview =
-                    build_preview(edit, replacement.fresh, response, &replacement.restored)
-                        .map_err(|message| self.unusable_response(mode, message))?;
+                    build_preview(edit, replacement.fresh, response, &replacement.restored);
                 Ok(Answer {
                     effect: WriteEffect::Replaced(preview),
                     created_name: None,

@@ -1,6 +1,6 @@
 # 0059 — Edit YAML: local Diff, Dry-run button
 
-Status: **draft 2026-10-08** against main `80a6b5a`. Amends [0031](../0031-edit-yaml/README.md) (Edit YAML, W10) and supersedes its "Diff opens with its check" (O16). User request: "When I edit and then restore the original value, Diff vs cluster still shows a change. I want the diff to show only the actual diff. The dry-run becomes a separate button and runs only when the user clicks it." Crates: `crates/app` (view), `crates/cluster` (deletion only). No new Kubernetes call, no new dependency.
+Status: **built 2026-10-08** against main `80a6b5a`. Amends [0031](../0031-edit-yaml/README.md) (Edit YAML, W10) and supersedes its "Diff opens with its check" (O16). User request: "When I edit and then restore the original value, Diff vs cluster still shows a change. I want the diff to show only the actual diff. The dry-run becomes a separate button and runs only when the user clicks it." Crates: `crates/app` (view), `crates/cluster` (deletion only). No new Kubernetes call, no new dependency.
 
 **Root cause (verified):** `PreviewState::Passed` keeps the rows of the last dry-run; `refresh_dirty` never drops them, and `render_diff` lists the rows of any `Passed` preview whatever its `for_text`. The footer says `Changed since the last check`, the Diff tab still shows the old rows. `show_tab(Diff)` also sends a dry-run by itself.
 
@@ -38,6 +38,7 @@ Rationale and edge cases: [decisions.md](decisions.md).
 | [view-design.md](view-design.md) | `LocalDiff` state, button reasons, render rules, flows table |
 | [files-to-touch.md](files-to-touch.md) | per file: functions to change, add, delete |
 | [test-plan.md](test-plan.md) | new, changed, and deleted tests |
+| [as-built.md](as-built.md) | deviations found while building |
 
 ## Acceptance criteria
 

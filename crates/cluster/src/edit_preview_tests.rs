@@ -199,23 +199,32 @@ fn edit_of(base: &EditBase, from: &str, to: &str) -> ObjectEdit {
 fn preview_of(fresh: &Value, edit: &ObjectEdit) -> EditPreview {
     let mut body = edit.edited().clone();
     let restored = edit_placeholders::restore(&mut body, fresh).expect("restores");
-    build_preview(edit, fresh.clone(), body, &restored).expect("a preview")
+    build_preview(edit, fresh.clone(), body, &restored)
 }
 
 #[tokio::test]
-async fn preview_masks_both_sides() {
+async fn preview_changes_are_masked() {
     let fresh = deployment();
     let base = base_of(ObjectKind::Deployment, "api", fresh.clone()).await;
     let edit = edit_of(&base, "value: <hidden>", "value: replaced-literal");
     let preview = preview_of(&fresh, &edit);
-    for text in [&preview.before, &preview.after] {
+    for side in preview
+        .changes
+        .iter()
+        .flat_map(|change| [&change.old, &change.new])
+    {
+        let text = side.as_deref().unwrap_or_default();
         assert!(!text.contains("s3cr3t-env"), "{text}");
         assert!(!text.contains("replaced-literal"), "{text}");
-        assert!(!text.starts_with('#'), "{text}");
     }
-    assert!(preview.after.contains("<hidden, changed>"));
-    assert!(preview.before.contains("value: <hidden>"));
-    assert!(!preview.after.contains("status"));
+    assert!(
+        preview
+            .changes
+            .iter()
+            .any(|change| change.new.as_deref() == Some("<hidden, changed>")),
+        "{:?}",
+        preview.changes
+    );
 }
 
 #[tokio::test]
@@ -307,9 +316,12 @@ async fn moved_placeholders_are_marked_and_checked() {
         .expect("an applicable edit");
     let preview = preview_of(&fresh, &edit);
     assert!(
-        preview.after.contains("<hidden, moved>"),
-        "{}",
-        preview.after
+        preview
+            .changes
+            .iter()
+            .any(|change| change.new.as_deref() == Some("<hidden, moved>")),
+        "{:?}",
+        preview.changes
     );
     let moved = preview
         .checks
@@ -337,8 +349,6 @@ async fn leading_zero_lines_become_checks() {
 #[test]
 fn debug_shows_counts_only() {
     let preview = EditPreview {
-        before: "before-distinctive".to_owned(),
-        after: "after-distinctive".to_owned(),
         changes: Vec::new(),
         more_changes: 2,
         checks: vec![EditCheck::StaleLastApplied],
@@ -385,7 +395,7 @@ async fn preview_daemon_set_demand_reads_status() {
     let restored = edit_placeholders::restore(&mut body, &fresh).expect("restores");
     // The dry-run answer keeps the status, which `build_preview` strips after reading it.
     body["status"] = fresh["status"].clone();
-    let preview = build_preview(&edit, fresh, body, &restored).expect("a preview");
+    let preview = build_preview(&edit, fresh, body, &restored);
     let demand = preview.demand.expect("the CPU request changed");
     assert_eq!((demand.before.pods, demand.after.pods), (4, 4));
     assert_eq!(
