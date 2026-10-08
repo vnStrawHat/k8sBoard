@@ -13,6 +13,8 @@ The main session is the orchestrator. It only orchestrates (assigns work, relays
 7. `advisor` reviews the diff against the spec and `docs/agents/code-style/` (README.md + all files).
 8. Orchestrator reports to the user.
 
+Releases: see [release.md](../release.md).
+
 Deviations from the spec go back to the architect (or the orchestrator), never silently into code.
 
 ## Agents

@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+# No toolchain action: rust-toolchain.toml pins 1.96.0 with rustfmt and clippy, and rustup (preinstalled
+# on every runner) installs it on the first cargo call.
+jobs:
+  gate:
+    name: gate (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-22.04, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      # Linux has never been built: adjust this package list when the first Linux run fails.
+      - name: Install Linux system libraries
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libx11-xcb-dev libxcb1-dev libfontconfig1-dev libssl-dev libasound2-dev pkg-config cmake clang mesa-vulkan-drivers libvulkan1
+
+      - uses: Swatinem/rust-cache@v2
+
+      # Formatting does not depend on the platform, so it runs once.
+      - name: Format
+        if: runner.os == 'Linux'
+        run: cargo fmt --all -- --check
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Clippy (screenshot feature)
+        run: cargo clippy -p k8sboard --all-targets --features screenshot -- -D warnings
+
+      - name: Test
+        run: cargo test --workspace --no-fail-fast

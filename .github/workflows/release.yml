@@ -1,0 +1,98 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+# No toolchain action: rust-toolchain.toml pins 1.96.0, and rustup (preinstalled on every runner)
+# installs it on the first cargo call.
+jobs:
+  check-version:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Tag must equal the workspace version
+        run: |
+          version=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name=="k8sboard") | .version')
+          if [ "${GITHUB_REF_NAME#v}" != "$version" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match the workspace version $version"
+            exit 1
+          fi
+
+  build:
+    name: build (${{ matrix.name }})
+    needs: check-version
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: windows-x86_64, os: windows-latest, target: x86_64-pc-windows-msvc }
+          - { name: macos-aarch64, os: macos-latest, target: aarch64-apple-darwin }
+          - { name: linux-x86_64, os: ubuntu-22.04, target: x86_64-unknown-linux-gnu }
+    steps:
+      - uses: actions/checkout@v4
+
+      # Linux has never been built: keep in sync with ci.yml and adjust when the first Linux run fails.
+      - name: Install Linux system libraries
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libx11-xcb-dev libxcb1-dev libfontconfig1-dev libssl-dev libasound2-dev pkg-config cmake clang mesa-vulkan-drivers libvulkan1
+
+      - uses: Swatinem/rust-cache@v2
+
+      # Default features only: `screenshot` and `lab-writes` are dev-only and must never ship.
+      - name: Build
+        run: cargo build --release -p k8sboard --locked --target ${{ matrix.target }}
+
+      # Archives hold the binary and the Lilex licence (plus LICENSE once the repo has one).
+      # macOS ships the bare binary; there is no .app bundle yet.
+      - name: Package
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          bin="target/${{ matrix.target }}/release/k8sboard"
+          [ "$RUNNER_OS" = "Windows" ] && bin="$bin.exe"
+          mkdir -p stage/third-party dist
+          cp "$bin" stage/
+          cp crates/app/fonts/OFL.txt stage/third-party/Lilex-OFL.txt
+          [ -f LICENSE ] && cp LICENSE stage/
+          name="k8sboard-${VERSION}-${{ matrix.name }}"
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            pwsh -NoProfile -Command "Compress-Archive -Path stage/* -DestinationPath dist/$name.zip"
+          else
+            tar -czf "dist/$name.tar.gz" -C stage .
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: k8sboard-${{ matrix.name }}
+          path: dist/*
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Create the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd dist
+          sha256sum k8sboard-* > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --verify-tag --draft --generate-notes \
+            --title "k8sBoard $GITHUB_REF_NAME" k8sboard-* SHA256SUMS.txt
