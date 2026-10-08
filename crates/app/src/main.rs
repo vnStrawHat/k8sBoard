@@ -310,7 +310,9 @@ fn run(
             let saved = AppSettings::get(cx);
             let theme = options.theme.unwrap_or(saved.theme);
             let colors = options.color_theme.unwrap_or(saved.appearance.color_theme);
+            let font_size = saved.appearance.font_size();
             theme.apply(colors, cx);
+            bundled_fonts::apply_font_size(font_size, cx);
             cx.set_global(ClusterRuntime::new(handle));
             let chain = kubeconfig_chain(
                 options.kubeconfig.clone(),

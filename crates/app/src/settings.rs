@@ -76,13 +76,38 @@ impl Default for GeneralSettings {
     }
 }
 
-/// The `appearance` section: the colour theme and the row density; the Mode dropdown (`theme`)
-/// is separate.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+/// The `appearance` section: the colour theme, the row density and the interface font size; the
+/// Mode dropdown (`theme`) is separate.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub(crate) struct AppearanceSettings {
     pub(crate) density: RowDensity,
     pub(crate) color_theme: ColorTheme,
+    /// The base size in px of the whole interface (the kit's rem size).
+    pub(crate) font_size: u8,
+}
+
+impl Default for AppearanceSettings {
+    fn default() -> Self {
+        Self {
+            density: RowDensity::default(),
+            color_theme: ColorTheme::default(),
+            font_size: DEFAULT_UI_FONT_SIZE,
+        }
+    }
+}
+
+/// The kit's own base size.
+const DEFAULT_UI_FONT_SIZE: u8 = 16;
+const UI_FONT_SIZE_RANGE: (u8, u8) = (13, 18);
+
+impl AppearanceSettings {
+    /// The size the theme gets; a hand-edited value is clamped to the offered range so it can
+    /// never make the interface unreadable.
+    pub(crate) fn font_size(&self) -> u8 {
+        self.font_size
+            .clamp(UI_FONT_SIZE_RANGE.0, UI_FONT_SIZE_RANGE.1)
+    }
 }
 
 /// The height of a table row, header included (the wireframe Tokens page).
@@ -263,6 +288,18 @@ pub(crate) const DENSITY_OPTIONS: OptionTable<RowDensity> = OptionTable {
         (RowDensity::Comfortable, "Comfortable (36 px)"),
     ],
     default: RowDensity::Compact,
+};
+
+pub(crate) const UI_FONT_SIZE_OPTIONS: OptionTable<u8> = OptionTable {
+    options: &[
+        (13, "13 px"),
+        (14, "14 px"),
+        (15, "15 px"),
+        (DEFAULT_UI_FONT_SIZE, "16 px (default)"),
+        (17, "17 px"),
+        (18, "18 px"),
+    ],
+    default: DEFAULT_UI_FONT_SIZE,
 };
 
 /// Serializes a section only when it differs from its default, so an untouched file stays minimal.

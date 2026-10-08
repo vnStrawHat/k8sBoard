@@ -708,3 +708,19 @@ fn tier_rows_list_custom_environments() {
     assert_eq!(rows[0].environments, "Production, DR");
     assert_eq!(rows[1].environments, "Staging, Development, Local, QA");
 }
+
+#[gpui_kit::test]
+fn changing_the_font_size_saves_and_applies(cx: &mut TestAppContext) {
+    install(None, &[], cx);
+    cx.update(|cx| {
+        assert_eq!(Theme::global(cx).font_size, gpui_kit::px(16.));
+        change_font_size("18 px", cx);
+        assert_eq!(AppSettings::get(cx).appearance.font_size, 18);
+        assert_eq!(Theme::global(cx).font_size, gpui_kit::px(18.));
+        change_theme("Dark", cx);
+        assert_eq!(Theme::global(cx).font_size, gpui_kit::px(18.));
+        change_font_size("16 px (default)", cx);
+        assert_eq!(AppSettings::get(cx).appearance.font_size, 16);
+        assert_eq!(Theme::global(cx).font_size, gpui_kit::px(16.));
+    });
+}

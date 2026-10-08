@@ -35,6 +35,7 @@ All fields bind `AppSettings::get` / `AppSettings::update` (0025 rule). Dropdown
 | Item | Control | Effect |
 |---|---|---|
 | Row density | dropdown `Compact (28 px)`, `Comfortable (36 px)` | every `DataTable` gets `.with_size(Size::Size(px(density.row_height())))`; live |
+| Font size | dropdown `13` to `18 px` (default 16), after Row density | `appearance.font_size` (`u8`, clamped 13..=18) sets `theme.font_size` (the kit rem size) and `theme.mono_font_size` = size - 3 on load and on change; every window follows at once |
 
 ```rust
 impl RowDensity { pub(crate) fn row_height(self) -> f32 } // Compact 28., Comfortable 36.

@@ -5,8 +5,8 @@
 
 use std::borrow::Cow;
 
-use gpui_kit::App;
 use gpui_kit::component::Theme;
+use gpui_kit::{App, px};
 
 const FAMILY: &str = "Lilex";
 
@@ -34,6 +34,18 @@ pub(crate) fn init_with_bundled_fonts(cx: &mut App) {
         });
     }
 }
+
+/// Sets the base size of the whole interface; the kit root reads `theme.font_size` as the rem
+/// size every frame, so every window follows at once. Monospace text (the terminal) keeps its
+/// 3 px offset from the UI size (13 px at the default 16 px) and grows with it.
+pub(crate) fn apply_font_size(size: u8, cx: &mut App) {
+    Theme::update(cx, |theme| {
+        theme.font_size = px(f32::from(size));
+        theme.mono_font_size = px(f32::from(size) - MONO_SIZE_OFFSET);
+    });
+}
+
+const MONO_SIZE_OFFSET: f32 = 3.;
 
 #[cfg(test)]
 #[path = "bundled_fonts_tests.rs"]

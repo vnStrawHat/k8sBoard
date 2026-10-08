@@ -101,6 +101,7 @@ fn full_settings() -> Settings {
         appearance: AppearanceSettings {
             density: RowDensity::Comfortable,
             color_theme: ColorTheme::ZedOne,
+            font_size: 18,
         },
         tables: BTreeMap::from([(
             "pods".to_owned(),
@@ -196,6 +197,7 @@ fn settings_keys_are_the_allow_list() {
             "appearance",
             "appearance.color_theme",
             "appearance.density",
+            "appearance.font_size",
             "dock",
             "dock.height",
             "general",
@@ -582,6 +584,29 @@ fn unknown_color_theme_loads_as_zed_one() {
 }
 
 #[test]
+fn a_file_without_the_font_size_gets_16() {
+    let settings: Settings =
+        serde_json::from_value(json!({ "version": 1, "appearance": { "density": "comfortable" } }))
+            .expect("parses");
+    assert_eq!(settings.appearance.font_size, 16);
+    assert_eq!(Settings::default().appearance.font_size, 16);
+}
+
+#[test]
+fn the_font_size_round_trips_and_a_hand_edit_is_clamped() {
+    let mut settings = Settings::default();
+    settings.appearance.font_size = 14;
+    let value = serde_json::to_value(&settings).expect("serializes");
+    let loaded: Settings = serde_json::from_value(value).expect("parses");
+    assert_eq!(loaded.appearance.font_size, 14);
+    assert_eq!(loaded.appearance.font_size(), 14);
+    for (edited, shown) in [(2, 13), (200, 18)] {
+        settings.appearance.font_size = edited;
+        assert_eq!(settings.appearance.font_size(), shown);
+    }
+}
+
+#[test]
 fn old_cluster_color_is_ignored() {
     let value = json!({
         "version": 1,
@@ -648,6 +673,7 @@ fn option_labels_round_trip() {
     );
     assert_table(&TAIL_OPTIONS, &[100, 500, 1_000, 5_000, 10_000], 1_000);
     assert_table(&SCROLLBACK_OPTIONS, &[1_000, 5_000, 10_000], 5_000);
+    assert_table(&UI_FONT_SIZE_OPTIONS, &[13, 14, 15, 16, 17, 18], 16);
     assert_table(
         &FONT_SIZE_OPTIONS,
         &[None, Some(12), Some(13), Some(14), Some(16), Some(18)],

@@ -20,6 +20,7 @@ use gpui_kit::{
 
 use crate::active_session::ActiveConnection;
 use crate::audit_log::audit_path;
+use crate::bundled_fonts;
 use crate::cluster_catalog::CatalogHandle;
 use crate::cluster_form::MoveStep;
 use crate::cluster_registry::ClusterRef;
@@ -28,8 +29,8 @@ use crate::environment::{CustomEnvironment, EnvironmentTier, usable_environments
 use crate::environments_page::EnvironmentsPage;
 use crate::settings::{
     AppSettings, COLOR_THEME_OPTIONS, DENSITY_OPTIONS, FONT_SIZE_OPTIONS, OptionTable,
-    SCROLLBACK_OPTIONS, SHELL_OPTIONS, Settings as SettingsData, TAIL_OPTIONS, theme_choices,
-    theme_from_label, theme_label,
+    SCROLLBACK_OPTIONS, SHELL_OPTIONS, Settings as SettingsData, TAIL_OPTIONS,
+    UI_FONT_SIZE_OPTIONS, theme_choices, theme_from_label, theme_label,
 };
 use crate::shortcut_sheet::shortcut_sheet;
 use crate::usage_format::group_digits;
@@ -643,6 +644,13 @@ fn change_color_theme(label: &str, cx: &mut App) {
     AppSettings::get(cx).theme.apply(colors, cx);
 }
 
+/// The Font size dropdown: saves the size and applies it to every window now.
+fn change_font_size(label: &str, cx: &mut App) {
+    let size = UI_FONT_SIZE_OPTIONS.value(label);
+    AppSettings::update(cx, |settings| settings.appearance.font_size = size);
+    bundled_fonts::apply_font_size(AppSettings::get(cx).appearance.font_size(), cx);
+}
+
 fn appearance_page() -> SettingPage {
     let colors = SettingField::dropdown(
         COLOR_THEME_OPTIONS.choices(),
@@ -669,6 +677,19 @@ fn appearance_page() -> SettingPage {
         |settings, density| settings.appearance.density = density,
         |_| "Compact (28 px)".to_owned(),
     );
+    let font_size = SettingField::dropdown(
+        UI_FONT_SIZE_OPTIONS.choices(),
+        |cx| {
+            let size = AppSettings::get(cx).appearance.font_size;
+            UI_FONT_SIZE_OPTIONS.label(size, || format!("{size} px"))
+        },
+        |label, cx| change_font_size(&label, cx),
+    )
+    .default_value(
+        UI_FONT_SIZE_OPTIONS.label(SettingsData::default().appearance.font_size, || {
+            "16 px (default)".to_owned()
+        }),
+    );
     SettingPage::new(SettingsPage::Appearance.title())
         .group(
             SettingGroup::new()
@@ -694,6 +715,12 @@ fn appearance_page() -> SettingPage {
                 SettingItem::new("Row density", density).description(
                     "The height of every table row, header included. Applies at once.",
                 ),
+            ),
+        )
+        .group(
+            SettingGroup::new().title("Interface").item(
+                SettingItem::new("Font size", font_size)
+                    .description("Applies to the whole interface at once."),
             ),
         )
 }
