@@ -2684,14 +2684,6 @@ impl AppShell {
         });
     }
 
-    /// A link inside the open drawer (the node drawer's `Pods (N)`): shows its Overview scrolled to
-    /// the section titled `title`, on the next paint.
-    pub(crate) fn scroll_drawer_to_section(&mut self, title: &'static str, cx: &mut Context<Self>) {
-        self.drawer.tab = DrawerTab::Overview;
-        self.drawer.reveal_section.set(Some(title));
-        cx.notify();
-    }
-
     /// Opens the drawer of `key` on the Values tab for `revision`, in `layout`. The key is revealed
     /// first when it is not the selection; a vanished row clears the selection, and then nothing
     /// opens. The layout waits for the view of its revision (`sync_helm_view`).

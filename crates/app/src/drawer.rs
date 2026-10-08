@@ -332,6 +332,8 @@ pub(crate) enum ContainerTab {
 pub(crate) enum DrawerTab {
     Overview,
     Containers,
+    /// A node drawer's pods.
+    Pods,
     Monitor,
     Yaml,
     Events,
@@ -369,11 +371,17 @@ pub(crate) fn drawer_tabs(key: &ResourceKey) -> &'static [DrawerTab] {
         } => &[DrawerTab::Overview],
         ResourceKey::Node { .. } if has_yaml => &[
             DrawerTab::Overview,
+            DrawerTab::Pods,
             DrawerTab::Monitor,
             DrawerTab::Yaml,
             DrawerTab::Events,
         ],
-        ResourceKey::Node { .. } => &[DrawerTab::Overview, DrawerTab::Monitor, DrawerTab::Events],
+        ResourceKey::Node { .. } => &[
+            DrawerTab::Overview,
+            DrawerTab::Pods,
+            DrawerTab::Monitor,
+            DrawerTab::Events,
+        ],
         // A release has no YAML (the Secret is a masked blob) and no events of its own; its Helm
         // tabs show the values, manifest, and notes.
         ResourceKey::Kind {
@@ -410,18 +418,28 @@ pub(crate) fn shown_tab(tabs: &[DrawerTab], tab: DrawerTab) -> DrawerTab {
     }
 }
 
-/// The label of each tab. `containers` is the pod's container count, which only a pod drawer
-/// has a Containers tab for.
+/// The counts in the tab titles: containers for a pod drawer's Containers tab, pods for a node
+/// drawer's Pods tab (`None` without a live cluster).
+#[derive(Clone, Copy, Default)]
+pub(crate) struct TabCounts {
+    pub(crate) containers: usize,
+    pub(crate) pods: Option<usize>,
+}
+
+/// The label of each tab.
 pub(crate) fn tab_titles(
     tabs: &[DrawerTab],
-    containers: usize,
+    counts: TabCounts,
     events: Option<&LiveList<EventSummary>>,
 ) -> Vec<(DrawerTab, SharedString)> {
     tabs.iter()
         .map(|&tab| {
             let title = match tab {
                 DrawerTab::Overview => "Overview".to_owned(),
-                DrawerTab::Containers => format!("Containers {containers}"),
+                DrawerTab::Containers => format!("Containers {}", counts.containers),
+                DrawerTab::Pods => counts
+                    .pods
+                    .map_or_else(|| "Pods".to_owned(), |pods| format!("Pods {pods}")),
                 DrawerTab::Monitor => "Monitor".to_owned(),
                 DrawerTab::Yaml => "YAML".to_owned(),
                 DrawerTab::Events => events_title(events),
@@ -1330,7 +1348,16 @@ mod tests {
                 DrawerTab::Events
             ]
         );
-        assert_eq!(drawer_tabs(&node), with_monitor);
+        assert_eq!(
+            drawer_tabs(&node),
+            [
+                DrawerTab::Overview,
+                DrawerTab::Pods,
+                DrawerTab::Monitor,
+                DrawerTab::Yaml,
+                DrawerTab::Events
+            ]
+        );
         assert_eq!(drawer_tabs(&kind(ResourceKind::Deployments)), with_monitor);
         assert_eq!(drawer_tabs(&kind(ResourceKind::Jobs)), with_monitor);
         // ConfigMaps and CronJobs have no pods to monitor.
@@ -1390,11 +1417,38 @@ mod tests {
             DrawerTab::Yaml,
             DrawerTab::Events,
         ];
-        let titles: Vec<String> = tab_titles(&tabs, 3, None)
+        let titles: Vec<String> = tab_titles(
+            &tabs,
+            TabCounts {
+                containers: 3,
+                pods: None,
+            },
+            None,
+        )
+        .into_iter()
+        .map(|(_, title)| title.to_string())
+        .collect();
+        assert_eq!(titles, ["Overview", "Containers 3", "YAML", "Events"]);
+    }
+
+    #[test]
+    fn tab_titles_count_pods_only_with_a_live_cluster() {
+        let tabs = [DrawerTab::Overview, DrawerTab::Pods];
+        let titles = |pods| -> Vec<String> {
+            tab_titles(
+                &tabs,
+                TabCounts {
+                    containers: 0,
+                    pods,
+                },
+                None,
+            )
             .into_iter()
             .map(|(_, title)| title.to_string())
-            .collect();
-        assert_eq!(titles, ["Overview", "Containers 3", "YAML", "Events"]);
+            .collect()
+        };
+        assert_eq!(titles(Some(23)), ["Overview", "Pods 23"]);
+        assert_eq!(titles(None), ["Overview", "Pods"]);
     }
 
     #[test]

@@ -7,8 +7,7 @@ use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{ActiveTheme as _, Sizable as _, h_flex, v_flex};
 use gpui_kit::{
     AnyElement, App, Context, Entity, InteractiveElement as _, IntoElement, ParentElement as _,
-    SharedString, StatefulInteractiveElement as _, Styled as _, WeakEntity, div,
-    prelude::FluentBuilder as _, relative,
+    SharedString, StatefulInteractiveElement as _, Styled as _, WeakEntity, div, relative,
 };
 
 use crate::age::format_age;
@@ -16,18 +15,15 @@ use crate::app_shell::AppShell;
 use crate::clipboard_copy::copyable_mono;
 use crate::cluster_metrics::FeedStatus;
 use crate::cluster_session::{ClusterSession, LiveCluster};
-use crate::container_detail::resource_label;
 use crate::drawer::{
-    DrawerBody, DrawerHeader, DrawerNavigation, DrawerSize, DrawerState, DrawerTab,
-    WIDE_LABEL_WIDTH, absent_text, chips, created_text, drawer_frame, drawer_tab_bar, drawer_tabs,
+    DrawerBody, DrawerHeader, DrawerNavigation, DrawerSize, DrawerState, DrawerTab, TabCounts,
+    absent_text, chips, created_text, drawer_frame, drawer_tab_bar, drawer_tabs,
     first_section_title, menu_button, section_title, shown_tab, tab_titles, truncated_text,
     value_or_absent, wide_detail_row, yaml_body,
 };
 use crate::kind_row::{KindObject, PodOwner};
 use crate::monitor_tab::{MonitorView, monitor_tab};
-use crate::node_usage::{
-    node_allocatable, node_pod_count, node_pod_limit, node_quantity_text, node_requests,
-};
+use crate::node_usage::{node_allocatable, node_pod_count, node_pod_limit, node_requests};
 use crate::object_events::{event_subject, recent_events};
 use crate::related_pods::pods_section;
 use crate::resource_actions::node_menu;
@@ -75,26 +71,40 @@ pub(crate) fn node_drawer(
             None => div().into_any_element(),
         }),
         DrawerTab::Yaml => yaml_body(state),
+        DrawerTab::Pods => DrawerBody::Scrolling(match session.read(cx).live() {
+            Some(live) => pods_section(
+                &PodOwner::Node {
+                    name: node.name.clone(),
+                },
+                &KindObject::Plain,
+                live,
+                cx,
+            ),
+            None => div().into_any_element(),
+        }),
         // A node drawer has no Helm tabs, so `shown_tab` never yields them.
         DrawerTab::Overview
         | DrawerTab::Containers
         | DrawerTab::Values
         | DrawerTab::Manifest
-        | DrawerTab::Notes => {
-            let Overview { items, pods_at } = overview(node, session.read(cx).live(), now, cx);
-            // The Pods link asked to see the section, once: the scroll handle moves the box on the
-            // paint this frame ends with.
-            let wanted = state.reveal_section.take();
-            if let (Some(PODS_SECTION), Some(at)) = (wanted, pods_at) {
-                state.scroll.scroll_to_top_of_item(at);
-            }
-            DrawerBody::Sections {
-                sections: items,
-                scroll: state.scroll.clone(),
-            }
-        }
+        | DrawerTab::Notes => DrawerBody::Scrolling(
+            v_flex()
+                .children(overview(node, session.read(cx).live(), now, cx))
+                .into_any_element(),
+        ),
     };
-    let tab_bar = drawer_tab_bar(tab_titles(tabs, 0, events), shown, cx);
+    let tab_bar = drawer_tab_bar(
+        tab_titles(
+            tabs,
+            TabCounts {
+                containers: 0,
+                pods: pod_count,
+            },
+            events,
+        ),
+        shown,
+        cx,
+    );
     drawer_frame(
         header,
         tab_bar,
@@ -106,8 +116,7 @@ pub(crate) fn node_drawer(
     .into_any_element()
 }
 
-/// The status, the age, and a `Pods (N)` link to the Pods section: the section sits far below the
-/// fold of a node with many conditions and resources.
+/// The status, the age, and a `Pods (N)` link to the Pods tab.
 fn subtitle(
     node: &NodeSummary,
     pod_count: Option<usize>,
@@ -131,15 +140,15 @@ fn subtitle(
         .into_any_element()
 }
 
-/// `Pods (23)`: shows the Overview scrolled to the Pods section.
+/// `Pods (23)`: shows the Pods tab.
 fn pods_link(count: usize, cx: &Context<AppShell>) -> AnyElement {
     Button::new("node-drawer-pods")
         .ghost()
         .xsmall()
         .label(format!("Pods ({count})"))
-        .tooltip("Scroll to the pods on this node")
+        .tooltip("Show the pods on this node")
         .on_click(cx.listener(|shell, _, _, cx| {
-            shell.scroll_drawer_to_section(PODS_SECTION, cx);
+            shell.set_drawer_tab(DrawerTab::Pods, cx);
         }))
         .into_any_element()
 }
@@ -173,27 +182,17 @@ fn node_menu_button(
 }
 
 /// The title of the Pods section: the node drawer's Pods link scrolls to it.
-const PODS_SECTION: &str = "Pods";
-
-/// The Overview items, each a direct child of the scrolled box so the scroll handle can bring one to
-/// the top, and where the Pods section starts, if the node has one.
-struct Overview {
-    items: Vec<AnyElement>,
-    pods_at: Option<usize>,
-}
-
 fn overview(
     node: &NodeSummary,
     live: Option<&LiveCluster>,
     now: jiff::Timestamp,
     cx: &Context<AppShell>,
-) -> Overview {
-    let mono = cx.theme().mono_font_family.clone();
+) -> Vec<AnyElement> {
     let taints = if node.taints.is_empty() {
         absent_text(cx).into_any_element()
     } else {
         v_flex()
-            .font_family(mono.clone())
+            .font_family(cx.theme().mono_font_family.clone())
             .children(
                 node.taints
                     .iter()
@@ -223,47 +222,8 @@ fn overview(
         wide_detail_row("Roles", value_or_absent(roles.as_deref(), cx), cx).into_any_element(),
         wide_detail_row("Taints", taints, cx).into_any_element(),
         wide_detail_row("Created", value_or_absent(created.as_deref(), cx), cx).into_any_element(),
-        section_title("Labels", cx).into_any_element(),
-        chips(
-            "node-labels",
-            &node
-                .labels
-                .iter()
-                .map(|label| SharedString::from(label.clone()))
-                .collect::<Vec<_>>(),
-            cx,
-        )
-        .into_any_element(),
-        section_title("Conditions", cx).into_any_element(),
+        section_title("System info", cx).into_any_element(),
     ];
-    if node.conditions.is_empty() {
-        items.push(absent_text(cx).into_any_element());
-    }
-    for (index, condition) in node.conditions.iter().enumerate() {
-        items.push(condition_row(index, condition, now, cx));
-    }
-
-    items.push(section_title("Allocatable used", cx).into_any_element());
-    items.push(allocatable_used(node, live, cx));
-
-    // What runs here comes right after what it uses, before the node's addresses.
-    let mut pods_at = None;
-    if let Some(live) = live {
-        pods_at = Some(items.len());
-        items.push(pods_section(
-            &PodOwner::Node {
-                name: node.name.clone(),
-            },
-            &KindObject::Plain,
-            live,
-            cx,
-        ));
-    }
-
-    items.push(section_title("Addresses", cx).into_any_element());
-    if node.addresses.is_empty() {
-        items.push(absent_text(cx).into_any_element());
-    }
     for (index, address) in node.addresses.iter().enumerate() {
         items.push(
             wide_detail_row(
@@ -274,10 +234,8 @@ fn overview(
             .into_any_element(),
         );
     }
-
     let os = os_text(&node.system);
     items.extend([
-        section_title("System", cx).into_any_element(),
         wide_detail_row("OS", value_or_absent(os.as_deref(), cx), cx).into_any_element(),
         wide_detail_row(
             "Kernel",
@@ -297,39 +255,28 @@ fn overview(
             cx,
         )
         .into_any_element(),
-        section_title("Resources", cx).into_any_element(),
+        section_title("Allocatable used", cx).into_any_element(),
+        allocatable_used(node, live, cx),
+        section_title("Labels", cx).into_any_element(),
+        chips(
+            "node-labels",
+            &node
+                .labels
+                .iter()
+                .map(|label| SharedString::from(label.clone()))
+                .collect::<Vec<_>>(),
+            cx,
+        )
+        .into_any_element(),
+        section_title("Conditions", cx).into_any_element(),
     ]);
-    if node.resources.is_empty() {
+    if node.conditions.is_empty() {
         items.push(absent_text(cx).into_any_element());
-    } else {
-        items.push(resource_row(
-            ResourceRowKind::Header,
-            ResourceCells {
-                name: "Resource",
-                capacity: "Capacity",
-                allocatable: "Allocatable",
-            },
-            cx,
-        ));
     }
-    let quantity = |name: &str, value: &Option<String>| {
-        value
-            .as_deref()
-            .map_or_else(|| "—".to_owned(), |text| node_quantity_text(name, text))
-    };
-    for resource in &node.resources {
-        items.push(resource_row(
-            ResourceRowKind::Quantity,
-            ResourceCells {
-                name: &resource_label(&resource.name),
-                capacity: &quantity(&resource.name, &resource.capacity),
-                allocatable: &quantity(&resource.name, &resource.allocatable),
-            },
-            cx,
-        ));
+    for (index, condition) in node.conditions.iter().enumerate() {
+        items.push(condition_row(index, condition, now, cx));
     }
-
-    Overview { items, pods_at }
+    items
 }
 
 /// What the pods on a node request and how many there are; only known for the All scope, since
@@ -566,49 +513,6 @@ fn mono_or_absent(value: &str, id: &'static str, cx: &App) -> AnyElement {
     }
     truncated_text(id, value.to_owned())
         .font_family(cx.theme().mono_font_family.clone())
-        .into_any_element()
-}
-
-#[derive(Clone, Copy, PartialEq)]
-enum ResourceRowKind {
-    Header,
-    Quantity,
-}
-
-struct ResourceCells<'a> {
-    name: &'a str,
-    capacity: &'a str,
-    allocatable: &'a str,
-}
-
-/// The header or one row of the Resources table. Quantities are mono and shown as written.
-fn resource_row(kind: ResourceRowKind, cells: ResourceCells, cx: &App) -> AnyElement {
-    let theme = cx.theme();
-    let is_header = kind == ResourceRowKind::Header;
-    let cell = |text: &str| {
-        let cell = div().flex_1().min_w_0().truncate().child(text.to_owned());
-        if is_header {
-            cell
-        } else {
-            cell.font_family(theme.mono_font_family.clone())
-        }
-    };
-    h_flex()
-        .gap_3()
-        .py_1()
-        .text_sm()
-        .when(is_header, |this| {
-            this.text_xs().text_color(theme.muted_foreground)
-        })
-        .child(
-            div()
-                .w(WIDE_LABEL_WIDTH)
-                .flex_shrink_0()
-                .truncate()
-                .child(cells.name.to_owned()),
-        )
-        .child(cell(cells.capacity))
-        .child(cell(cells.allocatable))
         .into_any_element()
 }
 

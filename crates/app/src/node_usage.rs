@@ -5,8 +5,6 @@ use cluster::{
     ResourceUsage, StatusReason,
 };
 
-use crate::usage_format::Measure;
-
 /// Usage as a share of allocatable (1.0 is all of it). `None` without a sample, without the
 /// allocatable entry, or with zero allocatable.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -134,24 +132,6 @@ pub(crate) fn requests_of<'a>(
 
 pub(crate) fn node_pod_count(node: &str, pods: &[PodSummary]) -> usize {
     pods_on_node(node, pods).count()
-}
-
-/// A node resource quantity for reading: `cpu` in cores, memory-like resources in binary
-/// units. Anything else, or text that does not parse, stays as written.
-pub(crate) fn node_quantity_text(resource: &str, text: &str) -> String {
-    if resource == "cpu" {
-        return CpuAmount::parse(text)
-            .map_or_else(|| text.to_owned(), |cpu| Measure::Cpu.format(cpu.cores()));
-    }
-    let is_bytes =
-        matches!(resource, "memory" | "ephemeral-storage") || resource.starts_with("hugepages-");
-    if !is_bytes {
-        return text.to_owned();
-    }
-    ByteAmount::parse(text).map_or_else(
-        || text.to_owned(),
-        |bytes| Measure::Bytes.format(bytes.bytes() as f64),
-    )
 }
 
 #[cfg(test)]
@@ -321,18 +301,6 @@ mod tests {
         assert_eq!(node_pod_limit(&node(&[("pods", "110")])), Some(110));
         assert_eq!(node_pod_limit(&node(&[("pods", "lots")])), None);
         assert_eq!(node_pod_limit(&node(&[])), None);
-    }
-
-    #[test]
-    fn node_quantity_text_formats_known_resources() {
-        assert_eq!(node_quantity_text("cpu", "15800m"), "15.8 cores");
-        assert_eq!(node_quantity_text("cpu", "4"), "4 cores");
-        assert_eq!(node_quantity_text("memory", "16384256Ki"), "15.6Gi");
-        assert_eq!(node_quantity_text("ephemeral-storage", "100Gi"), "100Gi");
-        assert_eq!(node_quantity_text("hugepages-2Mi", "0"), "0B");
-        assert_eq!(node_quantity_text("pods", "110"), "110");
-        assert_eq!(node_quantity_text("example.com/gpu", "2"), "2");
-        assert_eq!(node_quantity_text("memory", "lots"), "lots");
     }
 
     #[test]

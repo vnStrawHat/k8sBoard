@@ -28,10 +28,10 @@ use crate::container_detail::{
 };
 use crate::dock::Dock;
 use crate::drawer::{
-    DrawerBody, DrawerChrome, DrawerHeader, DrawerSize, DrawerState, DrawerTab, absent_text,
-    annotations_section, chips, created_text, detail_row, drawer_frame, drawer_tab_bar,
-    drawer_tabs, first_section_title, link_text, menu_button, section_title, shown_tab, tab_titles,
-    value_or_absent, yaml_body,
+    DrawerBody, DrawerChrome, DrawerHeader, DrawerSize, DrawerState, DrawerTab, TabCounts,
+    absent_text, annotations_section, chips, created_text, detail_row, drawer_frame,
+    drawer_tab_bar, drawer_tabs, first_section_title, link_text, menu_button, section_title,
+    shown_tab, tab_titles, value_or_absent, yaml_body,
 };
 use crate::kind_join::services_selecting;
 use crate::kind_row::deployment_of_pod;
@@ -103,16 +103,18 @@ pub(crate) fn pod_drawer(
     let loaded_events = events.and_then(LiveList::ready_items);
     let body = match shown {
         // A pod drawer has no Helm tabs, so `shown_tab` never yields them.
-        DrawerTab::Overview | DrawerTab::Values | DrawerTab::Manifest | DrawerTab::Notes => {
-            DrawerBody::Scrolling(overview(
-                pod,
-                loaded_events,
-                session.read(cx).live(),
-                now,
-                state.are_annotations_open,
-                cx,
-            ))
-        }
+        DrawerTab::Overview
+        | DrawerTab::Pods
+        | DrawerTab::Values
+        | DrawerTab::Manifest
+        | DrawerTab::Notes => DrawerBody::Scrolling(overview(
+            pod,
+            loaded_events,
+            session.read(cx).live(),
+            now,
+            state.are_annotations_open,
+            cx,
+        )),
         DrawerTab::Containers => DrawerBody::Filling(containers_tab(
             pod,
             state,
@@ -129,7 +131,14 @@ pub(crate) fn pod_drawer(
         DrawerTab::Yaml => yaml_body(state),
         DrawerTab::Events => DrawerBody::Scrolling(recent_events(events, cx)),
     };
-    let titles = tab_titles(tabs, pod.containers.len(), events);
+    let titles = tab_titles(
+        tabs,
+        TabCounts {
+            containers: pod.containers.len(),
+            pods: None,
+        },
+        events,
+    );
     let tab_bar = drawer_tab_bar(titles, shown, cx);
     drawer_frame(
         header,

@@ -71,7 +71,7 @@ pub(crate) struct DrawerHeader { kind_badge: &'static str /* "Po" | "No" */, nam
 
 ## Node drawer
 
-- Spec 0008 replaces the body rows below with Overview sections (Node, Conditions, Addresses, System, Resources, Pods, Labels) and adds the YAML and Events tabs.
+- Spec 0008 replaces the body rows below with Overview sections (Node, System info, Allocatable used, Labels, Conditions) and adds the Pods, Monitor, YAML, and Events tabs.
 
 - Header: badge `No`, the node name, the status label, and `· created {age} ago`. Only ⋯ and ✕.
 - No tab bar. Body rows: Status, Roles ("—" when empty), Taints (every taint, one per line, mono; "—"), Kubelet version, Internal IP, Created (timestamp, then the age).

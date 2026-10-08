@@ -104,7 +104,11 @@ pub(crate) fn helm_subject(
         DrawerTab::Values => HelmTab::Values,
         DrawerTab::Manifest => HelmTab::Manifest,
         DrawerTab::Notes => HelmTab::Notes,
-        DrawerTab::Containers | DrawerTab::Monitor | DrawerTab::Yaml | DrawerTab::Events => {
+        DrawerTab::Containers
+        | DrawerTab::Pods
+        | DrawerTab::Monitor
+        | DrawerTab::Yaml
+        | DrawerTab::Events => {
             return None;
         }
     };

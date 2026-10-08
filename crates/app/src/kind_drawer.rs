@@ -24,10 +24,11 @@ use crate::cluster_registry::ClusterRef;
 use crate::cluster_session::{CompanionLists, CompanionSource, LiveCluster, RelatedList};
 use crate::custom_rows::{date_text, date_tone};
 use crate::drawer::{
-    DrawerBody, DrawerChrome, DrawerHeader, DrawerSize, DrawerState, DrawerTab, absent_text,
-    annotations_section, chips, created_text, drawer_frame, drawer_tab_bar, drawer_tabs,
-    first_section_title, helm_body, link_text, menu_button, open_link, port_row, section_title,
-    shown_tab, tab_titles, truncated_text, truncated_text_with_tooltip, wide_detail_row, yaml_body,
+    DrawerBody, DrawerChrome, DrawerHeader, DrawerSize, DrawerState, DrawerTab, TabCounts,
+    absent_text, annotations_section, chips, created_text, drawer_frame, drawer_tab_bar,
+    drawer_tabs, first_section_title, helm_body, link_text, menu_button, open_link, port_row,
+    section_title, shown_tab, tab_titles, truncated_text, truncated_text_with_tooltip,
+    wide_detail_row, yaml_body,
 };
 use crate::helm_release_view::HelmReleaseView;
 use crate::helm_rows::VALUES_CHANGE_TITLE;
@@ -97,7 +98,7 @@ pub(crate) fn kind_drawer(
         }),
         DrawerTab::Yaml => yaml_body(state),
         DrawerTab::Values | DrawerTab::Manifest | DrawerTab::Notes => helm_body(state),
-        DrawerTab::Overview | DrawerTab::Containers => {
+        DrawerTab::Overview | DrawerTab::Containers | DrawerTab::Pods => {
             // The Roll back buttons are gated by the cluster of the drawer's own subject.
             let roll_back = context.session.upgrade().and_then(|session| {
                 let session = session.read(cx);
@@ -145,7 +146,7 @@ pub(crate) fn kind_drawer(
             }
         }
     };
-    let tab_bar = drawer_tab_bar(tab_titles(tabs, 0, events), shown, cx);
+    let tab_bar = drawer_tab_bar(tab_titles(tabs, TabCounts::default(), events), shown, cx);
     drawer_frame(
         header,
         tab_bar,

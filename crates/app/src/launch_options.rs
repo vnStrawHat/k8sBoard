@@ -663,6 +663,7 @@ impl LaunchScreen {
             "pod-monitor-source-fixture" => Some(Self::PodMonitorSourceFixture),
             "node-monitor" => Some(Self::NodeDrawer(DrawerTab::Monitor)),
             "node-drawer" => Some(Self::NodeDrawer(DrawerTab::Overview)),
+            "node-pods" => Some(Self::NodeDrawer(DrawerTab::Pods)),
             "node-events" => Some(Self::NodeDrawer(DrawerTab::Events)),
             "pod-yaml" => Some(Self::PodDrawer(DrawerTab::Yaml)),
             "node-yaml" => Some(Self::NodeDrawer(DrawerTab::Yaml)),
