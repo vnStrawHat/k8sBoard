@@ -21,7 +21,7 @@
 | `access_check_matches_each_operation` | SSAR attributes; StorageClasses cluster-scoped |
 | `changed_fields_values` | `"3"`, `"20"`, `"150Gi"`, `"true"`/`"false"`; an unset also lists the beta annotation path with value `None` |
 | `manual_debug_shows_names_only` (extended) | no replica numbers or sizes in `{:?}` |
-| `debug_build_blocks_the_new_operations` | `WritePolicy::Blocked` → `WritesBlocked`, zero requests |
+| `blocked_policy_blocks_the_new_operations` | `WritePolicy::Blocked` → `WritesBlocked`, zero requests |
 
 `access_review` tests: `all_checks_cover_distinct_permissions` (count + 3).
 

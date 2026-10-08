@@ -43,8 +43,8 @@ hotpath = { workspace = true, optional = true }
 hotpath-profiling = ["dep:hotpath"]
 # Set by the app's screenshot build: every connection refuses writes, whatever the environment says.
 block-writes = []
-# With `block-writes`, lifts the block for a `kind-*` context under `K8SBOARD_ALLOW_WRITES=1`: the app's
-# `lab-writes` feature, for the kind lab only. Does nothing without `block-writes`.
+# With `block-writes`, lifts the block for a `kind-*` context: the app's `lab-writes` feature, for
+# the kind lab only. Does nothing without `block-writes`.
 lab-writes = []
 # A fake API server for the tests of other crates. Never enabled by a build of the app itself.
 test-support = []

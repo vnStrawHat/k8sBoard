@@ -1,7 +1,7 @@
 //! Edit values (spec 0047) in a headless window over one live cluster, `stg-b` (unlocked, a
 //! Staging cluster that confirms with a click). The cluster answers from a fake API server, so a
-//! test sees every request, and nothing leaves the machine. No test sets `K8SBOARD_ALLOW_WRITES`:
-//! the fake connection is built with an allowing policy of its own.
+//! test sees every request, and nothing leaves the machine. The
+//! fake connection is built with an allowing policy of its own.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};

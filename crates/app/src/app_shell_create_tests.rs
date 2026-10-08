@@ -1,7 +1,6 @@
 //! New from templates (spec 0042) in a headless window over `stg-b`, an unlocked Staging cluster that
 //! confirms with a click. The cluster answers from a fake API server, so a test sees every request,
-//! and nothing leaves the machine. No test sets `K8SBOARD_ALLOW_WRITES`: the fake connection is
-//! built with an allowing policy of its own.
+//! and nothing leaves the machine. The fake connection is built with an allowing policy of its own.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};

@@ -203,10 +203,7 @@ fn dry_run_results_become_dialog_states() {
     );
     assert_eq!(
         state(WriteError::WritesBlocked),
-        DryRunState::Failed(
-            "Dry-run failed: writes are blocked in this debug build (set K8SBOARD_ALLOW_WRITES=1)"
-                .into()
-        )
+        DryRunState::Failed("Dry-run failed: writes are blocked in this screenshot build".into())
     );
     assert_eq!(
         dry_run_state_of(Err(CheckedWriteError::Blocked("locked".into()))),

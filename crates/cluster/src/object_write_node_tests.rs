@@ -319,7 +319,7 @@ async fn evict_denied_is_denied() {
 }
 
 #[tokio::test]
-async fn debug_build_blocks_evictions() {
+async fn blocked_policy_blocks_evictions() {
     let (connection, api) = FakeApi::connection(WritePolicy::Blocked, |_| (201, success_status()));
     let error = connection
         .write(&evict(GracePeriod::PodDefault), WriteMode::Commit)

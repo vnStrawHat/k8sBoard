@@ -1,6 +1,6 @@
 # 0030 · Test plan
 
-[Back to index](README.md). All tests are offline. **No test, probe, or agent run sends a write to any cluster**; UAT is read-only and stays so, and agent runs never set `K8SBOARD_ALLOW_WRITES`. File tests use `std::env::temp_dir()`.
+[Back to index](README.md). All tests are offline. **No test, probe, or agent run sends a write to any cluster**; UAT is read-only and stays so, and agent runs write only to the kind lab. File tests use `std::env::temp_dir()`.
 
 ## Step 1 — cluster crate (`object_write_tests.rs`, `FakeApi`, `#[tokio::test]` with `test-util`)
 
@@ -10,8 +10,8 @@
 | `uncordon_sends_false` | body `{"spec":{"unschedulable":false}}`, never `null` |
 | `dry_run_sends_dry_run_all_and_field_manager` | query has `dryRun=All` and `fieldManager=k8sboard` |
 | `commit_sends_field_manager_without_dry_run` | `fieldManager=k8sboard`, no `dryRun` |
-| `debug_build_blocks_writes_without_opt_in` | policy from `WritePolicy::resolve(true, None)` → `WritesBlocked`; **zero** recorded requests |
-| `write_policy_resolve_table` | release → Allowed; debug + `None`/`"0"`/`"true"` → Blocked; debug + `"1"` → Allowed |
+| `blocked_policy_blocks_writes` (before 24c: `debug_build_blocks_writes_without_opt_in`) | policy `Blocked` → `WritesBlocked`; **zero** recorded requests |
+| `only_the_screenshot_build_blocks_writes_and_the_lab_build_lifts_it_for_kind_contexts` | `WritePolicy::policy`: no `block-writes` → Allowed; `block-writes` → Blocked; `lab-writes` → Allowed only for `kind-*` (replaces `write_policy_resolve_table`, 24c) |
 | `request_rejects_a_kind_that_does_not_fit` | `SetNodeSchedulable` on a Pod `ObjectRef` → `None` |
 | `access_check_matches_the_operation` | → `AccessCheck::PatchNodes` → SSAR `patch`, `""`, `nodes`, no namespace |
 | `forbidden_becomes_denied`, `missing_object_becomes_not_found` | 403, 404 |
@@ -55,14 +55,14 @@ Window tests: `confirm_dialog_enables_apply_after_dry_run_passes`, `rejected_dry
 
 ## Live checks (coder-lite, UAT, read-only, denied path only; debug build)
 
-Always `--kubeconfig monitor-uat-readonly.yml --context readonly@Monitor --config-dir .tmp/config-0030-<case>`, never `K8SBOARD_ALLOW_WRITES`.
+Always `--kubeconfig monitor-uat-readonly.yml --context readonly@Monitor --config-dir .tmp/config-0030-<case>`; denied path only (the UAT token has no write permission).
 
 1. Record the SSAR for `patch nodes` with the probe. If it is **allowed**, stop and report: the live check never presses Cordon.
 2. Nodes: right-click a node → `Cordon` disabled with `Not permitted: patch nodes`; press C → notice `Cordon is unavailable: Not permitted: patch nodes`.
 3. `RUST_LOG=kube=trace`: only GET (incl. watch/list) and POST to `selfsubjectaccessreviews`; no PATCH, PUT, DELETE. Counts only; never copy headers.
 4. Ctrl Shift R toggles the badge; with a seeded `environment: production` entry the session opens `Read-only` and unlocking asks for `uat-monitor` typed. `audit.jsonl` then holds only `Lock`/`Unlock` lines.
 
-Write-capable cluster (R2): a later, user-run check with `K8SBOARD_ALLOW_WRITES=1` cordons and uncordons one node. Not part of these ACs.
+Write-capable cluster (R2): a later, user-run check on the kind lab cordons and uncordons one node. Not part of these ACs.
 
 ## ui-verifier (screenshot build)
 
@@ -78,7 +78,7 @@ Report color literals, clipped text, and a missing env border as defects. Known 
 
 - `guard_for` looks up the slot session of the named cluster (0027). Shell-level tests `gate_and_confirm_use_the_rows_cluster_with_a_production_primary` and `..._with_a_staging_primary` (`app_shell_multi_tests.rs`) check that each viewed cluster answers with its own lock and confirm tier whichever one is primary, and that an unviewed cluster has no guard. The menus, the row keys and the palette build the guard from the row's or cursor's slot session; `active_guard` is gone.
 - `ObjectKind::ALL`, `ObjectKind::resource()`, and `commit_outcome_carries_uid` are deferred to 0031 and 0033, which are their first users.
-- Added with the security review: `request_rejects_a_name_that_changes_the_path`, `a_non_utf8_answer_to_a_commit_is_outcome_unknown`, `a_secret_rbac_403_is_denied_and_holds_only_the_reason_and_fields`, `a_build_that_blocks_writes_ignores_the_opt_in`, `the_screenshot_build_blocks_writes`, `the_patch_nodes_review_posts_one_review_and_nothing_else`.
+- Added with the security review: `request_rejects_a_name_that_changes_the_path`, `a_non_utf8_answer_to_a_commit_is_outcome_unknown`, `a_secret_rbac_403_is_denied_and_holds_only_the_reason_and_fields`, `only_the_screenshot_build_blocks_writes_and_the_lab_build_lifts_it_for_kind_contexts`, `the_screenshot_build_blocks_writes`, `the_patch_nodes_review_posts_one_review_and_nothing_else`.
 
 ## Implemented in 2b and 4 (`spec-0030b`)
 
@@ -90,10 +90,10 @@ Window tests are in `app_shell_write_tests.rs` over two fake API servers (`clust
 - Added: `cordon_on_a_locked_production_row_opens_no_dialog`, `the_debug_policy_blocks_a_write_at_the_dry_run`, `a_cordoned_node_is_uncordoned`, `a_conflict_keeps_the_dialog_with_a_retry_that_checks_again`, `a_refused_commit_with_no_retry_closes_the_dialog`, `a_cordon_commit_appends_an_audit_line_of_the_target_cluster`, `cordon_without_patch_nodes_is_not_permitted_and_sends_nothing`, `the_lock_chord_acts_on_the_cursor_cluster`, `a_session_opens_in_its_profiles_lock_state`.
 - Deferred to their specs: `warnings_render_under_changes` (0031–0034 add the first warnings) and `created_name_in_notice_and_audit` (0032).
 
-Live check on UAT, denied path only, debug build, `K8SBOARD_ALLOW_WRITES` unset (2026-10-03): the cluster probe reports `patch nodes denied`; a screenshot run of the Nodes screen with `RUST_LOG=cluster=debug` logged 37 `reviewing access` requests (the review POSTs) and 0 `write finished` lines, so no PATCH, PUT, or DELETE was built. Counts only; the kubeconfig and headers are never copied. The menu and key texts are covered by `cordon_without_patch_nodes_is_not_permitted_and_sends_nothing`.
+Live check on UAT, denied path only, debug build, `K8SBOARD_ALLOW_WRITES` unset (2026-10-03, before 24c): the cluster probe reports `patch nodes denied`; a screenshot run of the Nodes screen with `RUST_LOG=cluster=debug` logged 37 `reviewing access` requests (the review POSTs) and 0 `write finished` lines, so no PATCH, PUT, or DELETE was built. Counts only; the kubeconfig and headers are never copied. The menu and key texts are covered by `cordon_without_patch_nodes_is_not_permitted_and_sends_nothing`.
 
 ### After the 2b and 4 security review
 
 - Added: `a_conflict_keeps_the_dialog_with_a_retry_that_checks_again` now also checks that the commit stays blocked and a second confirm sends nothing until Retry has run the dry-run again; `the_retry_button_shows_after_a_failed_check`, `a_dialog_that_passed_its_check_has_no_retry`, `escape_marks_the_dialog_closed`, `a_session_that_is_not_live_offers_no_lock`, `a_menu_that_is_out_of_date_adds_a_warning`, `an_up_to_date_menu_adds_no_warning`, `a_tier_made_stricter_after_opening_applies`, `the_audit_log_of_a_lock_session_holds_only_lock_lines` (step 4 of the live checks, headless: Ctrl Shift R on a production cluster, unlock with the typed name, lock again, and the log holds exactly `Unlock` and `Lock`), and the badge tests `an_open_cluster_wins_over_locked_ones`, `the_lock_notice_names_the_cluster`.
-- Live check on a normal debug build (not the screenshot build), UAT, Nodes screen, `K8SBOARD_ALLOW_WRITES` unset, 40 s, requests counted by HTTP method from the client's own span (`RUST_LOG=kube_client::client::builder=debug`; the app pins the broader `kube_client::client` target to `error` on purpose, so `kube=trace` shows no requests): 133 GET, 74 POST (all 74 to `selfsubjectaccessreviews` or `selfsubjectrulesreviews`), 0 PATCH, 0 PUT, 0 DELETE. Methods and counts only; no URL, header, or body was copied.
+- Live check on a normal debug build (not the screenshot build), UAT, Nodes screen, `K8SBOARD_ALLOW_WRITES` unset (before 24c), 40 s, requests counted by HTTP method from the client's own span (`RUST_LOG=kube_client::client::builder=debug`; the app pins the broader `kube_client::client` target to `error` on purpose, so `kube=trace` shows no requests): 133 GET, 74 POST (all 74 to `selfsubjectaccessreviews` or `selfsubjectrulesreviews`), 0 PATCH, 0 PUT, 0 DELETE. Methods and counts only; no URL, header, or body was copied.
 - Manual check for the user, on the real window against UAT (`--context readonly@Monitor`): (1) right-click a node: `Cordon` is disabled with `Not permitted: patch nodes`; (2) select a node and press C: a notice reads `Cordon is unavailable: Not permitted: patch nodes`; (3) press Ctrl Shift R on a PROD-seeded cluster: the unlock dialog asks for the cluster name, and Back leaves it read-only.

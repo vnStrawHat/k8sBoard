@@ -27,7 +27,7 @@
 | `access_check_matches_each_operation` | kind × operation → check; SSAR attributes |
 | `changed_fields_hold_names_and_numbers_only` | Roll back `rev 37 (api-6c1e2a)`; creates show `generateName` text; no template text |
 | `manual_debug_shows_names_only` (extended) | no timestamp, replicas, template, or body in `{:?}` |
-| `debug_build_blocks_every_new_operation` | `WritePolicy::Blocked` → `WritesBlocked`, zero requests (incl. the GETs) |
+| `blocked_policy_blocks_every_new_operation` | `WritePolicy::Blocked` → `WritesBlocked`, zero requests (incl. the GETs) |
 
 `access_review` tests: `all_checks_cover_distinct_permissions` (count + 7), `workload_write_checks_are_namespaced`. Clippy check (coder-lite, once): scratch calls to `Api::restart`, `Api::cordon`, `Api::uncordon` fail `-D warnings`; reverted after.
 

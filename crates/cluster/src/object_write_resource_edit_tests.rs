@@ -410,10 +410,8 @@ fn every_new_operation_supports_dry_run() {
 }
 
 #[tokio::test]
-async fn debug_build_blocks_the_new_operations() {
-    let (connection, api) = FakeApi::connection(WritePolicy::resolve(true, None), |_| {
-        (200, ANSWER.to_owned())
-    });
+async fn blocked_policy_blocks_the_new_operations() {
+    let (connection, api) = FakeApi::connection(WritePolicy::Blocked, |_| (200, ANSWER.to_owned()));
     let requests = [
         hpa_range(3, 20).expect("valid"),
         expand("150Gi").expect("valid"),
@@ -424,7 +422,7 @@ async fn debug_build_blocks_the_new_operations() {
             let error = connection
                 .write(request, mode)
                 .await
-                .expect_err("a debug build blocks writes");
+                .expect_err("a blocked policy refuses writes");
             assert!(matches!(error, WriteError::WritesBlocked), "{error:?}");
         }
     }

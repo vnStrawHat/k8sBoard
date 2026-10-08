@@ -444,7 +444,7 @@ fn checked_write_runs_commit_block_before_commit(cx: &mut TestAppContext) {
 
 #[gpui_kit::test]
 fn the_debug_policy_blocks_a_write_at_the_dry_run(cx: &mut TestAppContext) {
-    // A connection whose policy is Blocked, as every debug build has without the opt-in.
+    // A connection whose policy is Blocked, as the screenshot build has.
     let t = two_clusters("blocked-policy", cx);
     let (connection, api) = {
         let _guard = t.fixture.runtime.enter();

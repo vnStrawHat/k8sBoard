@@ -73,7 +73,7 @@ The steps below are `run_guarded`'s. **Dry-run in steps 3–4:** `Write`, `Batch
 
 `commit_block` reasons, first match wins: guard `None` or generation changed → `{cluster} is no longer open; nothing was changed`; `Locked` → `{cluster} was locked; nothing was changed`; dry-run `Running` → `Waiting for the dry-run…`; `Failed(text)` → text; `Rejected(reason)` → `An admission webhook does not support dry-run, so this change cannot be checked: {reason}. Nothing was changed.`; `Differs` → `Type {expected} to confirm`.
 
-**Dry-run rejected by a webhook blocks the commit** (`WriteError::DryRunRejected` → `DryRunState::Rejected`). There is no "apply without dry-run" in 0030; a later spec may add an explicit, audited escape. `WritesBlocked` (debug build) shows as `Failed` with its text.
+**Dry-run rejected by a webhook blocks the commit** (`WriteError::DryRunRejected` → `DryRunState::Rejected`). There is no "apply without dry-run" in 0030; a later spec may add an explicit, audited escape. `WritesBlocked` (screenshot build) shows as `Failed` with its text.
 
 ## Confirm dialog (`confirm_dialog.rs`)
 
@@ -125,7 +125,7 @@ Credentials never appear (0001 errors carry none); request bodies never appear i
 
 ## Screenshot (`--screen cordon-confirm`, screenshot feature only)
 
-Opens the dialog for the first node with a fixture state (`DryRunState::Passed { 412 ms }`, TypeName tier, seeded PROD entry) and **no** connection call: the screen bypasses steps 1–3 and never reaches step 5. Screenshot builds are debug builds, so `write` would return `WritesBlocked` anyway. Listed in `USAGE`.
+Opens the dialog for the first node with a fixture state (`DryRunState::Passed { 412 ms }`, TypeName tier, seeded PROD entry) and **no** connection call: the screen bypasses steps 1–3 and never reaches step 5. Screenshot builds block writes, so `write` would return `WritesBlocked` anyway. Listed in `USAGE`.
 
 ## As built (steps 2b and 4)
 

@@ -2,7 +2,7 @@
 //! `prod-a` (Production, locked at open) and `stg-b` (unlocked, a click tier). The fixture starts
 //! on `prod-a`, switches to `stg-b`, and makes it live over a fake API server; `activate` does the
 //! same for the other one. A test sees which cluster a request reached and nothing leaves the
-//! machine. No test sets `K8SBOARD_ALLOW_WRITES`; the fake connections carry their own write
+//! machine. The fake connections carry their own write
 //! policy, and a fake never upgrades a connection to a stream: its pod reads answer 404, so the
 //! attach of a started tab fails at once.
 

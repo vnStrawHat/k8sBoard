@@ -1955,7 +1955,7 @@ pub(crate) struct CleanupAudit {
 pub(crate) enum CleanupOutcome {
     /// Deleted, or already gone (a 404 counts as done).
     Done,
-    /// Debug builds block writes: nothing was sent, so nothing is audited.
+    /// A blocked policy (the screenshot build): nothing was sent, so nothing is audited.
     Blocked,
     /// Not deleted; the text names why.
     Failed(String),

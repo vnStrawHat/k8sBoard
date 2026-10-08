@@ -50,8 +50,6 @@ use crate::workload_write_bodies::{
 
 /// The server-side field manager of every write k8sBoard sends.
 const FIELD_MANAGER: &str = "k8sboard";
-/// Debug builds send no write unless this variable is `1`; agent runs never set it.
-pub(crate) const ALLOW_WRITES_VARIABLE: &str = "K8SBOARD_ALLOW_WRITES";
 const KIND_SECRET: &str = "Secret";
 /// What an operation reads before it sends, so the request can carry the current object's data.
 const READ_ACTION: &str = "reading the object before the change";
@@ -335,14 +333,14 @@ pub struct ChangedField {
     pub from: Option<String>,
 }
 
-/// The `lab-writes` build: the screenshot build with the kind-lab opt-in (see `WritePolicy::of_lab_build`).
-pub(crate) const IS_LAB_BUILD: bool = cfg!(all(feature = "lab-writes", feature = "block-writes"));
+/// The `lab-writes` build: the screenshot build with the kind-lab opt-in (see `WritePolicy::of_build`).
+const IS_LAB_BUILD: bool = cfg!(all(feature = "lab-writes", feature = "block-writes"));
 
 /// Why a write is refused, for the notice of the user.
 pub(crate) const WRITES_BLOCKED_MESSAGE: &str = if IS_LAB_BUILD {
     "writes stay blocked outside a kind-* context (lab-writes build)"
 } else {
-    "writes are blocked in this debug build (set K8SBOARD_ALLOW_WRITES=1)"
+    "writes are blocked in this screenshot build"
 };
 
 /// Whether a connection may send writes at all.
@@ -353,37 +351,18 @@ pub enum WritePolicy {
 }
 
 impl WritePolicy {
-    /// Release builds allow writes. Debug builds block them unless `opt_in` is `Some("1")`, the
-    /// value of `K8SBOARD_ALLOW_WRITES`.
-    pub fn resolve(is_debug_build: bool, opt_in: Option<&str>) -> Self {
-        if !is_debug_build || opt_in == Some("1") {
+    /// The policy of this build for `context`: every build writes except the screenshot build
+    /// (`block-writes`), and its `lab-writes` variant writes only on a context named `kind-*`.
+    pub(crate) fn of_build(context: &str) -> Self {
+        Self::policy(cfg!(feature = "block-writes"), IS_LAB_BUILD, context)
+    }
+
+    fn policy(blocks_writes: bool, is_lab_build: bool, context: &str) -> Self {
+        if !blocks_writes || (is_lab_build && context.starts_with("kind-")) {
             Self::Allowed
         } else {
             Self::Blocked
         }
-    }
-
-    /// The policy of this build. A build that `blocks_writes` (the screenshot build, through the
-    /// `block-writes` feature) never writes, whatever the variable says; any other build follows
-    /// `resolve`.
-    /// The policy of a `lab-writes` build: the normal debug gate (`resolve`), and only for a context
-    /// named `kind-*`; any other context stays blocked, whatever the variable says.
-    pub(crate) fn of_lab_build(is_debug_build: bool, opt_in: Option<&str>, context: &str) -> Self {
-        if !context.starts_with("kind-") {
-            return Self::Blocked;
-        }
-        Self::resolve(is_debug_build, opt_in)
-    }
-
-    pub(crate) fn of_build(
-        blocks_writes: bool,
-        is_debug_build: bool,
-        opt_in: Option<&str>,
-    ) -> Self {
-        if blocks_writes {
-            return Self::Blocked;
-        }
-        Self::resolve(is_debug_build, opt_in)
     }
 }
 

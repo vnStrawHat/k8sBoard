@@ -33,7 +33,7 @@ impl WriteRequest {
     pub fn supports_dry_run(&self) -> bool;             // true for every 0030 operation
 }
 impl WritePolicy {
-    /// Release: Allowed. Debug: Blocked unless `opt_in == Some("1")` (`K8SBOARD_ALLOW_WRITES`).
+    /// Every build is Allowed except the screenshot build (24c); `lab-writes` allows only `kind-*`.
     pub fn resolve(is_debug_build: bool, opt_in: Option<&str>) -> Self;
 }
 impl ClusterConnection {
@@ -45,7 +45,7 @@ impl ClusterConnection {
 }
 ```
 
-- **Kill switch**: `ClusterConnection` gains `write_policy: WritePolicy`, set in `open` from `WritePolicy::resolve(cfg!(debug_assertions), std::env::var("K8SBOARD_ALLOW_WRITES").ok().as_deref())`. Debug builds (every agent, coder, ui-verifier run) cannot write unless a human sets the variable; agent runs never set it. The screenshot build turns on the cluster crate's `block-writes` feature, which forces `Blocked` whatever the variable says (`WritePolicy::of_build`). Tests inject the policy instead of touching the environment.
+- **Kill switch**: `ClusterConnection` gains `write_policy: WritePolicy`, set in `open` by `WritePolicy::of_build(context)`. Since 24c (2026-10-08) debug builds write like release builds; the variable `K8SBOARD_ALLOW_WRITES` and `resolve` are gone. The screenshot build turns on the cluster crate's `block-writes` feature, which forces `Blocked` (the `lab-writes` feature lifts it for a `kind-*` context). Tests inject the policy instead of touching the environment.
 - **Target connection (0027 review):** every mutating action takes its `ClusterConnection` and its `ClusterGuard` from the row's or cursor's cluster slot, never from an implicit "current session"; `write` and `guard_for` take the target explicitly.
 - Transport: `Api::<DynamicObject>` from `ClusterConnection::object_api(&ObjectRef)` (shared with `object_yaml`), `PatchParams { dry_run, field_manager: Some(FIELD_MANAGER.into()), ..Default::default() }` (it also has `field_validation`), `Patch::Merge(json)`.
 - **Uncordon sends `false`, not `null`**: the same body shape as cordon, so the dry-run, the confirm summary, and the audit show one explicit value. `unschedulable` is `omitempty`, so the stored Node is the same as after a `null` delete.
@@ -113,7 +113,7 @@ Enforcement:
 
 | Variant | From | `Display` |
 |---|---|---|
-| `WritesBlocked` | policy `Blocked` | `writes are blocked in this debug build (set K8SBOARD_ALLOW_WRITES=1)` |
+| `WritesBlocked` | policy `Blocked` | `writes are blocked in this screenshot build` |
 | `Denied { message }` | 403 whose message has the RBAC form (`is forbidden: User`) | `not permitted: {message}` |
 | `NotFound` | 404 | `the object no longer exists` |
 | `Conflict { message, managers }` | 409; also the operation-specific mappings of 0032 (Roll back 422) and 0034. `managers` is always empty: there is no SSA | `the object changed since it was read: {message}` |

@@ -1,8 +1,8 @@
 //! Edit YAML (spec 0031) in a headless window over two loaded clusters, one active at a time: the
 //! fixture starts on `prod-a` (locked at open), switches to `stg-b` (unlocked), and makes it live;
 //! `activate` does the same for `prod-a`. Each session answers from its own fake API server, so a
-//! test sees which cluster a request reached, and nothing leaves the machine. No test sets
-//! `K8SBOARD_ALLOW_WRITES`: the fake connection is built with an allowing policy of its own.
+//! test sees which cluster a request reached, and nothing leaves the machine. The fake connection is
+//! built with an allowing policy of its own.
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};

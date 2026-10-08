@@ -15,7 +15,7 @@
 | I9 | A stale menu acts on nothing | a `RowContext` action runs only if `row.session.upgrade()` is `Some` (the old entity is released before the next connect) |
 | I10 | Results that land after a switch are dropped | `still_ready` in `object_delete.rs` (guard + generation); `show_leftover_notice` drops a notice whose cluster is not active |
 | I6 | Menus, dialogs, and key actions act on the cluster they captured, not on "whatever is active now" | `RowContext.cluster`, `ClusterObject.cluster`, `DialogInputs.generation` — unchanged |
-| I7 | The write ban, allow-list, kill switch, Enter rule, and audit are untouched | `clippy.toml` `disallowed-methods`, `object_write.rs`, `WritePolicy` / `K8SBOARD_ALLOW_WRITES`, `fresh_enter.rs`, `audit_log.rs` |
+| I7 | The write ban, allow-list, kill switch, Enter rule, and audit are untouched | `clippy.toml` `disallowed-methods`, `object_write.rs`, `WritePolicy`, `fresh_enter.rs`, `audit_log.rs` |
 
 ## Kept identifiers and why
 

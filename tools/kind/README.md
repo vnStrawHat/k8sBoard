@@ -32,8 +32,9 @@ Settings are environment variables read by `lab.sh`: `LAB_HOST`, `LAB_USER`, `LA
 k8sboard --kubeconfig D:/TrungKFC-Research/Rust/k8sBoard/kind-lab.yml --context kind-k8sboard-lab
 ```
 
-Debug builds block writes unless `K8SBOARD_ALLOW_WRITES=1`. That variable is allowed **only**
-with `kind-lab.yml`; the UAT kubeconfig stays read-only. Mark the context as Staging or
+Debug and release builds write like any other. The screenshot build blocks writes; a
+`--features screenshot,lab-writes` build lifts that only for a `kind-*` context, so run it **only**
+with `kind-lab.yml`. The UAT kubeconfig stays read-only (its token has no write permission). Mark the context as Staging or
 Production in Settings › Environments to try the guardrails. The kubeconfig is cluster-admin and
 git-ignored; never print it.
 

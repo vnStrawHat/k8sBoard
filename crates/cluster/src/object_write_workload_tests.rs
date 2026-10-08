@@ -914,7 +914,7 @@ async fn every_new_operation_supports_dry_run() {
 }
 
 #[tokio::test]
-async fn debug_build_blocks_every_new_operation() {
+async fn blocked_policy_blocks_every_new_operation() {
     let restart = WriteOperation::RestartRollout {
         restarted_at: restarted_at(),
     };
@@ -942,7 +942,7 @@ async fn debug_build_blocks_every_new_operation() {
         trigger(),
         rerun(),
     ];
-    let (connection, api) = FakeApi::connection(WritePolicy::resolve(true, None), ok_reply);
+    let (connection, api) = FakeApi::connection(WritePolicy::Blocked, ok_reply);
     for request in &requests {
         for mode in [WriteMode::DryRun, WriteMode::Commit] {
             let error = connection.write(request, mode).await.expect_err("blocked");

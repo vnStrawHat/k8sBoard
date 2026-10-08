@@ -4,8 +4,8 @@
 //! does the same for the other one. Each session answers from its own fake API server, so a test
 //! sees which cluster a request reached and nothing leaves the machine. A fake never upgrades a
 //! connection to a stream, so no
-//! test opens a real port-forward. Listeners bind loopback only, on a free port. No test sets
-//! `K8SBOARD_ALLOW_WRITES`; the fake connections carry their own write policy.
+//! test opens a real port-forward. Listeners bind loopback only, on a free port. The fake connections carry
+//! their own write policy.
 
 use std::net::TcpListener;
 use std::path::PathBuf;

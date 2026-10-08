@@ -25,7 +25,7 @@
 | `drain_pod_flags` | mirror annotation, emptyDir volume, Succeeded/Failed, `deletionTimestamp`, DaemonSet controller |
 | `node_for_edit_reads_taints_labels_and_version` | fixture node → `NodeEdit` |
 | `access_check_create_pods_eviction` | SSAR `create`, `""`, `pods`, `eviction`, namespaced; Display `create pods/eviction` |
-| `debug_build_blocks_evictions` | `WritePolicy::Blocked` → `WritesBlocked`, zero requests |
+| `blocked_policy_blocks_evictions` | `WritePolicy::Blocked` → `WritesBlocked`, zero requests |
 | `manual_debug_shows_names_only` (extended) | no uid, taint, label, or grace value in `{:?}` |
 
 ## Step 2 — node edits (`node_edits_tests.rs`, `row_selection` tests)

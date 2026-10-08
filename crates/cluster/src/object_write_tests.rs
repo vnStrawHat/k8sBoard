@@ -127,27 +127,17 @@ async fn outcome_reports_patched_effect() {
 }
 
 #[tokio::test]
-async fn debug_build_blocks_writes_without_opt_in() {
-    let policy = WritePolicy::resolve(true, None);
-    let (connection, api) = FakeApi::connection(policy, |_| (200, NODE_JSON.to_owned()));
+async fn blocked_policy_blocks_writes() {
+    let (connection, api) =
+        FakeApi::connection(WritePolicy::Blocked, |_| (200, NODE_JSON.to_owned()));
     for mode in [WriteMode::DryRun, WriteMode::Commit] {
         let error = connection
             .write(&set_schedulable(false), mode)
             .await
-            .expect_err("a debug build blocks writes");
+            .expect_err("a blocked policy refuses writes");
         assert!(matches!(error, WriteError::WritesBlocked), "{error:?}");
     }
     assert!(api.requests().is_empty());
-}
-
-#[test]
-fn write_policy_resolve_table() {
-    assert_eq!(WritePolicy::resolve(false, None), WritePolicy::Allowed);
-    assert_eq!(WritePolicy::resolve(false, Some("0")), WritePolicy::Allowed);
-    for opt_in in [None, Some("0"), Some("true"), Some("")] {
-        assert_eq!(WritePolicy::resolve(true, opt_in), WritePolicy::Blocked);
-    }
-    assert_eq!(WritePolicy::resolve(true, Some("1")), WritePolicy::Allowed);
 }
 
 #[test]
@@ -451,43 +441,22 @@ async fn a_non_utf8_answer_to_a_dry_run_is_no_unknown_outcome() {
 }
 
 #[test]
-fn a_build_that_blocks_writes_ignores_the_opt_in() {
-    for is_debug_build in [true, false] {
-        for opt_in in [None, Some("1")] {
-            assert_eq!(
-                WritePolicy::of_build(true, is_debug_build, opt_in),
-                WritePolicy::Blocked,
-                "{is_debug_build} {opt_in:?}"
-            );
-        }
-    }
+fn only_the_screenshot_build_blocks_writes_and_the_lab_build_lifts_it_for_kind_contexts() {
     assert_eq!(
-        WritePolicy::of_build(false, false, None),
+        WritePolicy::policy(false, false, "any"),
         WritePolicy::Allowed
     );
     assert_eq!(
-        WritePolicy::of_build(false, true, None),
+        WritePolicy::policy(true, false, "kind-x"),
         WritePolicy::Blocked
     );
     assert_eq!(
-        WritePolicy::of_build(false, true, Some("1")),
+        WritePolicy::policy(true, true, "kind-x"),
         WritePolicy::Allowed
-    );
-}
-
-#[test]
-fn a_lab_build_writes_only_on_a_kind_context_with_the_opt_in() {
-    assert_eq!(
-        WritePolicy::of_lab_build(true, Some("1"), "kind-x"),
-        WritePolicy::Allowed
-    );
-    assert_eq!(
-        WritePolicy::of_lab_build(true, None, "kind-x"),
-        WritePolicy::Blocked
     );
     for context in ["readonly@Monitor", "prod-kind-x", ""] {
         assert_eq!(
-            WritePolicy::of_lab_build(true, Some("1"), context),
+            WritePolicy::policy(true, true, context),
             WritePolicy::Blocked,
             "{context}"
         );
