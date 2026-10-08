@@ -3,8 +3,8 @@
 
 use gpui_kit::component::Root;
 use gpui_kit::{
-    Entity, InputEvent as _, Modifiers, MouseButton, MouseDownEvent, NavigationDirection,
-    TestAppContext, WindowHandle, point, px,
+    Entity, InputEvent as _, Modifiers, MouseButton, MouseDownEvent, MouseMoveEvent,
+    NavigationDirection, Pixels, Point, TestAppContext, WindowHandle, point, px,
 };
 
 use super::app_shell_history::is_place_served;
@@ -293,12 +293,28 @@ fn row_controls_are_disabled_without_a_visible_subject(cx: &mut TestAppContext) 
     assert_eq!(rows.position, None);
 }
 
-/// A press of `button` over the shell, as Windows delivers XButton1 and XButton2.
-fn press_mouse(window: WindowHandle<Root>, button: MouseButton, cx: &mut TestAppContext) {
+/// A press of `button` at `position` as Windows delivers XButton1 and XButton2, after the pointer moved there so the hit test is fresh.
+fn press_mouse(
+    window: WindowHandle<Root>,
+    button: MouseButton,
+    position: Point<Pixels>,
+    cx: &mut TestAppContext,
+) {
+    cx.update_window(window.into(), |_, window, cx| {
+        let moved = MouseMoveEvent {
+            position,
+            pressed_button: None,
+            modifiers: Modifiers::default(),
+        };
+        window.dispatch_event(moved.to_platform_input(), cx);
+    })
+    .expect("the window is open");
+    // The hit test is recomputed when a frame is drawn.
+    render(window, cx);
     cx.update_window(window.into(), |_, window, cx| {
         let event = MouseDownEvent {
             button,
-            position: point(px(600.), px(450.)),
+            position,
             modifiers: Modifiers::default(),
             click_count: 1,
             first_mouse: false,
@@ -322,10 +338,26 @@ fn revealed_secret(cx: &mut TestAppContext) -> (WindowHandle<Root>, Entity<AppSh
     (window, shell)
 }
 
+/// A point on the title bar, whose drag area and buttons occlude the shell root under them: a
+/// handler bound to the root's own hitbox never sees a press there.
+fn over_title_bar() -> Point<Pixels> {
+    point(px(650.), px(10.))
+}
+
+/// A point on the page body, where nothing occludes the shell root in a headless shell.
+fn over_body() -> Point<Pixels> {
+    point(px(500.), px(300.))
+}
+
 #[gpui_kit::test]
 fn the_mouse_back_button_goes_back(cx: &mut TestAppContext) {
     let (window, shell) = revealed_secret(cx);
-    press_mouse(window, MouseButton::Navigate(NavigationDirection::Back), cx);
+    press_mouse(
+        window,
+        MouseButton::Navigate(NavigationDirection::Back),
+        over_title_bar(),
+        cx,
+    );
     shell.read_with(cx, |shell, _| {
         assert_eq!(shell.screen, Screen::Pods);
         assert_eq!(shell.selected, Some(pod("api-0")));
@@ -333,12 +365,25 @@ fn the_mouse_back_button_goes_back(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn the_mouse_back_button_goes_back_over_the_page_body(cx: &mut TestAppContext) {
+    let (window, shell) = revealed_secret(cx);
+    press_mouse(
+        window,
+        MouseButton::Navigate(NavigationDirection::Back),
+        over_body(),
+        cx,
+    );
+    shell.read_with(cx, |shell, _| assert_eq!(shell.screen, Screen::Pods));
+}
+
+#[gpui_kit::test]
 fn the_mouse_forward_button_goes_forward(cx: &mut TestAppContext) {
     let (window, shell) = revealed_secret(cx);
-    press_mouse(window, MouseButton::Navigate(NavigationDirection::Back), cx);
+    go_back(&shell, cx);
     press_mouse(
         window,
         MouseButton::Navigate(NavigationDirection::Forward),
+        over_title_bar(),
         cx,
     );
     shell.read_with(cx, |shell, _| {

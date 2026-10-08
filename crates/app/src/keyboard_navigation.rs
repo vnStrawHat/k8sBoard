@@ -8,8 +8,9 @@ use gpui_kit::component::WindowExt as _;
 use gpui_kit::component::notification::Notification;
 use gpui_kit::component::table::{TableDelegate, TableState};
 use gpui_kit::{
-    Action, App, ClipboardItem, Context, Div, Entity, Focusable as _, InteractiveElement as _,
-    MouseButton, NavigationDirection, Window,
+    Action, App, ClipboardItem, Context, DispatchPhase, Div, Entity, Focusable as _,
+    InteractiveElement as _, IntoElement, MouseButton, MouseDownEvent, NavigationDirection,
+    Styled as _, Window, canvas,
 };
 
 use super::node_editor::NodeEditKind;
@@ -164,6 +165,36 @@ pub(crate) fn step_container(
 /// stacking.
 struct RowKeyNotice;
 
+/// The mouse Back and Forward buttons (XButton1 and XButton2) step the history like Alt+Left and
+/// Alt+Right. The listener is window-level, not bound to the root's hitbox: an occluding element
+/// (the title bar, the drawer) hides the root hitbox from the hit test, and a div handler would
+/// never run under it. It listens in the capture phase so a child that stops propagation cannot
+/// swallow it. The canvas is zero-size, paints nothing, and adds no hitbox.
+pub(super) fn history_mouse_buttons(cx: &Context<AppShell>) -> impl IntoElement {
+    let shell = cx.weak_entity();
+    canvas(
+        |_, _, _| (),
+        move |_, (), window, _| {
+            window.on_mouse_event(move |event: &MouseDownEvent, phase, _, cx| {
+                if phase != DispatchPhase::Capture {
+                    return;
+                }
+                let MouseButton::Navigate(direction) = event.button else {
+                    return;
+                };
+                shell
+                    .update(cx, |shell, cx| match direction {
+                        NavigationDirection::Back => shell.go_back(cx),
+                        NavigationDirection::Forward => shell.go_forward(cx),
+                    })
+                    .ok();
+            });
+        },
+    )
+    .absolute()
+    .size_0()
+}
+
 /// Registers the handlers of the row, drawer, container, and row-action keys on the shell root.
 /// The handlers of the chords are registered in `AppShell::render`.
 pub(super) fn register_key_handlers(root: Div, cx: &Context<AppShell>) -> Div {
@@ -210,16 +241,6 @@ pub(super) fn register_key_handlers(root: Div, cx: &Context<AppShell>) -> Div {
         }))
         .on_action(cx.listener(|shell, _: &GoBack, _, cx| shell.go_back(cx)))
         .on_action(cx.listener(|shell, _: &GoForward, _, cx| shell.go_forward(cx)))
-        // The mouse Back and Forward buttons (XButton1 and XButton2) step the history like
-        // Alt+Left and Alt+Right. A mouse event neither types nor moves focus.
-        .on_mouse_down(
-            MouseButton::Navigate(NavigationDirection::Back),
-            cx.listener(|shell, _, _, cx| shell.go_back(cx)),
-        )
-        .on_mouse_down(
-            MouseButton::Navigate(NavigationDirection::Forward),
-            cx.listener(|shell, _, _, cx| shell.go_forward(cx)),
-        )
         .on_action(
             cx.listener(|shell, _: &CopyName, window, cx| shell.copy_cursor_name(window, cx)),
         )

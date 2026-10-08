@@ -5073,6 +5073,7 @@ impl Render for AppShell {
                 root.border_t_2().border_color(theme.danger)
             })
             .text_color(theme.foreground)
+            .child(keyboard_navigation::history_mouse_buttons(cx))
             .child(title_bar(self, window.viewport_size().width, cx))
             .children(self.reset_banner.as_deref().map(|text| {
                 reset_banner(

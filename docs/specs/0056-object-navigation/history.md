@@ -89,7 +89,7 @@ The Back label is the "from X" hint; no breadcrumb trail (a trail of 50 would no
 | Mouse Back button (XButton1) | `go_back` | Shell root | not a key; no sheet row |
 | Mouse Forward button (XButton2) | `go_forward` | Shell root | not a key; no sheet row |
 
-The two mouse buttons are `MouseButton::Navigate(Back | Forward)` mouse-downs handled on the shell root (gpui maps `WM_XBUTTONDOWN` to them on Windows). They run the same `go_back` / `go_forward` as the keys, type nothing and leave focus where it is.
+The two mouse buttons are `MouseButton::Navigate(Back | Forward)` mouse-downs handled by a window-level listener (`Window::on_mouse_event`, registered from a zero-size canvas child of the shell root) because occluding elements such as the title bar and the drawer hide the root hitbox, so a div handler would never run under them (gpui maps `WM_XBUTTONDOWN` to them on Windows). They run the same `go_back` / `go_forward` as the keys, type nothing and leave focus where it is.
 
 Text fields, the YAML / values editors and the terminal keep the keys. Add both to the terminal `NoAction` list. The coder must check which key context the kit `Input` and the editors expose and whether they bind `alt-left` / `alt-right` on Windows; where they do not, add explicit `NoAction` bindings for those contexts (the `FIELDS` list, `YAML_EDIT`, `VALUES_EDIT`), so Alt+Left in a focused field never navigates (AC 7). Both actions appear in the palette through `shortcut_rows` as `Back` and `Forward`.
 
