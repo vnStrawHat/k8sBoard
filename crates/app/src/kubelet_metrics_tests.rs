@@ -6,6 +6,7 @@ use super::*;
 
 fn node(name: &str, readiness: NodeReadiness) -> NodeSummary {
     NodeSummary {
+        annotations: cluster::AnnotationTerms::default(),
         name: name.to_owned(),
         status: NodeStatus {
             readiness,

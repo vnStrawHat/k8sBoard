@@ -8,6 +8,7 @@ use crate::drain_plan::{DrainOptions, node_plan, pinned_note};
 
 fn node(name: &str, scheduling: NodeScheduling, taints: &[(&str, &str)]) -> NodeSummary {
     NodeSummary {
+        annotations: cluster::AnnotationTerms::default(),
         name: name.to_owned(),
         status: NodeStatus {
             readiness: NodeReadiness::Ready,

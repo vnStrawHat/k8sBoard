@@ -10,7 +10,7 @@ use crate::container_spec::quantity_pairs;
 use crate::dns_name::is_dns_subdomain;
 use crate::event::optional_message;
 use crate::resource_watch::{WatchUpdate, summary_watch};
-use crate::workload::{label_terms, non_empty};
+use crate::workload::{AnnotationTerms, annotation_terms, label_terms, non_empty};
 
 const ROLE_LABEL_PREFIX: &str = "node-role.kubernetes.io/";
 const LEGACY_ROLE_LABEL: &str = "kubernetes.io/role";
@@ -34,8 +34,11 @@ pub struct NodeSummary {
     pub system: NodeSystemInfo,
     /// `cpu`, `memory`, `pods`, `ephemeral-storage`, then the rest by name.
     pub resources: Vec<NodeResource>,
-    /// `key=value` terms in key order. Annotations are never read.
+    /// `key=value` terms in key order.
     pub labels: Vec<String>,
+    /// `key=value` terms in key order, for the drawer's folded Annotations section: see
+    /// `annotation_terms` for what is cut and hidden.
+    pub annotations: AnnotationTerms,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -201,6 +204,7 @@ pub(crate) fn node_summary(node: &Node) -> NodeSummary {
         system: node_system_info(node),
         resources: node_resources(node),
         labels: label_terms(&node.metadata),
+        annotations: annotation_terms(&node.metadata),
     }
 }
 

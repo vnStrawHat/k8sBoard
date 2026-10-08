@@ -195,6 +195,7 @@ mod tests {
 
     fn node(name: &str, readiness: NodeReadiness, scheduling: NodeScheduling) -> NodeSummary {
         NodeSummary {
+            annotations: cluster::AnnotationTerms::default(),
             name: name.to_owned(),
             status: NodeStatus {
                 readiness,

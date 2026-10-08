@@ -36,6 +36,7 @@ fn event(kind: &str, namespace: Option<&str>, name: &str, last_seen: Option<&str
 
 fn node(name: &str, created: &str) -> NodeSummary {
     NodeSummary {
+        annotations: cluster::AnnotationTerms::default(),
         name: name.to_owned(),
         status: NodeStatus {
             readiness: NodeReadiness::Ready,

@@ -17,6 +17,7 @@ fn node(name: &str, cpu: &str, memory: &str, pods: &str) -> NodeSummary {
         allocatable: Some(allocatable.to_owned()),
     };
     NodeSummary {
+        annotations: cluster::AnnotationTerms::default(),
         name: name.to_owned(),
         status: NodeStatus {
             readiness: NodeReadiness::Ready,

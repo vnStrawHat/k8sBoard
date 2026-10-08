@@ -138,6 +138,7 @@ pub(in crate::app_shell) fn respond(answers: Answers, request: &RecordedRequest)
 /// A node of `operating_system`, ready and schedulable.
 pub(in crate::app_shell) fn node(name: &str, operating_system: &str) -> cluster::NodeSummary {
     cluster::NodeSummary {
+        annotations: cluster::AnnotationTerms::default(),
         name: name.to_owned(),
         status: cluster::NodeStatus {
             readiness: cluster::NodeReadiness::Ready,

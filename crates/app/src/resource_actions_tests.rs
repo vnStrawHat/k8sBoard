@@ -2620,6 +2620,7 @@ fn node_shell_is_a_privileged_action() {
 
 fn node_with_os(operating_system: &str) -> NodeSummary {
     NodeSummary {
+        annotations: cluster::AnnotationTerms::default(),
         name: "wk-03".to_owned(),
         status: cluster::NodeStatus {
             readiness: cluster::NodeReadiness::Ready,

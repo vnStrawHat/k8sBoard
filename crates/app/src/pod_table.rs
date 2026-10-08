@@ -695,6 +695,7 @@ mod tests {
         pod.name = "system:odd".to_owned();
         assert!(row(&pod).in_preset(&FilterPreset::HideSystem));
         let node = cluster::NodeSummary {
+            annotations: cluster::AnnotationTerms::default(),
             name: "system:odd".to_owned(),
             status: cluster::NodeStatus {
                 readiness: cluster::NodeReadiness::Ready,

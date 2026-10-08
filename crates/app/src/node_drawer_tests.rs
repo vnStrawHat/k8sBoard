@@ -55,6 +55,7 @@ fn condition_detail_joins_reason_and_age() {
 
 fn node_with(allocatable: &[(&str, &str)]) -> NodeSummary {
     NodeSummary {
+        annotations: cluster::AnnotationTerms::default(),
         name: "wk-1".to_owned(),
         status: cluster::NodeStatus {
             readiness: cluster::NodeReadiness::Ready,

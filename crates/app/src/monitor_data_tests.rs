@@ -374,6 +374,7 @@ fn workload_total_is_named_by_pod_count() {
 
 fn node(resources: &[(&str, &str)]) -> NodeSummary {
     NodeSummary {
+        annotations: cluster::AnnotationTerms::default(),
         name: "wk-1".to_owned(),
         status: NodeStatus {
             readiness: NodeReadiness::Ready,

@@ -19,9 +19,9 @@ use crate::cluster_session::{ClusterSession, LiveCluster};
 use crate::container_detail::resource_label;
 use crate::drawer::{
     DrawerBody, DrawerHeader, DrawerNavigation, DrawerSize, DrawerState, DrawerTab, TabCounts,
-    absent_text, chips, created_text, drawer_frame, drawer_tab_bar, drawer_tabs,
-    first_section_title, menu_button, section_title, shown_tab, tab_titles, truncated_text,
-    value_or_absent, wide_detail_row, yaml_body,
+    absent_text, annotations_section, chips, created_text, drawer_frame, drawer_tab_bar,
+    drawer_tabs, first_section_title, menu_button, section_title, shown_tab, tab_titles,
+    truncated_text, value_or_absent, wide_detail_row, yaml_body,
 };
 use crate::kind_row::{KindObject, PodOwner};
 use crate::monitor_tab::{MonitorView, monitor_tab};
@@ -93,7 +93,13 @@ pub(crate) fn node_drawer(
         | DrawerTab::Manifest
         | DrawerTab::Notes => DrawerBody::Scrolling(
             v_flex()
-                .children(overview(node, session.read(cx).live(), now, cx))
+                .children(overview(
+                    node,
+                    session.read(cx).live(),
+                    now,
+                    state.are_annotations_open,
+                    cx,
+                ))
                 .into_any_element(),
         ),
     };
@@ -190,6 +196,7 @@ fn overview(
     node: &NodeSummary,
     live: Option<&LiveCluster>,
     now: jiff::Timestamp,
+    are_annotations_open: bool,
     cx: &Context<AppShell>,
 ) -> Vec<AnyElement> {
     let taints = if node.taints.is_empty() {
@@ -272,8 +279,13 @@ fn overview(
             cx,
         )
         .into_any_element(),
-        section_title("Conditions", cx).into_any_element(),
     ]);
+    items.extend(annotations_section(
+        node.annotations.terms(),
+        are_annotations_open,
+        cx,
+    ));
+    items.push(section_title("Conditions", cx).into_any_element());
     if node.conditions.is_empty() {
         items.push(absent_text(cx).into_any_element());
     }

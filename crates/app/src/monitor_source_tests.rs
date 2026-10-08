@@ -131,6 +131,7 @@ fn charts_of(view: SourceView) -> (MonitorData, bool) {
 
 fn node(name: &str) -> NodeSummary {
     NodeSummary {
+        annotations: cluster::AnnotationTerms::default(),
         name: name.to_owned(),
         status: NodeStatus {
             readiness: NodeReadiness::Ready,

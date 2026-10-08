@@ -31,6 +31,7 @@ const NOT_FOUND: &str = r#"{"kind":"Status","apiVersion":"v1","status":"Failure"
 
 fn node(name: &str, scheduling: NodeScheduling) -> NodeSummary {
     NodeSummary {
+        annotations: cluster::AnnotationTerms::default(),
         name: name.to_owned(),
         status: NodeStatus {
             readiness: NodeReadiness::Ready,

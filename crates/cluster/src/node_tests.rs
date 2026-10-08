@@ -547,3 +547,16 @@ mod edit {
         assert!(api.requests().is_empty());
     }
 }
+
+#[test]
+fn node_summary_reads_annotations_in_key_order() {
+    let mut node = Node::default();
+    node.metadata.annotations = Some(BTreeMap::from([
+        ("zone".to_owned(), "b".to_owned()),
+        ("alpha".to_owned(), "a".to_owned()),
+    ]));
+    assert_eq!(
+        node_summary(&node).annotations.terms(),
+        ["alpha=a", "zone=b"]
+    );
+}

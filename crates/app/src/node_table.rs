@@ -795,6 +795,7 @@ mod tests {
 
     fn node() -> NodeSummary {
         NodeSummary {
+            annotations: cluster::AnnotationTerms::default(),
             name: "wk-03".to_owned(),
             status: cluster::NodeStatus {
                 readiness: cluster::NodeReadiness::NotReady,
@@ -852,6 +853,7 @@ mod tests {
     #[test]
     fn node_row_values_are_absent_without_roles_taints_or_ip() {
         let bare = NodeSummary {
+            annotations: cluster::AnnotationTerms::default(),
             roles: Vec::new(),
             taints: Vec::new(),
             internal_ip: None,

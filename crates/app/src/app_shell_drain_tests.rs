@@ -234,6 +234,7 @@ fn server(
 
 fn summary(name: &str, scheduling: NodeScheduling) -> NodeSummary {
     NodeSummary {
+        annotations: cluster::AnnotationTerms::default(),
         name: name.to_owned(),
         status: NodeStatus {
             readiness: NodeReadiness::Ready,

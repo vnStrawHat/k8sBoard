@@ -1065,6 +1065,7 @@ mod tests {
 
     fn node(readiness: NodeReadiness, labels: &[&str]) -> NodeSummary {
         NodeSummary {
+            annotations: cluster::AnnotationTerms::default(),
             name: "n".to_owned(),
             status: NodeStatus {
                 readiness,

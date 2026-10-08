@@ -16,6 +16,7 @@ fn node(labels: &[&str], cpu: &str, memory: &str) -> NodeSummary {
         allocatable: Some(allocatable.to_owned()),
     };
     NodeSummary {
+        annotations: cluster::AnnotationTerms::default(),
         name: "wk".to_owned(),
         status: NodeStatus {
             readiness: NodeReadiness::Ready,

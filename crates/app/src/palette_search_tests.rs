@@ -78,6 +78,7 @@ fn pod(namespace: &str, name: &str) -> PodSummary {
 
 fn node(name: &str) -> NodeSummary {
     NodeSummary {
+        annotations: cluster::AnnotationTerms::default(),
         name: name.to_owned(),
         status: NodeStatus {
             readiness: NodeReadiness::Ready,

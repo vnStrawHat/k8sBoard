@@ -62,6 +62,7 @@ fn node_json(name: &str, is_changed: bool) -> String {
 
 fn summary(name: &str, scheduling: NodeScheduling) -> NodeSummary {
     NodeSummary {
+        annotations: cluster::AnnotationTerms::default(),
         name: name.to_owned(),
         status: NodeStatus {
             readiness: NodeReadiness::Ready,
@@ -669,6 +670,7 @@ fn taint_retry_after_another_error_checks_again_and_keeps_the_rows(cx: &mut Test
 
 fn labelled(name: &str, labels: &[&str]) -> NodeSummary {
     NodeSummary {
+        annotations: cluster::AnnotationTerms::default(),
         labels: labels.iter().map(|term| (*term).to_owned()).collect(),
         ..summary(name, NodeScheduling::Enabled)
     }

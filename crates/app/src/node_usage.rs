@@ -174,6 +174,7 @@ mod tests {
 
     fn node(resources: &[(&str, &str)]) -> NodeSummary {
         NodeSummary {
+            annotations: cluster::AnnotationTerms::default(),
             name: "wk-1".to_owned(),
             status: NodeStatus {
                 readiness: NodeReadiness::Ready,
