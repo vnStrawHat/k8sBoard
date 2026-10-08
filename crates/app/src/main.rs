@@ -8,6 +8,7 @@ mod age;
 mod app_shell;
 mod audit_log;
 mod batch_rows;
+mod bundled_fonts;
 mod cell_truncation;
 mod certificate_expiry;
 mod clipboard_copy;
@@ -98,7 +99,6 @@ mod monitor_data;
 mod monitor_notices;
 mod monitor_source;
 mod monitor_tab;
-mod mono_font;
 mod name_index;
 mod namespace_compare_rows;
 mod namespace_compare_view;
@@ -305,7 +305,7 @@ fn run(
     gpui_kit::application()
         .with_assets(gpui_kit::assets::AllAssets)
         .run(move |cx| {
-            mono_font::init_with_lilex(cx);
+            bundled_fonts::init_with_bundled_fonts(cx);
             AppSettings::install(loaded_settings, cx);
             let saved = AppSettings::get(cx);
             let theme = options.theme.unwrap_or(saved.theme);

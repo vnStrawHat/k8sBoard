@@ -9,7 +9,7 @@
 - The delegate holds `session: Option<Entity<ClusterSession>>`:
   - `rows_count` = the length of the `Ready` items (0 otherwise);
   - `loading()` = the list is `Loading`.
-- Text uses the UI font. Name, ready, numbers, IP, and version cells use the mono font (`theme.mono_font_family`, Lilex, built into the app: `mono_font.rs`, spec 0052) with right alignment for numbers (`Column::text_right`).
+- Text uses the UI font. Name, ready, numbers, IP, and version cells use the mono font (`theme.mono_font_family`, Lilex, built into the app: `bundled_fonts.rs`, spec 0052) with right alignment for numbers (`Column::text_right`).
 - Muted text: `theme.muted_foreground`. "—" marks an absent value.
 
 ## Pods columns (wireframe kind definition, W4b)
