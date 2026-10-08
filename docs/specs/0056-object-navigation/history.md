@@ -44,7 +44,7 @@ impl NavigationHistory {
 - Not recorded: direct `reveal_then` / `when_selected` callers (palette action pairs, key actions on another row), j/k and Prev/Next moves, table row clicks, sidebar screens, Topology node clicks, drawer close. Back means "back to where the last link was followed from".
 - **Self-reveal is not recorded**: when the target equals the current place (same screen and selection), `record` is skipped.
 
-## Restore (Back = `Alt+Left`, Forward = `Alt+Right`)
+## Restore (Back = `Alt+Left` or `Backspace`, Forward = `Alt+Right`)
 
 1. Unsaved Edit YAML / values text: ask first (the `ask_discard` path `reveal_then` uses).
 2. `show_screen(place.screen)` (unzooms the dock, as any screen change does).
@@ -84,8 +84,11 @@ The Back label is the "from X" hint; no breadcrumb trail (a trail of 50 would no
 
 | Key | Action | Context | Sheet group / text |
 |---|---|---|---|
-| `Alt+Left` | `GoBack` | Workspace | Drawer · `Back` |
+| `Alt+Left`, `Backspace` | `GoBack` | Workspace | Drawer · `Back` |
 | `Alt+Right` | `GoForward` | Workspace | Drawer · `Forward` |
+| `Backspace` in the terminal | `NoAction` | Terminal | the shell gets the key |
+
+Backspace deletes text in the kit `Input` and the editors because their contexts are deeper than Workspace; the terminal list needs an explicit `NoAction`. The shortcut sheet row shows the keys the keymap holds for `GoBack`.
 
 Text fields, the YAML / values editors and the terminal keep the keys. Add both to the terminal `NoAction` list. The coder must check which key context the kit `Input` and the editors expose and whether they bind `alt-left` / `alt-right` on Windows; where they do not, add explicit `NoAction` bindings for those contexts (the `FIELDS` list, `YAML_EDIT`, `VALUES_EDIT`), so Alt+Left in a focused field never navigates (AC 7). Both actions appear in the palette through `shortcut_rows` as `Back` and `Forward`.
 

@@ -5,15 +5,15 @@
 ## History (H3)
 
 1. `reveal_object` records the place it leaves (drawer links, palette Go to, Issues rows, Overview cards, dialog links, menu Go to items); j/k, row clicks, sidebar screens, Topology node clicks, and `when_selected` action runs (palette pairs, keys) do not. [A1]
-2. `Alt+Left` restores the previous place: screen and that table's filter; when the place had a selection, also the object (scrolled into view), drawer open or closed, drawer tab, Pod container and container sub-tab. A place without a selection restores screen and filter only. `Alt+Right` redoes it. [A1]
+2. `Alt+Left` or `Backspace` restores the previous place: screen and that table's filter; when the place had a selection, also the object (scrolled into view), drawer open or closed, drawer tab, Pod container and container sub-tab. A place without a selection restores screen and filter only. `Alt+Right` redoes it. [A1]
 3. A reveal of the object already selected on the current screen records nothing. [A1]
 4. A new reveal after going back clears the forward stack. Back keeps at most 50 entries. [A1]
 5. Cluster switch and scope change clear the history. [A1]
 6. Back to a deleted object restores the screen with no drawer and no error; a removed custom kind's entry is skipped. [A1]
 7. Back with unsaved Edit YAML / values text asks first, like a reveal. [A1]
 8. Back to Topology shows the graph and reopens the drawer once the Topology feeds deliver the row; no `pending_reveal` is set. [A1]
-9. `Alt+Left` / `Alt+Right` inside a focused text input (quick filter, palette, forms), the YAML / values editors, and the terminal never navigate, verified on Windows; the coder checked the kit key contexts and added `NoAction` bindings where needed. Both appear in the shortcut sheet and the palette as `Back` / `Forward`. [A1]
-10. The drawer header shows `← {previous name}` when history is not empty, with tooltip `Back to {Kind} {name} (Alt+Left)`; a click equals `Alt+Left`. [A2]
+9. `Alt+Left` / `Alt+Right` and `Backspace` inside a focused text input (quick filter, palette, forms), the YAML / values editors, and the terminal never navigate, verified on Windows; the coder checked the kit key contexts and added `NoAction` bindings where needed. Both appear in the shortcut sheet and the palette as `Back` / `Forward`. [A1]
+10. The drawer header shows `← {previous name}` when history is not empty, with tooltip `Back to {Kind} {name} (Alt+Left)`; a click equals `Alt+Left` or `Backspace`. [A2]
 
 ## Links and Prev / Next (H4 style, M9)
 
