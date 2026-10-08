@@ -6,27 +6,28 @@
 2. The workflow runs in this order:
    1. `prepare` reads the version from the root `Cargo.toml`, computes the next one, and fails if the tag `vX.Y.Z` already exists.
    2. `build` bumps the version **locally only** (so the binary carries it), builds the Windows binary, and packages the archive. Nothing is committed or tagged yet.
-   3. `publish` runs only if `build` succeeded. It generates the notes with git-cliff, bumps the version again, commits `chore(release): vX.Y.Z` (`Cargo.toml` and `Cargo.lock`) as `github-actions[bot]`, creates the annotated tag, pushes the commit and the tag to `main`, and creates the (published, not draft) GitHub release with the archive and `SHA256SUMS.txt`.
+   3. `publish` runs only if `build` succeeded. It generates the notes with git-cliff, bumps the version again, downloads the archive, computes `SHA256SUMS.txt`, and commits `chore(release): vX.Y.Z` (`Cargo.toml` and `Cargo.lock`) locally as `github-actions[bot]`. Only then does it push the commit to `main`, and `gh release create --target <commit>` creates the tag and the published (not draft) release in one call. If that fails, the commit is rolled back and no tag exists.
 3. Check the release page: notes, archive, `SHA256SUMS.txt`.
 
 A failed `prepare` or `build` leaves the repository untouched: fix the problem and run the workflow again.
 
-### Recovery if `publish` fails after the push
+### Recovery if `publish` fails
 
-The commit and tag already exist on `main`; only the release is missing. Do not re-run the workflow (the tag exists, so `prepare` would fail or pick the next version). Instead, from the failed run download the `k8sboard-windows-x86_64` artifact, then:
+A failed `publish` normally leaves nothing (the commit is rolled back and no tag exists), so run the workflow again.
+
+If the rollback itself was rejected (branch protection forbids force-push), `main` holds `chore(release): vX.Y.Z` with no tag. Either delete that commit by hand, or create the release by hand from the failed run's `k8sboard-windows-x86_64` artifact:
 
 ```bash
 sha256sum k8sboard-X.Y.Z-windows-x86_64.zip > SHA256SUMS.txt
 git-cliff --unreleased --tag vX.Y.Z --strip header > RELEASE_NOTES.md   # or write the notes by hand
-gh release create vX.Y.Z --title "k8sBoard vX.Y.Z" --notes-file RELEASE_NOTES.md k8sboard-X.Y.Z-windows-x86_64.zip SHA256SUMS.txt
+gh release create vX.Y.Z --target <commit> --title "k8sBoard vX.Y.Z" --notes-file RELEASE_NOTES.md k8sboard-X.Y.Z-windows-x86_64.zip SHA256SUMS.txt
 ```
-
-If the push itself failed, nothing was published and the workflow can simply be run again.
 
 ### Requirements
 
 - A push made with `GITHUB_TOKEN` does not start other workflows, so CI does not run on the release commit.
 - Branch protection on `main` must allow `github-actions[bot]` to push directly.
+- The rollback needs force-push permission for `github-actions[bot]` on `main`.
 
 ## Commit convention
 

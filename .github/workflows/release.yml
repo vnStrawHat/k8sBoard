@@ -1,6 +1,6 @@
 name: Release
 
-# Started by hand. Nothing is committed or tagged until the Windows build has succeeded.
+# Started by hand. Nothing is pushed until the archive and notes are in hand; the tag is created by `gh release create --target`, so a failed release leaves no tag, and the release commit is rolled back.
 on:
   workflow_dispatch:
     inputs:
@@ -128,7 +128,7 @@ jobs:
           fetch-depth: 0
 
       # Notes come first, with an explicit --tag: the range is "everything since the last tag" without
-      # relying on the new tag existing yet, and a failure here leaves nothing pushed.
+      # relying on the new tag existing yet. Everything that can fail runs before the push.
       - name: Generate the release notes
         uses: orhun/git-cliff-action@v4
         env:
@@ -145,28 +145,47 @@ jobs:
           actual=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name=="k8sboard") | .version')
           [ "$actual" = "$VERSION" ] || { echo "::error::k8sboard reports $actual, expected $VERSION"; exit 1; }
 
-      # A push made with GITHUB_TOKEN does not start other workflows (CI will not run on this commit), and
-      # branch protection on `main` must allow github-actions[bot] to push directly.
-      - name: Commit, tag, and push
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add Cargo.toml Cargo.lock
-          git commit -m "chore(release): v${VERSION}"
-          git tag -a "v${VERSION}" -m "k8sBoard v${VERSION}"
-          git push origin HEAD:main "v${VERSION}"
-
       - uses: actions/download-artifact@v4
         with:
           path: dist
           merge-multiple: true
 
-      - name: Create the release
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - name: Compute the checksums
         run: |
           cd dist
           sha256sum k8sboard-* > SHA256SUMS.txt
           cat SHA256SUMS.txt
-          gh release create "v${VERSION}" --repo "$GITHUB_REPOSITORY" --title "k8sBoard v${VERSION}" \
-            --notes-file ../RELEASE_NOTES.md k8sboard-* SHA256SUMS.txt
+
+      - name: Commit the version bump
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Cargo.toml Cargo.lock
+          git commit -m "chore(release): v${VERSION}"
+
+      # A push made with GITHUB_TOKEN does not start other workflows (CI will not run on this commit), and
+      # branch protection on `main` must allow github-actions[bot] to push directly.
+      - name: Push the release commit
+        id: push
+        run: |
+          base=$(git rev-parse HEAD~1)
+          head=$(git rev-parse HEAD)
+          echo "base=$base" >> "$GITHUB_OUTPUT"
+          echo "head=$head" >> "$GITHUB_OUTPUT"
+          git push origin HEAD:main
+
+      # GitHub creates the tag together with the release, so a failure here leaves no tag.
+      - name: Create the release and the tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd dist
+          gh release create "v${VERSION}" --repo "$GITHUB_REPOSITORY" --target "${{ steps.push.outputs.head }}" \
+            --title "k8sBoard v${VERSION}" --notes-file ../RELEASE_NOTES.md k8sboard-* SHA256SUMS.txt
+
+      # Branch protection on `main` must allow the bot to force-push for this rollback; if it does not,
+      # follow the recovery section in docs/release.md.
+      - name: Roll back the release commit
+        if: failure() && steps.push.outcome == 'success'
+        run: |
+          git push --force-with-lease="refs/heads/main:${{ steps.push.outputs.head }}" origin "${{ steps.push.outputs.base }}:refs/heads/main"
