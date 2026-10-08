@@ -12,16 +12,19 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+# Site-specific values such as LAB_HOST or LAB_REGISTRY live in this optional git-ignored file.
+[ -f "$ROOT/lab.env" ] && . "$ROOT/lab.env"
 LAB_HOST="${LAB_HOST:-192.168.13.128}"
 LAB_USER="${LAB_USER:-root}"
 LAB_KEY="${LAB_KEY:-$ROOT/id_rsa}"
 LAB_CLUSTER="${LAB_CLUSTER:-k8sboard-lab}"
-LAB_REGISTRY="${LAB_REGISTRY:-registry.example.com}"
-# Kubernetes 1.29 matches the UAT cluster; the private registry mirrors Docker Hub and registry.k8s.io.
-LAB_NODE_IMAGE="${LAB_NODE_IMAGE:-$LAB_REGISTRY/kindest/node:v1.29.14}"
-LAB_IMAGE_BUSYBOX="${LAB_IMAGE_BUSYBOX:-$LAB_REGISTRY/library/busybox:1.36}"
-LAB_IMAGE_NGINX="${LAB_IMAGE_NGINX:-$LAB_REGISTRY/library/nginx:1.27-alpine}"
-LAB_IMAGE_METRICS="${LAB_IMAGE_METRICS:-$LAB_REGISTRY/metrics-server/metrics-server:v0.7.2}"
+LAB_REGISTRY="${LAB_REGISTRY:-}"
+# Kubernetes 1.29 matches the UAT cluster; LAB_REGISTRY, when set, is a private mirror of Docker Hub and registry.k8s.io.
+image() { if [ -n "$LAB_REGISTRY" ]; then echo "$LAB_REGISTRY/$2"; else echo "$1"; fi; }
+LAB_NODE_IMAGE="${LAB_NODE_IMAGE:-$(image kindest/node:v1.29.14 kindest/node:v1.29.14)}"
+LAB_IMAGE_BUSYBOX="${LAB_IMAGE_BUSYBOX:-$(image docker.io/library/busybox:1.36 library/busybox:1.36)}"
+LAB_IMAGE_NGINX="${LAB_IMAGE_NGINX:-$(image docker.io/library/nginx:1.27-alpine library/nginx:1.27-alpine)}"
+LAB_IMAGE_METRICS="${LAB_IMAGE_METRICS:-$(image registry.k8s.io/metrics-server/metrics-server:v0.7.2 metrics-server/metrics-server:v0.7.2)}"
 LAB_API_PORT="${LAB_API_PORT:-6443}"
 REMOTE_DIR="/root/k8sboard-lab"
 KUBECONFIG_OUT="$ROOT/kind-lab.yml"

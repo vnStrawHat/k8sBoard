@@ -9,8 +9,10 @@ through the VM's address.
 - Linux VM on VMnet8 (NAT), reachable from the host; sshd with key login for the lab user.
 - `docker`, `kind` (0.20+), `kubectl` and `openssl` installed; the user can run `docker`.
 - Firewall open for 22 and 6443 from the host.
-- Images come from the private registry (`LAB_REGISTRY`, default `registry.example.com`); run
-  `docker login` once in the VM if it needs credentials.
+- Images come from Docker Hub and registry.k8s.io by default. A private mirror is set with
+  `LAB_REGISTRY=<host>` (mirror paths `library/...`, `kindest/node`, `metrics-server/...`); put
+  site-specific values such as `LAB_HOST` and `LAB_REGISTRY` in `./lab.env` (git-ignored, sourced
+  by `lab.sh`), and run `docker login` once in the VM if the mirror needs credentials.
 
 ## Commands (Git Bash on the host, from the project root)
 
@@ -22,7 +24,7 @@ tools/kind/lab.sh down      # delete the cluster and ./kind-lab.yml
 tools/kind/lab.sh ssh ...   # run a command in the VM
 ```
 
-Settings are environment variables read by `lab.sh`: `LAB_HOST`, `LAB_USER`, `LAB_KEY`
+Settings are environment variables read by `lab.sh` (or set in `./lab.env`): `LAB_HOST`, `LAB_USER`, `LAB_KEY`
 (default `./id_rsa`, git-ignored), `LAB_REGISTRY`, `LAB_NODE_IMAGE`, `LAB_IMAGE_BUSYBOX`,
 `LAB_IMAGE_NGINX`, `LAB_IMAGE_METRICS`, `LAB_API_PORT`.
 
