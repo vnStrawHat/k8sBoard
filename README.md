@@ -1,3 +1,5 @@
+<p align="center"><img src="assets/icon-512.png" width="128" alt="k8sBoard icon"></p>
+
 # k8sBoard
 
 k8sBoard is a native desktop app for administering Kubernetes clusters, written in Rust with GPUI Kit. It is read-only by default: every change goes through one guarded write path with a permission check, a server-side dry run, a confirmation, and an audit log.
